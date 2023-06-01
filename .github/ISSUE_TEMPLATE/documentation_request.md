@@ -1,3 +1,5 @@
+# Documentation Requests
+
 ---
 name: Documentation request
 about: Identify an area for improvement in documentation
