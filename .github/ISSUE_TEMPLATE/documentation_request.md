@@ -8,7 +8,7 @@ about: Identify an area for improvement in documentation
 
 **What is the URL of the documentation?**
 
-- **Example:** https://github.com/Senzing/template-docker#external-database
+- **Example:** <https://github.com/Senzing/template-docker#external-database>
   + *Note:*  This URL includes the web page and the section of the documentation.
 
 **What can be improved?**
