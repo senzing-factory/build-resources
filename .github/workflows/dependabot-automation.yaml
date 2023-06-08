@@ -1,0 +1,35 @@
+name: dependabot automation
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  add-pr-to-community:
+    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.pull_request.opened  == true || github.event.pull_request.reopened == true ) }}
+    steps:
+      - name: Add PR to Community project
+        uses: Senzing/build-resources/.github/workflows/add-to-project.yaml@main
+        with:
+          project-number: "2"
+          classic: true
+
+  add-pr-to-devsecops:
+    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.pull_request.opened  == true || github.event.pull_request.reopened == true ) }}
+    steps:
+      - name: Add PR to DevSecOps project
+        uses: Senzing/build-resources/.github/workflows/add-to-project.yaml@main
+        with:
+          project-number: "13"
+          classic: false
+
+  dependabot-approve-and-merge:
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Dependabot approve and merge
+        uses: Senzing/build-resources/.github/workflows/dependabot-approve-and-merge.yaml@main
+        secrets:
+          CODEOWNER_PR_APPROVAL_TOKEN: ${{ secrets.CODEOWNER_PR_APPROVAL_TOKEN }}
