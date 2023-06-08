@@ -10,17 +10,13 @@ on:
 
 jobs:
   add-issue-to-community:
-    steps:
-      - name: Add issue to Community project
-        uses: Senzing/build-resources/.github/workflows/add-to-project.yaml@main
-        with:
-          project-number: "2"
-          classic: true
+    uses: Senzing/build-resources/.github/workflows/add-to-project.yaml@main
+    with:
+      project-number: "2"
+      classic: true
 
   add-issue-to-devsecops:
-    steps:
-      - name: Add issue to DevSecOps project
-        uses: Senzing/build-resources/.github/workflows/add-to-project.yaml@main
-        with:
-          project-number: "13"
-          classic: false
+    uses: Senzing/build-resources/.github/workflows/add-to-project.yaml@main
+    with:
+      project-number: "13"
+      classic: false
