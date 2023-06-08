@@ -11,7 +11,6 @@ on:
       classic:
         required: true
         type: boolean
-        default: true
 # TODO - SLK: not sure if this is required here for an org secret
 #    secrets:
 #      SENZING_GITHUB_ACCESS_TOKEN:
@@ -21,6 +20,7 @@ env:
   GITHUB_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
 
 jobs:
+
   # https://github.com/actions/add-to-project
   # Does not support classic projects
   add_to_project:
