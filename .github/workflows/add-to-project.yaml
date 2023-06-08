@@ -1,0 +1,21 @@
+name: 'add to project'
+
+on: 
+  workflow_call:
+    inputs:
+      project-number:
+        required: true
+        type: string
+
+env:
+  GITHUB_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
+
+jobs:
+  add_to_project:
+    name: Add to project
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add to project
+        uses: Senzing/github-action-add-issue-to-project@main
+        with:
+          project: "https://github.com/orgs/Senzing/projects/${{inputs.project-number}}"
