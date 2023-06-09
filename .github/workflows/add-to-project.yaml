@@ -40,7 +40,7 @@ jobs:
     name: Add to classic project
     runs-on: ubuntu-latest
     steps:
-      - name: Add to classicproject
+      - name: Add to classic project
         uses: Senzing/github-action-add-issue-to-project@main
         with:
           project: "https://github.com/orgs/Senzing/projects/${{inputs.project-number}}"
