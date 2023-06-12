@@ -1,6 +1,6 @@
 ---
 
-name: add issue to projects
+name: 'issue automation'
 
 on:
   issues:
