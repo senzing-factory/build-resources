@@ -1,6 +1,6 @@
 ---
 
-name: 'dependabot approve and merge patch version prs'
+name: 'dependabot approve and merge'
 
 on: 
   workflow_call:
