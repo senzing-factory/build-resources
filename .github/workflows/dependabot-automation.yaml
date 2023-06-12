@@ -9,14 +9,14 @@ on:
 jobs:
 
   add-pr-to-community:
-    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.pull_request.opened  == true || github.event.pull_request.reopened == true ) }}
+    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' ) }}
     uses: Senzing/build-resources/.github/workflows/add-to-project.yaml@main
     with:
       project-number: "2"
       classic: true
 
   add-pr-to-devsecops:
-    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.pull_request.opened  == true || github.event.pull_request.reopened == true ) }}
+    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' ) }}
     uses: Senzing/build-resources/.github/workflows/add-to-project.yaml@main
     with:
       project-number: "13"
