@@ -11,10 +11,9 @@ on:
       classic:
         required: true
         type: boolean
-# TODO - SLK: not sure if this is required here for an org secret
-#    secrets:
-#      SENZING_GITHUB_ACCESS_TOKEN:
-#        required: true
+    secrets:
+      SENZING_GITHUB_ACCESS_TOKEN:
+        required: true
 
 env:
   GITHUB_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
@@ -41,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Add to classic project
+        if: ${{ inputs.classic }}
         uses: Senzing/github-action-add-issue-to-project@main
         with:
           project: "https://github.com/orgs/Senzing/projects/${{inputs.project-number}}"

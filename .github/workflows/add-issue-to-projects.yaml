@@ -14,9 +14,13 @@ jobs:
     with:
       project-number: "2"
       classic: true
+    secrets:
+      SENZING_GITHUB_ACCESS_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
 
   add-issue-to-devsecops:
     uses: Senzing/build-resources/.github/workflows/add-to-project.yaml@main
     with:
       project-number: "13"
       classic: false
+    secrets:
+      SENZING_GITHUB_ACCESS_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
