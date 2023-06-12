@@ -9,7 +9,7 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  lint-code-base:
     name: Lint Code Base
     runs-on: ubuntu-latest
 
