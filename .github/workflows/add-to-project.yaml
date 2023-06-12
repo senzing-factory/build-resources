@@ -1,0 +1,49 @@
+---
+
+name: 'add to project'
+
+on:
+  workflow_call:
+    inputs:
+      project-number:
+        required: true
+        type: string
+      classic:
+        required: true
+        type: boolean
+# TODO - SLK: not sure if this is required here for an org secret
+#    secrets:
+#      SENZING_GITHUB_ACCESS_TOKEN:
+#        required: true
+
+env:
+  GITHUB_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
+
+jobs:
+
+  # https://github.com/actions/add-to-project
+  # Does not support classic projects
+  add_to_project:
+    name: Add to project
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add to project
+        if: ${{ ! inputs.classic }}
+        uses: actions/add-to-project@v0.5.0
+        with:
+          project-url: "https://github.com/orgs/Senzing/projects/${{inputs.project-number}}"
+          github-token: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
+
+  # https://github.com/srggrs/assign-one-project-github-action/issues/89
+  # Only classic projects supported
+  add-to-classic-project:
+    name: Add to classic project
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add to classic project
+        uses: Senzing/github-action-add-issue-to-project@main
+        with:
+          project: "https://github.com/orgs/Senzing/projects/${{inputs.project-number}}"
+          column_name: "Backlog"
+        env:
+          GITHUB_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}

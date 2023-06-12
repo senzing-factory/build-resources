@@ -1,3 +1,5 @@
+---
+
 name: 'dependabot approve and merge patch version prs'
 
 on: 
