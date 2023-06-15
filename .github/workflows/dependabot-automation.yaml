@@ -28,4 +28,4 @@ jobs:
       pull-requests: write
     uses: Senzing/build-resources/.github/workflows/dependabot-approve-and-merge.yaml@main
     secrets:
-      CODEOWNER_PR_APPROVAL_TOKEN: ${{ secrets.CODEOWNER_PR_APPROVAL_TOKEN }}
+      CODEOWNER_PR_RW_TOKEN: ${{ secrets.CODEOWNER_PR_RW_TOKEN }}
