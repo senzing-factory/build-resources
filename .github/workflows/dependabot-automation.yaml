@@ -14,6 +14,8 @@ jobs:
     with:
       project-number: "2"
       classic: true
+    secrets:
+      SENZING_GITHUB_ACCESS_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
 
   add-pr-to-devsecops:
     if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' ) }}
@@ -21,6 +23,8 @@ jobs:
     with:
       project-number: "13"
       classic: false
+    secrets:
+      PROJECT_RW_TOKEN: ${{ secrets.PROJECT_RW_TOKEN }}
 
   dependabot-approve-and-merge:
     permissions:
