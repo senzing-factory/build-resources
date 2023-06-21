@@ -14,7 +14,7 @@ on:
     secrets:
       SENZING_GITHUB_ACCESS_TOKEN:
         required: false
-      PROJECT_RW_TOKEN:
+      SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: false
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
         uses: actions/add-to-project@v0.5.0
         with:
           project-url: "https://github.com/orgs/Senzing/projects/${{inputs.project-number}}"
-          github-token: ${{ secrets.PROJECT_RW_TOKEN }}
+          github-token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
 
   # https://github.com/srggrs/assign-one-project-github-action/issues/89
   # Only classic projects supported

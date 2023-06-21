@@ -23,4 +23,4 @@ jobs:
       project-number: "13"
       classic: false
     secrets:
-      PROJECT_RW_TOKEN: ${{ secrets.PROJECT_RW_TOKEN }}
+      SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
