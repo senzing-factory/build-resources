@@ -1,0 +1,36 @@
+---
+
+name: 'add labels to issue'
+
+on:
+  workflow_call:
+    secrets:
+      ORG_MEMBERSHIP_TOKEN: 
+        required: false
+      SENZING_MEMBERS:
+        required: false
+
+jobs:
+
+  add-customer-submission-label:
+    name: Add customer-submission label
+    runs-on: ubuntu-latest
+    steps:
+      - name: initial labeling
+        if: ${{ env.SENZING_MEMBER == 'false' }}
+        uses: andymckay/labeler@1.0.4
+        with:
+          add-labels: "customer-submission"
+        env:
+          # why are we overriding the github token here?
+          GITHUB_TOKEN: ${{ secrets.ORG_MEMBERSHIP_TOKEN }}
+          SENZING_MEMBER: ${{ contains( secrets.SENZING_MEMBERS, github.actor ) }}
+
+  add-triage-label:
+    name: Add triage label to issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: initial labeling
+        uses: andymckay/labeler@1.0.4
+        with:
+          add-labels: "triage"
