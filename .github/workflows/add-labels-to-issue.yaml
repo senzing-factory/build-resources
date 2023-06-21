@@ -16,21 +16,20 @@ jobs:
     name: Add customer-submission label
     runs-on: ubuntu-latest
     steps:
-      - name: initial labeling
+      - name: Add customer-submission label
         if: ${{ env.SENZING_MEMBER == 'false' }}
         uses: andymckay/labeler@1.0.4
         with:
           add-labels: "customer-submission"
         env:
-          # why are we overriding the github token here?
           GITHUB_TOKEN: ${{ secrets.ORG_MEMBERSHIP_TOKEN }}
           SENZING_MEMBER: ${{ contains( secrets.SENZING_MEMBERS, github.actor ) }}
 
   add-triage-label:
-    name: Add triage label to issue
+    name: Add triage label
     runs-on: ubuntu-latest
     steps:
-      - name: initial labeling
+      - name: Add triage label
         uses: andymckay/labeler@1.0.4
         with:
           add-labels: "triage"
