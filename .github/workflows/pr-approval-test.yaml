@@ -1,0 +1,19 @@
+---
+
+name: 'pr approval test'
+
+on:
+  pull_request:
+    branches: [sk-debug]
+
+jobs:
+  pr-approval-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'test pr approval'
+        run: |
+          gh pr review --approve "$PR_URL" -b "test pr approval"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.TEMP_SKERN_PR_RW_TOKEN }}
+          GH_DEBUG: '1'
