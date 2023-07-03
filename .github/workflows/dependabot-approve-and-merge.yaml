@@ -29,6 +29,8 @@ jobs:
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN }}
+          GH_DEBUG: '1'
       - name: Auto merge patch version PRs
         if: ${{ steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' }}
         run: gh pr merge --auto --squash "$PR_URL"
