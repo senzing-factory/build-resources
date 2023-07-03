@@ -2,9 +2,7 @@
 
 name: 'pr approval test'
 
-on:
-  pull_request:
-    branches: [sk-debug]
+on: [pull_request_target]
 
 jobs:
   pr-approval-test:
