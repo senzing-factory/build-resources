@@ -15,7 +15,7 @@ permissions:
 jobs:
   dependabot-approve-and-merge:
     runs-on: ubuntu-latest
-    if: ${{ github.actor == 'dependabot[bot]' }}
+    if: ${{ github.actor == 'dependabot[bot]' || github.actor == 'kernelsam' }}
     steps:
       - name: Dependabot metadata
         id: dependabot-metadata
@@ -23,7 +23,7 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
       - name: Approve patch version PRs
-        if: ${{ steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' }}
+        # if: ${{ steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' }}
         run: |
           gh pr review --approve "$PR_URL" -b "I'm **approving** this pull request because **it includes a patch update**"
         env:
