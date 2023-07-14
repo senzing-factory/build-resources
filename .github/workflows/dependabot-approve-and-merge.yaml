@@ -2,7 +2,7 @@
 
 name: 'dependabot approve and merge'
 
-on: 
+on:
   workflow_call:
     secrets:
       SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN:
