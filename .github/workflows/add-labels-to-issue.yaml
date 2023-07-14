@@ -5,7 +5,7 @@ name: 'add labels to issue'
 on:
   workflow_call:
     secrets:
-      ORG_MEMBERSHIP_TOKEN: 
+      ORG_MEMBERSHIP_TOKEN:
         required: false
       SENZING_MEMBERS:
         required: false

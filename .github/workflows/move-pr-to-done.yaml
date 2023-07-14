@@ -1,0 +1,22 @@
+---
+
+name: 'move pr to done'
+
+on:
+  workflow_call:
+    secrets:
+      SENZING_GITHUB_PROJECT_RW_TOKEN:
+        required: true
+
+jobs:
+  move-pr-to-done:
+    runs-on: ubuntu-latest
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    steps:
+      - name: Move PR to done
+        if: ${{ github.event.pull_request.merged == true }}
+        uses: alex-page/github-project-automation-plus@v0.8.3
+        with:
+          project: Community
+          column: Done
+          repo-token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
