@@ -1,0 +1,93 @@
+---
+
+name: 'docker-push-containers-to-dockerhub-and-ecr'
+
+on:
+    workflow_call:
+        inputs:
+            ecr-image-repository:
+                description: Docker repository (e.g. senzing/senzingapi-runtime)
+                required: true
+                type: string
+            build-options:
+                description: Additional options to pass to docker buildx build
+                type: string
+            context:
+                default: "."
+                description: Context (directory) of the docker build process
+                type: string
+            docker-image-repository:
+                description: Docker repository (e.g. senzing/senzingapi-runtime)
+                required: true
+                type: string
+            docker-registry-server:
+                default: docker.io
+                description: Docker registry server
+                type: string
+            image-tag:
+                default: latest
+                description: Docker image tag
+                type: string
+            platforms:
+                default: "linux/amd64"
+                type: string
+
+        secrets:
+            AWS_DOCKER_ACCOUNT_ID:
+                required: true
+            DOCKERHUB_ACCESS_TOKEN:
+                required: true
+            DOCKERHUB_USERNAME:
+                required: true
+
+jobs:
+    docker-push-containers-to-dockerhub-and-ecr:
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write   # This is required for requesting the JWT
+            contents: read    # This is required for actions/checkout
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: '0'
+                  submodules: recursive
+
+            - name: Set up QEMU
+              uses: docker/setup-qemu-action@v3
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Login to Docker Hub
+              uses: docker/login-action@v3
+              with:
+                  username: ${{ secrets.DOCKERHUB_USERNAME }}
+                  password: ${{ secrets.DOCKERHUB_ACCESS_TOKEN }}
+
+            - name: Configure AWS Credentials
+              uses: aws-actions/configure-aws-credentials@v3
+              env:
+                  AWS_REGION: "us-east-1"
+              with:
+                  role-to-assume: arn:aws:iam::${{ secrets.AWS_DOCKER_ACCOUNT_ID }}:role/github-actions-ecr-push
+                  role-session-name: GitHub_to_AWS_via_FederatedOIDC
+                  aws-region: ${{ env.AWS_REGION }}
+
+            - name: Login to Amazon ECR
+              uses: aws-actions/amazon-ecr-login@v2
+
+            - name: Docker build images
+              shell: bash
+              env:
+                  ECR_REGISTRY_SERVER: ${{ steps.login-ecr.outputs.registry }}
+                  REPOSITORY: skern-test
+              run: |
+                  docker buildx build \
+                    --platform ${{ inputs.platforms }} \
+                    --tag ${{ inputs.docker-registry-server }}/${{ inputs.docker-image-repository }}:${{ inputs.image-tag }} \
+                    --tag ${{ inputs.docker-registry-server }}/${{ inputs.docker-image-repository }}:latest \
+                    --tag ${{ inputs.ECR_REGISTRY_SERVER }}/${{ inputs.ecr-image-repository }}:${{ inputs.image-tag }} \
+                    --tag ${{ inputs.ECR_REGISTRY_SERVER }}/${{ inputs.ecr-image-repository }}:latest \
+                    ${{ inputs.build-options }} \
+                    ${{ inputs.context }}
