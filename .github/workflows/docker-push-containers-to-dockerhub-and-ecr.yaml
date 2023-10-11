@@ -21,7 +21,7 @@ on:
                 description: Docker registry server
                 type: string
             ecr-image-repository:
-                description: Docker repository (e.g. senzing/senzingapi-runtime)
+                description: ECR repository (e.g. senzing/senzingapi-runtime)
                 required: true
                 type: string
             image-tag:
