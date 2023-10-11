@@ -5,10 +5,6 @@ name: 'docker-push-containers-to-dockerhub-and-ecr'
 on:
     workflow_call:
         inputs:
-            ecr-image-repository:
-                description: Docker repository (e.g. senzing/senzingapi-runtime)
-                required: true
-                type: string
             build-options:
                 description: Additional options to pass to docker buildx build
                 type: string
@@ -23,6 +19,10 @@ on:
             docker-registry-server:
                 default: docker.io
                 description: Docker registry server
+                type: string
+            ecr-image-repository:
+                description: Docker repository (e.g. senzing/senzingapi-runtime)
+                required: true
                 type: string
             image-tag:
                 default: latest
@@ -86,6 +86,7 @@ jobs:
                   ECR_REGISTRY_SERVER: ${{ steps.login-ecr-public.outputs.registry }}
               run: |
                   docker buildx build \
+                    --push \
                     --platform ${{ inputs.platforms }} \
                     --tag ${{ inputs.docker-registry-server }}/${{ inputs.docker-image-repository }}:${{ inputs.image-tag }} \
                     --tag ${{ inputs.docker-registry-server }}/${{ inputs.docker-image-repository }}:latest \
