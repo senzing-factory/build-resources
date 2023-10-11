@@ -81,7 +81,6 @@ jobs:
               shell: bash
               env:
                   ECR_REGISTRY_SERVER: ${{ steps.login-ecr.outputs.registry }}
-                  REPOSITORY: skern-test
               run: |
                   docker buildx build \
                     --platform ${{ inputs.platforms }} \
