@@ -89,7 +89,7 @@ jobs:
                     --platform ${{ inputs.platforms }} \
                     --tag ${{ inputs.docker-registry-server }}/${{ inputs.docker-image-repository }}:${{ inputs.image-tag }} \
                     --tag ${{ inputs.docker-registry-server }}/${{ inputs.docker-image-repository }}:latest \
-                    --tag ${{ inputs.ECR_REGISTRY_SERVER }}/${{ inputs.ecr-image-repository }}:${{ inputs.image-tag }} \
-                    --tag ${{ inputs.ECR_REGISTRY_SERVER }}/${{ inputs.ecr-image-repository }}:latest \
+                    --tag ${{ env.ECR_REGISTRY_SERVER }}/${{ inputs.ecr-image-repository }}:${{ inputs.image-tag }} \
+                    --tag ${{ env.ECR_REGISTRY_SERVER }}/${{ inputs.ecr-image-repository }}:latest \
                     ${{ inputs.build-options }} \
                     ${{ inputs.context }}
