@@ -30,6 +30,7 @@ phases:
 
       # Build senzingapi-runtime base image
       - |
+        env
         echo "[INFO] $CODEBUILD_SRC_DIR_senzingapi_runtime"
         cd $CODEBUILD_SRC_DIR_senzingapi_runtime
         build_args=(
