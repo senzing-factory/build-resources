@@ -7,10 +7,10 @@ phases:
   install:
     commands:
 
-      - sudo apt-get update
-      - sudo apt-get install -y docker-ce docker-ce-cli \
-                                containerd.io docker-buildx-plugin \
-                                docker-compose-plugin qemu-user-static
+      #- sudo apt-get update
+      #- sudo apt-get install -y docker-ce docker-ce-cli \
+      #                          containerd.io docker-buildx-plugin \
+      #                          docker-compose-plugin qemu-user-static
 
   pre_build:
     commands:
