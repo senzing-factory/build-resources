@@ -10,6 +10,8 @@ phases:
   install:
     commands:
 
+      - docker info
+
       - BUILDX_DIR="$HOME/.docker/cli-plugins"
       - mkdir -p "$BUILDX_DIR"
       - BUILDX_RELEASES_URL="https://github.com/docker/buildx/releases"
@@ -22,10 +24,12 @@ phases:
       - wget -P "$BUILDX_DIR" "${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.$(uname -s | tr '[:upper:]' '[:lower:]')-$(dpkg --print-architecture)"
       - ls -tlc "$BUILDX_DIR"
       - cp "$BUILDX_DIR"/buildx-"${BUILDX_VERSION}".$(uname -s | tr '[:upper:]' '[:lower:]')-$(dpkg --print-architecture) "$BUILDX_DIR"/docker-buildx
+      - chmod +x "$BUILDX_DIR"/docker-buildx
       - mkdir -p /usr/local/lib/docker/cli-plugins
       - cp "$BUILDX_DIR"/docker-buildx /usr/local/lib/docker/cli-plugins/
 
       - docker buildx version
+      - docker info
 
   pre_build:
     commands:
