@@ -10,8 +10,6 @@ phases:
   install:
     commands:
 
-      - docker info
-
       - BUILDX_DIR="$HOME/.docker/cli-plugins"
       - mkdir -p "$BUILDX_DIR"
       - BUILDX_RELEASES_URL="https://github.com/docker/buildx/releases"
@@ -29,7 +27,6 @@ phases:
       - cp "$BUILDX_DIR"/docker-buildx /usr/local/lib/docker/cli-plugins/
 
       - docker buildx version
-      - docker info
 
   pre_build:
     commands:
