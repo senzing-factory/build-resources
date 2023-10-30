@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# exit when any command fails
+set -e
+
 # Default variable values
 build_arguments=""
 image_tag=""
