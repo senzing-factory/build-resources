@@ -10,10 +10,19 @@ phases:
   install:
     commands:
 
-      #- sudo apt-get update
-      #- sudo apt-get install -y docker-ce docker-ce-cli \
-      #                          containerd.io docker-buildx-plugin \
-      #                          docker-compose-plugin qemu-user-static
+      - BUILDX_DIR="$HOME/.docker/cli-plugins"
+      - mkdir -P "$BUILDX_DIR"
+      - BUILDX_RELEASES_URL="https://github.com/docker/buildx/releases"
+
+      - echo "[INFO] get latest buildx release version"
+      - BUILDX_VERSION=$(curl --silent -qI ${BUILDX_RELEASES_URL}/latest | awk -F '/' '/^location/ {print  substr($NF, 1, length($NF)-1)}')
+
+      - echo "[INFO] download buildx version: $BUILDX_VERSION"
+      - echo "[INFO] ${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}_$(uname -s)_$(uname -m).tar.gz"
+      - wget -P "$BUILDX_DIR" "${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}_$(uname -s)_$(uname -m).tar.gz"
+      - tar -xvf "$BUILDX_DIR"/buildx*
+
+      - docker buildx version
 
   pre_build:
     commands:
