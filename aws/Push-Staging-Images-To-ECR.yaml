@@ -18,8 +18,8 @@ phases:
       - BUILDX_VERSION=$(curl --silent -qI ${BUILDX_RELEASES_URL}/latest | awk -F '/' '/^location/ {print  substr($NF, 1, length($NF)-1)}')
 
       - echo "[INFO] download buildx version $BUILDX_VERSION"
-      - echo "[INFO] ${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.$(uname -s | tr '[:upper:]' '[:lower:]')_$(dpkg --print-architecture).tar.gz"
-      - wget -P "$BUILDX_DIR" "${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.$(uname -s | tr '[:upper:]' '[:lower:]')_$(dpkg --print-architecture).tar.gz"
+      - echo "[INFO] ${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.$(uname -s | tr '[:upper:]' '[:lower:]')-$(dpkg --print-architecture).tar.gz"
+      - wget -P "$BUILDX_DIR" "${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.$(uname -s | tr '[:upper:]' '[:lower:]')-$(dpkg --print-architecture).tar.gz"
       - tar -xvf "$BUILDX_DIR"/buildx*
 
       - docker buildx version
