@@ -17,7 +17,7 @@ phases:
       - echo "[INFO] get latest buildx release version"
       - BUILDX_VERSION=$(curl --silent -qI ${BUILDX_RELEASES_URL}/latest | awk -F '/' '/^location/ {print  substr($NF, 1, length($NF)-1)}')
 
-      - echo "[INFO] download buildx version: $BUILDX_VERSION"
+      - echo "[INFO] download buildx version $BUILDX_VERSION"
       - echo "[INFO] ${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}_$(uname -s)_$(uname -m).tar.gz"
       - wget -P "$BUILDX_DIR" "${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}_$(uname -s)_$(uname -m).tar.gz"
       - tar -xvf "$BUILDX_DIR"/buildx*
@@ -57,9 +57,9 @@ phases:
       # Build senzingapi-tools base image
       - |
         cd $CODEBUILD_SRC_DIR_senzingapi_tools
-        build_args=( \
-                    "--build-arg BASE_IMAGE=senzing/senzingapi-runtime:staging " \
-                    "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools" \
+        build_args=(
+                    "--build-arg BASE_IMAGE=senzing/senzingapi-runtime:staging "
+                    "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools"
                     )
         $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
                               -t "senzing/senzingapi-tools:staging"
