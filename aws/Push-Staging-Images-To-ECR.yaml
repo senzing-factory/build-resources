@@ -40,7 +40,7 @@ phases:
                     "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime=${SENZING_RUNTIME_VERSION}"
                     )
         echo "[INFO] ./aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" -t "senzing/senzingapi-runtime:staging""
-        ./aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
                               -t "senzing/senzingapi-runtime:staging"
 
       # Build senzingapi-tools base image
@@ -50,7 +50,7 @@ phases:
                     "--build-arg BASE_IMAGE=senzing/senzingapi-runtime:staging "
                     "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools"
                     )
-        ./aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
                               -t "senzing/senzingapi-tools:staging"
 
       - |
@@ -70,7 +70,7 @@ phases:
             BASE="senzing/senzingapi-runtime:staging"
           fi
 
-          ./aws/docker-build.sh -a "--build-arg BASE_IMAGE=${BASE}" \
+          $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "--build-arg BASE_IMAGE=${BASE}" \
                               -t "senzing/${repos[$repo]}:staging"
 
         done
