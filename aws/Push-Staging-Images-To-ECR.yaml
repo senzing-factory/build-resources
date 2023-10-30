@@ -15,8 +15,7 @@ phases:
   pre_build:
     commands:
       - echo "[INFO] Login in to Amazon ECR"
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS \
-              --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - aws ecr-public get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin public.ecr.aws
       - |
         if [[ "$PUSH_TO_DOCKERHUB" == "true" ]]; then
           echo "[INFO] Login to dockerhub"
