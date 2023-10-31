@@ -32,18 +32,16 @@ phases:
       # Build senzingapi-runtime base image
       - |
         cd $CODEBUILD_SRC_DIR_senzingapi_runtime
-        #build_args=(
-        #            "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime "
-        #            "--build-arg SENZING_APT_REPOSITORY_NAME=${SENZING_APT_REPO_PACKAGE} "
-        #            "--build-arg SENZING_APT_REPOSITORY_URL=https://${SENZING_APT_REPOSITORY} "
-        #            "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime=${SENZING_RUNTIME_VERSION}"
-        #            )
-        build_args="--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime --build-arg SENZING_APT_REPOSITORY_NAME=${SENZING_APT_REPO_PACKAGE} --build-arg SENZING_APT_REPOSITORY_URL=https://${SENZING_APT_REPOSITORY} --build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime=${SENZING_RUNTIME_VERSION}"
-        #echo "[INFO] $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-        #                      -t "senzing/senzingapi-runtime:staging""
-        #$CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-        #                      -t "senzing/senzingapi-runtime:staging"
-        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "${build_args}" -t "senzing/senzingapi-runtime:staging"
+        build_args=(
+                    "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime "
+                    "--build-arg SENZING_APT_REPOSITORY_NAME=${SENZING_APT_REPO_PACKAGE} "
+                    "--build-arg SENZING_APT_REPOSITORY_URL=https://${SENZING_APT_REPOSITORY} "
+                    "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime=${SENZING_RUNTIME_VERSION}"
+                    )
+        echo "[INFO] $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+                              -t "senzing/senzingapi-runtime:staging""
+        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+                              -t "senzing/senzingapi-runtime:staging"
 
       # Build senzingapi-tools base image
       - |
