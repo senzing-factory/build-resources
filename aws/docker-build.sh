@@ -55,7 +55,7 @@ build() {
         docker_tag+=" --tag docker.io/$image_tag"
     fi
 
-    docker build .
+    docker buildx build .
 
     #echo "[INFO] docker buildx build \
     #        --push \
