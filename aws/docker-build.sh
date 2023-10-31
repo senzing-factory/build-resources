@@ -50,7 +50,7 @@ parse_flags() {
 
 build() {
 
-    docker_tag="--tag $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$image_tag"
+    docker_tag="--tag public.ecr.aws/$image_tag"
 
     if [[ "$PUSH_TO_DOCKERHUB" == "true" ]]; then
         docker_tag+=" --tag docker.io/$image_tag"
