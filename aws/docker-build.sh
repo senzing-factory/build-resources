@@ -28,7 +28,6 @@ parse_flags() {
 
       -a | --args)
         build_arguments="$2"
-        echo "[INFO] Docker build arguments: $build_arguments"
         shift
         shift
         ;;

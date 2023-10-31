@@ -34,13 +34,10 @@ phases:
       - echo "[INFO] Login in to Amazon ECR"
       - aws ecr-public get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin public.ecr.aws
       - |
-        if [[ "$PUSH_TO_DOCKERHUB" == "true" ]]; then
           echo "[INFO] Login to dockerhub"
-          aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ACCESS_TOKEN | jq -r '.SecretString' | docker login \
-            --username $(aws secretsmanager get-secret-value --secret-id $DOCKERHUB_USERNAME) | jq -r '.SecretString' --password-stdin
-        else
-          echo "[INFO] Skipping dockerhub login"
-        fi
+          DOCKERHUB_ARN="arn:aws:secretsmanager:$AWS_DEFAULT_REGION:$AWS_ACCOUNT_ID:secret:$DOCKERHUB_SECRET"
+          aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ARN | jq --raw-output '.SecretString' | jq -r .DOCKERHUB_ACCESS_TOKEN | docker login \
+            --username $(aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ARN| jq --raw-output '.SecretString' | jq -r .DOCKERHUB_USERNAME) --password-stdin
 
   build:
     commands:
