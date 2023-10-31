@@ -61,14 +61,14 @@ build() {
             --platform ${PLATFORMS} \
             --no-cache \
             $docker_tag \
-            $build_arguments"
+            $build_arguments ."
 
     docker buildx build \
             --push \
             --platform "${PLATFORMS}" \
             --no-cache \
             "$docker_tag" \
-            "$build_arguments"
+            "$build_arguments" .
 
 }
 
