@@ -68,8 +68,8 @@ build() {
             --push \
             --platform "${PLATFORMS}" \
             --no-cache \
-            "${build_arguments}" \
-            "${docker_tag}" \
+            ${build_arguments} \
+            ${docker_tag} \
             .
 
 }
