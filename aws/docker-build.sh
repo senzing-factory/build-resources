@@ -56,19 +56,21 @@ build() {
         docker_tag+=" --tag docker.io/$image_tag"
     fi
 
-  echo "[INFO] docker buildx build \
-            --push \
-            --platform ${PLATFORMS} \
-            --no-cache \
-            $docker_tag \
-            $build_arguments ."
+    docker build .
 
-    docker buildx build \
-            --push \
-            --platform "${PLATFORMS}" \
-            --no-cache \
-            "$docker_tag" \
-            "$build_arguments" .
+    #echo "[INFO] docker buildx build \
+    #        --push \
+    #        --platform ${PLATFORMS} \
+    #        --no-cache \
+    #        $docker_tag \
+    #        $build_arguments ."
+
+    #docker buildx build \
+    #        --push \
+    #        --platform "${PLATFORMS}" \
+    #        --no-cache \
+    #        "$docker_tag" \
+    #        "$build_arguments" .
 
 }
 
