@@ -43,7 +43,7 @@ phases:
         #                      -t "senzing/senzingapi-runtime:staging""
         #$CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
         #                      -t "senzing/senzingapi-runtime:staging"
-        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a ${build_args} -t "senzing/senzingapi-runtime:staging"
+        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "${build_args}" -t "senzing/senzingapi-runtime:staging"
 
       # Build senzingapi-tools base image
       - |
