@@ -55,7 +55,8 @@ build() {
         docker_tag+=" --tag docker.io/$image_tag"
     fi
 
-    docker buildx build .
+    echo "[INFO] docker buildx build --platform ${PLATFORMS} ."
+    docker buildx build --platform ${PLATFORMS} .
 
     #echo "[INFO] docker buildx build \
     #        --push \
