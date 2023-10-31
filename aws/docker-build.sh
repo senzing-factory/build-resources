@@ -10,6 +10,7 @@ image_tag=""
 # Function to display script usage
 usage() {
  echo "Usage: $0 [OPTIONS]"
+ echo "PreReq: Dockerfile to build should be in the current working directory"
  echo "Options:"
  echo " -h, --help      Display this help message"
  echo " -a, --args      Additional build arguments to pass to docker buildx build"
@@ -55,22 +56,19 @@ build() {
         docker_tag+=" --tag docker.io/$image_tag"
     fi
 
-    echo "[INFO] docker buildx build --push --platform ${PLATFORMS} $docker_tag --no-cache ."
-    docker buildx build --push --platform ${PLATFORMS} $docker_tag --no-cache .
+    echo "[INFO] docker buildx build \
+            --push \
+            --platform ${PLATFORMS} \
+            --no-cache \
+            $docker_tag \
+            $build_arguments ."
 
-    #echo "[INFO] docker buildx build \
-    #        --push \
-    #        --platform ${PLATFORMS} \
-    #        --no-cache \
-    #        $docker_tag \
-    #        $build_arguments ."
-
-    #docker buildx build \
-    #        --push \
-    #        --platform "${PLATFORMS}" \
-    #        --no-cache \
-    #        "$docker_tag" \
-    #        "$build_arguments" .
+    docker buildx build \
+            --push \
+            --platform "${PLATFORMS}" \
+            --no-cache \
+            "$docker_tag" \
+            "$build_arguments" .
 
 }
 
