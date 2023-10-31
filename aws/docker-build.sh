@@ -65,7 +65,7 @@ build() {
         docker_tag+=" --tag docker.io/$image_tag"
     fi
 
-    if [[ "$push_image" == "false" ]]
+    if [[ "$push_image" == "false" ]]; then
       PUSH=""
     else
       PUSH="--push"
