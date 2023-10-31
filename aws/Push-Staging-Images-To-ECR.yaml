@@ -41,7 +41,7 @@ phases:
         echo "[INFO] $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
                               -t "senzing/senzingapi-runtime:staging""
         $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-                              -t "senzing/senzingapi-runtime:staging"
+                              -t "senzing/senzingapi-runtime:staging" -p "false"
 
       # Build senzingapi-tools base image
       - |
@@ -51,7 +51,7 @@ phases:
                     "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools"
                     )
         $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-                              -t "senzing/senzingapi-tools:staging"
+                              -t "senzing/senzingapi-tools:staging" -p "true"
 
       - |
         declare -A repos
@@ -71,6 +71,6 @@ phases:
           fi
 
           $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "--build-arg BASE_IMAGE=${BASE}" \
-                              -t "senzing/${repos[$repo]}:staging"
+                              -t "senzing/${repos[$repo]}:staging" -p "true"
 
         done

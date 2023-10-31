@@ -6,6 +6,7 @@ set -e
 # Default variable values
 build_arguments=""
 image_tag=""
+push_image="true"
 
 # Function to display script usage
 usage() {
@@ -14,6 +15,7 @@ usage() {
  echo "Options:"
  echo " -h, --help      Display this help message"
  echo " -a, --args      Additional build arguments to pass to docker buildx build"
+ echo " -p, --push      Push images to remote repository: true or false. Default: true"
  echo " -t, --tag       Docker image tag"
 }
 
@@ -32,6 +34,13 @@ parse_flags() {
         shift
         shift
         ;;
+
+      -p | --push)
+        push_image="$2"
+        shift
+        shift
+        ;;
+
 
       -t | --tag)
         image_tag="$2"
@@ -56,8 +65,14 @@ build() {
         docker_tag+=" --tag docker.io/$image_tag"
     fi
 
+    if [[ "$push_image" == "false" ]]
+      PUSH=""
+    else
+      PUSH="--push"
+    fi
+
     echo "[INFO] docker buildx build \
-            --push \
+            ${PUSH} \
             --platform ${PLATFORMS} \
             --no-cache \
             ${build_arguments} \
@@ -65,7 +80,7 @@ build() {
             ."
 
     docker buildx build \
-            --push \
+            ${PUSH} \
             --platform "${PLATFORMS}" \
             --no-cache \
             ${build_arguments} \
