@@ -10,23 +10,6 @@ phases:
   install:
     commands:
 
-      #- BUILDX_DIR="$HOME/.docker/cli-plugins"
-      #- mkdir -p "$BUILDX_DIR"
-      #- BUILDX_RELEASES_URL="https://github.com/docker/buildx/releases"
-
-      #- echo "[INFO] get latest buildx release version"
-      #- BUILDX_VERSION=$(curl --silent -qI ${BUILDX_RELEASES_URL}/latest | awk -F '/' '/^location/ {print  substr($NF, 1, length($NF)-1)}')
-
-      #- echo "[INFO] download buildx version $BUILDX_VERSION"
-      #- echo "[INFO] ${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.$(uname -s | tr '[:upper:]' '[:lower:]')-$(dpkg --print-architecture)"
-      #- wget -P "$BUILDX_DIR" "${BUILDX_RELEASES_URL}/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.$(uname -s | tr '[:upper:]' '[:lower:]')-$(dpkg --print-architecture)"
-      #- ls -tlc "$BUILDX_DIR"
-      #- cp "$BUILDX_DIR"/buildx-"${BUILDX_VERSION}".$(uname -s | tr '[:upper:]' '[:lower:]')-$(dpkg --print-architecture) "$BUILDX_DIR"/docker-buildx
-      #- chmod +x "$BUILDX_DIR"/docker-buildx
-      #- mkdir -p /usr/local/lib/docker/cli-plugins
-      #- cp "$BUILDX_DIR"/docker-buildx /usr/local/lib/docker/cli-plugins/
-
-      #- docker buildx version
       - docker info
       - sudo apt-get update 
       - sudo apt-get install -y qemu-user-static
