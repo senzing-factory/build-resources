@@ -51,7 +51,7 @@ phases:
                     "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION} "
                     )
         $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-                              -t "senzing/senzingapi-tools:staging" -p "true"
+                              -t "senzing/senzingapi-tools:staging"
 
       - |
         declare -A repos
