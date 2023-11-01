@@ -63,7 +63,8 @@ phases:
         for repo in "${!repos[@]}"; do
 
           # Codebuild doesn't support "-" in source identifier names
-          cd $CODEBUILD_SRC_DIR_$(echo $repo | tr '-' '_')
+          echo "[INFO] cd $CODEBUILD_SRC_DIR_$(echo $repo | tr '-' '_')"
+          cd "$CODEBUILD_SRC_DIR_"$(echo $repo | tr '-' '_')
 
           if [[ $repo =~ "xterm" || $repo =~ "sshd" ]]; then
             BASE="senzing/senzingapi-tools:staging"
@@ -71,7 +72,7 @@ phases:
             BASE="senzing/senzingapi-runtime:staging"
           fi
 
-          $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "--build-arg BASE_IMAGE=${BASE} --pull=false" \
+          $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "--build-arg BASE_IMAGE=${BASE} --pull=false --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
                               -t "senzing/${repos[$repo]}:staging" -p "true"
 
         done
