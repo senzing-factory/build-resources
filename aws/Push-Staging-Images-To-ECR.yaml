@@ -31,26 +31,26 @@ phases:
 
       # Build senzingapi-runtime base image
       - |
-        cd ${CODEBUILD_SRC_DIR}_senzingapi_runtime
+        cd $CODEBUILD_SRC_DIR_senzingapi_runtime
         build_args=(
                     "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime "
                     "--build-arg SENZING_APT_REPOSITORY_NAME=${SENZING_APT_REPO_PACKAGE} "
                     "--build-arg SENZING_APT_REPOSITORY_URL=https://${SENZING_APT_REPOSITORY} "
                     "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime=${SENZING_VERSION}"
                     )
-        echo "[INFO] ${CODEBUILD_SRC_DIR}/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+        echo "[INFO] $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
                               -t "senzing/senzingapi-runtime:staging""
-        ${CODEBUILD_SRC_DIR}/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
                               -t "senzing/senzingapi-runtime:staging"
 
       # Build senzingapi-tools base image
       - |
-        cd ${CODEBUILD_SRC_DIR}_senzingapi_tools
+        cd $CODEBUILD_SRC_DIR_senzingapi_tools
         build_args=(
                     "--build-arg BASE_IMAGE=public.ecr.aws/senzing/senzingapi-runtime:staging "
                     "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION} "
                     )
-        ${CODEBUILD_SRC_DIR}/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
                               -t "senzing/senzingapi-tools:staging" -p "true"
 
       - |
@@ -71,7 +71,7 @@ phases:
             BASE="public.ecr.aws/senzing/senzingapi-runtime:staging"
           fi
 
-          ${CODEBUILD_SRC_DIR}/aws/docker-build.sh \
+          $CODEBUILD_SRC_DIR/aws/docker-build.sh \
                               -a "--build-arg BASE_IMAGE=${BASE} --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
                               -t "senzing/${repos[$repo]}:staging"
 
