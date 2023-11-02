@@ -64,6 +64,7 @@ build() {
             ${docker_tag} \
             ."
 
+    # shellcheck disable=SC2086
     docker buildx build \
             --push \
             --platform "${PLATFORMS}" \
