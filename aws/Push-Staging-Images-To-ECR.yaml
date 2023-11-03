@@ -62,7 +62,7 @@ phases:
         for repo in "${!repos[@]}"; do
 
           # Codebuild doesn't support "-" in source identifier names
-          SRC_DIR=/codebuild/output/**/src/github.com/**/$(echo $repo | tr '-' '_')
+          SRC_DIR=/codebuild/output/*/src/github.com/*/$repo
           echo "[INFO] cd $SRC_DIR"
           cd "$SRC_DIR" || { echo "Failed to change directory"; exit 1; }
 
