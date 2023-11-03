@@ -54,6 +54,12 @@ phases:
       #                        -t "senzing/senzingapi-tools:staging"
 
       - |
+        cd $CODEBUILD_SRC_DIR_init_postgresql
+        BASE="public.ecr.aws/senzing/senzingapi-runtime:staging"
+        $CODEBUILD_SRC_DIR/aws/docker-build.sh \
+                              -a "--build-arg BASE_IMAGE=${BASE} --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
+                              -t "senzing/init-postgresql:staging"
+      #- |
         #declare -A repos
         #repos=(["redoer"]="redoer" ["init-postgresql"]="init-postgresql" \
         #["senzing-poc-server"]="senzing-poc-server" ["docker-sshd"]=sshd ["stream-loader"]="stream-loader" \
@@ -64,17 +70,13 @@ phases:
           # Codebuild doesn't support "-" in source identifier names
           #echo "[INFO] cd ${CODEBUILD_SRC_DIR}_$(echo $repo | tr '-' '_')"
           #cd "${CODEBUILD_SRC_DIR}_"$(echo $repo | tr '-' '_')
-          cd "${CODEBUILD_SRC_DIR}_init_postgresql
+          #cd "${CODEBUILD_SRC_DIR}_init_postgresql
 
           #if [[ $repo =~ "xterm" || $repo =~ "sshd" ]]; then
           #  BASE="public.ecr.aws/senzing/senzingapi-tools:staging"
           #else
-            BASE="public.ecr.aws/senzing/senzingapi-runtime:staging"
+           # BASE="public.ecr.aws/senzing/senzingapi-runtime:staging"
           #fi
-
-          $CODEBUILD_SRC_DIR/aws/docker-build.sh \
-                              -a "--build-arg BASE_IMAGE=${BASE} --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
-                              -t "senzing/init-postgresql:staging"
 
           #$CODEBUILD_SRC_DIR/aws/docker-build.sh \
           #                    -a "--build-arg BASE_IMAGE=${BASE} --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
