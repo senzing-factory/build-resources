@@ -63,7 +63,7 @@ phases:
 
           # Codebuild doesn't support "-" in source identifier names
           #SRC_DIR=/codebuild/output/*/src/github.com/*/$repo
-          SRC_DIR=${CODEBUILD_SRC_DIR}_${repo}
+          SRC_DIR=CODEBUILD_SRC_DIR_${repo}
           echo "[INFO] cd ${!SRC_DIR}"
           cd ${!SRC_DIR} || { echo "Failed to change directory"; exit 1; }
 
