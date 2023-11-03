@@ -62,9 +62,10 @@ phases:
         for repo in "${!repos[@]}"; do
 
           # Codebuild doesn't support "-" in source identifier names
-          SRC_DIR=/codebuild/output/*/src/github.com/*/$repo
-          echo "[INFO] cd $SRC_DIR"
-          cd "$SRC_DIR" || { echo "Failed to change directory"; exit 1; }
+          #SRC_DIR=/codebuild/output/*/src/github.com/*/$repo
+          SRC_DIR=${CODEBUILD_SRC_DIR}_${repo}
+          echo "[INFO] cd ${!SRC_DIR}"
+          cd ${!SRC_DIR} || { echo "Failed to change directory"; exit 1; }
 
           if [[ $repo =~ "xterm" || $repo =~ "sshd" ]]; then
             BASE="public.ecr.aws/senzing/senzingapi-tools:staging"
