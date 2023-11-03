@@ -82,4 +82,4 @@ phases:
           #                    -a "--build-arg BASE_IMAGE=${BASE} --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
           #                    -t "senzing/${repos[$repo]}:staging"
 
-        done
+        #done
