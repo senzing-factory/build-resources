@@ -30,49 +30,54 @@ phases:
     commands:
 
       # Build senzingapi-runtime base image
-      - |
-        cd $CODEBUILD_SRC_DIR_senzingapi_runtime
-        build_args=(
-                    "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime "
-                    "--build-arg SENZING_APT_REPOSITORY_NAME=${SENZING_APT_REPO_PACKAGE} "
-                    "--build-arg SENZING_APT_REPOSITORY_URL=https://${SENZING_APT_REPOSITORY} "
-                    "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime=${SENZING_VERSION}"
-                    )
-        echo "[INFO] $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-                              -t "senzing/senzingapi-runtime:staging""
-        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-                              -t "senzing/senzingapi-runtime:staging"
+      #- |
+      #  cd $CODEBUILD_SRC_DIR_senzingapi_runtime
+      #  build_args=(
+      #              "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime "
+      #              "--build-arg SENZING_APT_REPOSITORY_NAME=${SENZING_APT_REPO_PACKAGE} "
+      #              "--build-arg SENZING_APT_REPOSITORY_URL=https://${SENZING_APT_REPOSITORY} "
+      #              "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime=${SENZING_VERSION}"
+      #              )
+      #  echo "[INFO] $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+      #                        -t "senzing/senzingapi-runtime:staging""
+      #  $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+      #                        -t "senzing/senzingapi-runtime:staging"
 
       # Build senzingapi-tools base image
-      - |
-        cd $CODEBUILD_SRC_DIR_senzingapi_tools
-        build_args=(
-                    "--build-arg BASE_IMAGE=public.ecr.aws/senzing/senzingapi-runtime:staging "
-                    "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION} "
-                    )
-        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-                              -t "senzing/senzingapi-tools:staging"
+      #- |
+      #  cd $CODEBUILD_SRC_DIR_senzingapi_tools
+      #  build_args=(
+      #              "--build-arg BASE_IMAGE=public.ecr.aws/senzing/senzingapi-runtime:staging "
+      #              "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION} "
+      #              )
+      #  $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+      #                        -t "senzing/senzingapi-tools:staging"
 
       - |
-        declare -A repos
-        repos=(["redoer"]="redoer" ["init-postgresql"]="init-postgresql" \
-        ["senzing-poc-server"]="senzing-poc-server" ["docker-sshd"]=sshd ["stream-loader"]="stream-loader" \
-        ["docker-xterm"]="xterm" ["sz_sqs_consumer"]="sz_sqs_consumer" ["sz_simple_redoer"]="sz_simple_redoer")
+        #declare -A repos
+        #repos=(["redoer"]="redoer" ["init-postgresql"]="init-postgresql" \
+        #["senzing-poc-server"]="senzing-poc-server" ["docker-sshd"]=sshd ["stream-loader"]="stream-loader" \
+        #["docker-xterm"]="xterm" ["sz_sqs_consumer"]="sz_sqs_consumer" ["sz_simple_redoer"]="sz_simple_redoer")
 
-        for repo in "${!repos[@]}"; do
+        #for repo in "${!repos[@]}"; do
 
           # Codebuild doesn't support "-" in source identifier names
-          echo "[INFO] cd ${CODEBUILD_SRC_DIR}_$(echo $repo | tr '-' '_')"
-          cd "${CODEBUILD_SRC_DIR}_"$(echo $repo | tr '-' '_')
+          #echo "[INFO] cd ${CODEBUILD_SRC_DIR}_$(echo $repo | tr '-' '_')"
+          #cd "${CODEBUILD_SRC_DIR}_"$(echo $repo | tr '-' '_')
+          cd "${CODEBUILD_SRC_DIR}_init_postgresql
 
-          if [[ $repo =~ "xterm" || $repo =~ "sshd" ]]; then
-            BASE="public.ecr.aws/senzing/senzingapi-tools:staging"
-          else
+          #if [[ $repo =~ "xterm" || $repo =~ "sshd" ]]; then
+          #  BASE="public.ecr.aws/senzing/senzingapi-tools:staging"
+          #else
             BASE="public.ecr.aws/senzing/senzingapi-runtime:staging"
-          fi
+          #fi
 
           $CODEBUILD_SRC_DIR/aws/docker-build.sh \
                               -a "--build-arg BASE_IMAGE=${BASE} --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
-                              -t "senzing/${repos[$repo]}:staging"
+                              -t "senzing/init-postgresql:staging"
+
+          #$CODEBUILD_SRC_DIR/aws/docker-build.sh \
+          #                    -a "--build-arg BASE_IMAGE=${BASE} --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
+          #                    -t "senzing/${repos[$repo]}:staging"
 
         done
