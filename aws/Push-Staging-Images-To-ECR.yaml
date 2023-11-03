@@ -10,48 +10,48 @@ phases:
   install:
     commands:
 
-      #- docker info
-      #- sudo apt-get update
-      #- sudo apt-get install -y qemu-user-static
-      #- docker buildx create --use
-      #- docker buildx ls
+      - docker info
+      - sudo apt-get update
+      - sudo apt-get install -y qemu-user-static
+      - docker buildx create --use
+      - docker buildx ls
 
   pre_build:
     commands:
-      #- echo "[INFO] Login in to Amazon ECR"
-      #- aws ecr-public get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin public.ecr.aws
-      #- |
-      #    echo "[INFO] Login to dockerhub"
-      #    DOCKERHUB_ARN="arn:aws:secretsmanager:$AWS_DEFAULT_REGION:$AWS_ACCOUNT_ID:secret:$DOCKERHUB_SECRET"
-      #    aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ARN | jq --raw-output '.SecretString' | jq -r .DOCKERHUB_ACCESS_TOKEN | docker login \
-      #      --username $(aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ARN| jq --raw-output '.SecretString' | jq -r .DOCKERHUB_USERNAME) --password-stdin
+      - echo "[INFO] Login in to Amazon ECR"
+      - aws ecr-public get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin public.ecr.aws
+      - |
+          echo "[INFO] Login to dockerhub"
+          DOCKERHUB_ARN="arn:aws:secretsmanager:$AWS_DEFAULT_REGION:$AWS_ACCOUNT_ID:secret:$DOCKERHUB_SECRET"
+          aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ARN | jq --raw-output '.SecretString' | jq -r .DOCKERHUB_ACCESS_TOKEN | docker login \
+            --username $(aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ARN| jq --raw-output '.SecretString' | jq -r .DOCKERHUB_USERNAME) --password-stdin
 
   build:
     commands:
 
       # Build senzingapi-runtime base image
-      #- |
-      #  cd $CODEBUILD_SRC_DIR_senzingapi_runtime  || { echo "Failed to change directory"; exit 1; }
-      #  build_args=(
-      #              "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime "
-      #              "--build-arg SENZING_APT_REPOSITORY_NAME=${SENZING_APT_REPO_PACKAGE} "
-      #              "--build-arg SENZING_APT_REPOSITORY_URL=https://${SENZING_APT_REPOSITORY} "
-      #              "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime=${SENZING_VERSION}"
-      #              )
-      #  echo "[INFO] $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-      #                        -t "senzing/senzingapi-runtime:staging""
-      #  $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-      #                        -t "senzing/senzingapi-runtime:staging"
+      - |
+        cd $CODEBUILD_SRC_DIR_senzingapi_runtime  || { echo "Failed to change directory"; exit 1; }
+        build_args=(
+                    "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime "
+                    "--build-arg SENZING_APT_REPOSITORY_NAME=${SENZING_APT_REPO_PACKAGE} "
+                    "--build-arg SENZING_APT_REPOSITORY_URL=https://${SENZING_APT_REPOSITORY} "
+                    "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime=${SENZING_VERSION}"
+                    )
+        echo "[INFO] $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+                              -t "senzing/senzingapi-runtime:staging""
+        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+                              -t "senzing/senzingapi-runtime:staging"
 
       # Build senzingapi-tools base image
-      #- |
-      #  cd $CODEBUILD_SRC_DIR_senzingapi_tools  || { echo "Failed to change directory"; exit 1; }
-      #  build_args=(
-      #              "--build-arg BASE_IMAGE=public.ecr.aws/senzing/senzingapi-runtime:staging "
-      #              "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION} "
-      #              )
-      #  $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-      #                        -t "senzing/senzingapi-tools:staging"
+      - |
+        cd $CODEBUILD_SRC_DIR_senzingapi_tools  || { echo "Failed to change directory"; exit 1; }
+        build_args=(
+                    "--build-arg BASE_IMAGE=public.ecr.aws/senzing/senzingapi-runtime:staging "
+                    "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION} "
+                    )
+        $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
+                              -t "senzing/senzingapi-tools:staging"
 
       - |
         declare -A repos
@@ -61,6 +61,7 @@ phases:
 
         for repo in "${!repos[@]}"; do
 
+          # Codebuild doesn't support "-" in source identifier names
           SRC_DIR=CODEBUILD_SRC_DIR_$(echo $repo | tr '-' '_')
           echo "[INFO] cd ${!SRC_DIR}"
           cd ${!SRC_DIR} || { echo "Failed to change directory"; exit 1; }
@@ -74,5 +75,6 @@ phases:
           $CODEBUILD_SRC_DIR/aws/docker-build.sh \
                               -a "--build-arg BASE_IMAGE=${BASE} --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
                               -t "senzing/${repos[$repo]}:staging"
+          test $? -eq 0 || echo "[ERROR] docker build failed"
 
         done
