@@ -12,11 +12,11 @@ jobs:
   add-issue-to-garage:
     uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@main
     with:
-      project-number: "1"
+      project-number: "3"
       org: "senzing-garage"
       classic: false
     secrets:
-      SENZING_GITHUB_ACCESS_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
+      SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
 
   add-issue-to-devsecops:
     uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@main
