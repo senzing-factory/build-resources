@@ -11,6 +11,9 @@ on:
       classic:
         required: true
         type: boolean
+      org:
+        required: true
+        type: string
     secrets:
       SENZING_GITHUB_ACCESS_TOKEN:
         required: false
@@ -29,7 +32,7 @@ jobs:
         if: ${{ ! inputs.classic }}
         uses: actions/add-to-project@v0.5.0
         with:
-          project-url: "https://github.com/orgs/Senzing/projects/${{inputs.project-number}}"
+          project-url: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
           github-token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
 
   # https://github.com/srggrs/assign-one-project-github-action/issues/89
@@ -40,9 +43,9 @@ jobs:
     steps:
       - name: Add to classic project
         if: ${{ inputs.classic }}
-        uses: Senzing/github-action-add-issue-to-project@main
+        uses: senzing-factory/github-action-add-issue-to-project@main
         with:
-          project: "https://github.com/orgs/Senzing/projects/${{inputs.project-number}}"
+          project: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
           column_name: "Backlog"
         env:
           GITHUB_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
