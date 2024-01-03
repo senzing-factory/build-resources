@@ -29,6 +29,6 @@ jobs:
           git_user_signingkey: true
           git_commit_gpgsign: true
       - name: Make github.go file
-        uses: Senzing/github-action-make-go-github-file@main
+        uses: senzing-factory/github-action-make-go-github-file@main
         with:
           actor: ${{ secrets.SENZING_GITHUB_ACTOR }}
