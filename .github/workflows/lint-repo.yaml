@@ -9,6 +9,3 @@ on:
 jobs:
   lint-code-base:
     uses: senzing-factory/build-resources/.github/workflows/linter.yaml@main
-    with:
-      # temp for initial full test
-      validate-all-codebase: true
