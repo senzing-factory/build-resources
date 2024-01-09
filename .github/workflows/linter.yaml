@@ -28,6 +28,6 @@ jobs:
         uses: github/super-linter@v5
         env:
           # only lint new and modified files
-          VALIDATE_ALL_CODEBASE: false
+          #VALIDATE_ALL_CODEBASE: false
           DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
