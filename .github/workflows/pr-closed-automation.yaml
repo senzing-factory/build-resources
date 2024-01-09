@@ -1,5 +1,3 @@
----
-
 name: 'pr closed automation'
 
 on:
@@ -11,3 +9,5 @@ jobs:
     uses: senzing-factory/build-resources/.github/workflows/move-pr-to-done.yaml@main
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+    with:
+      project: "Factory"

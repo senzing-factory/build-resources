@@ -1,12 +1,13 @@
----
+name: 'linter'
 
-name: linter
-
-on:
-  push:
-    branches-ignore: [main]
-  pull_request:
-    branches: [main]
+on: 
+  workflow_call:
+    inputs:
+      validate-all-codebase:
+        default: false
+        description: 'Lint all files or only modified: true/false'
+        required: false
+        type: boolean
 
 jobs:
   lint-code-base:
@@ -27,7 +28,7 @@ jobs:
       - name: Lint Code Base
         uses: github/super-linter@v5
         env:
-          # only lint new and modified files
-          VALIDATE_ALL_CODEBASE: false
           DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # only lint new and modified files
+          VALIDATE_ALL_CODEBASE: ${{ inputs.validate-all-codebase }}

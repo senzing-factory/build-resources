@@ -1,9 +1,12 @@
----
-
 name: 'move pr to done'
 
 on:
   workflow_call:
+    inputs:
+      project:
+        default: "Garage"
+        required: false
+        type: string
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: true
@@ -17,6 +20,6 @@ jobs:
         if: ${{ github.event.pull_request.merged == true }}
         uses: alex-page/github-project-automation-plus@v0.9.0
         with:
-          project: Community
+          project: ${{ inputs.project }}
           column: Done
           repo-token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
