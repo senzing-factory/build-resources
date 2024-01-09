@@ -3,9 +3,14 @@ name: 'linter'
 on: 
   workflow_call:
     inputs:
+      filter-regex-include:
+        default: ".*"
+        description: 'Regular expression defining which files will be processed by linters.'
+        required: false
+        type: string
       validate-all-codebase:
         default: false
-        description: 'Lint all files or only modified: true/false'
+        description: 'Lint all files or only modified: true/false.'
         required: false
         type: boolean
 
