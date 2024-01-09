@@ -1,6 +1,6 @@
 name: 'linter'
 
-on: 
+on:
   workflow_call:
     inputs:
       filter-regex-include:
