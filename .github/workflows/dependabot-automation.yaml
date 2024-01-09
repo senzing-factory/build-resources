@@ -8,21 +8,13 @@ on:
 
 jobs:
 
-  add-pr-to-community:
-    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' ) }}
-    uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@main
-    with:
-      project-number: "2"
-      classic: true
-    secrets:
-      SENZING_GITHUB_ACCESS_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
-
   add-pr-to-devsecops:
     if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' ) }}
     uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@main
     with:
-      project-number: "13"
       classic: false
+      org: ${{ vars.SENZING_GITHUB_ACCOUNT_NAME }}
+      project-number: ${{ vars.SENZING_PROJECT_FACTORY }}
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
 
