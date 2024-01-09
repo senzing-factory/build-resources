@@ -8,7 +8,7 @@ on:
 
 jobs:
 
-  add-pr-to-devsecops:
+  add-pr-to-project:
     if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' ) }}
     uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@main
     with:
