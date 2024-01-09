@@ -1,6 +1,6 @@
 name: 'make go github file'
 
-on: 
+on:
   workflow_call:
     secrets:
       SENZING_GITHUB_GPG_PRIVATE_KEY:
