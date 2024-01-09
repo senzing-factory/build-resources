@@ -1,5 +1,3 @@
----
-
 name: 'docker-push-containers-to-dockerhub-and-ecr'
 
 on:

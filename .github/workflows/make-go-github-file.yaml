@@ -1,5 +1,3 @@
----
-
 name: 'make go github file'
 
 on: 

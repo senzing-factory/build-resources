@@ -1,5 +1,3 @@
----
-
 name: 'add labels to issue'
 
 on:
