@@ -15,7 +15,7 @@ permissions:
   statuses: write
 
 jobs:
-  # In order to require linting as a status check we need to 
+  # In order to require linting as a status check we need to
   # run the overall workflow on every pr.
   # This is used to skip at the job level if there are no
   # changes to the workflow files.
