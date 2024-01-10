@@ -3,8 +3,8 @@ name: 'issue automation'
 on:
   issues:
     types:
-      - reopened
       - opened
+      - reopened
 
 jobs:
 
