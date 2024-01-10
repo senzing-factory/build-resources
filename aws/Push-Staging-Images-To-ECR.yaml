@@ -65,6 +65,8 @@ phases:
           SRC_DIR=CODEBUILD_SRC_DIR_$(echo $repo | tr '-' '_')
           echo "[INFO] cd ${!SRC_DIR}"
           cd ${!SRC_DIR} || { echo "[ERROR] Failed to change directory"; exit 1; }
+          echo "[INFO] git submodule update --init --recursive"
+          git submodule update --init --recursive
 
           if [[ $repo =~ "xterm" || $repo =~ "sshd" ]]; then
             BASE="public.ecr.aws/senzing/senzingapi-tools:staging"
