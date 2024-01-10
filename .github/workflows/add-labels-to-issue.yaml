@@ -8,6 +8,9 @@ on:
       SENZING_MEMBERS:
         required: false
 
+permissions:
+  issues: write
+
 jobs:
 
   add-customer-submission-label:
