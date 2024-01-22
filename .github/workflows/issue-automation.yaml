@@ -16,9 +16,3 @@ jobs:
       classic: false
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
-
-  add-issue-labels:
-    uses: senzing-factory/build-resources/.github/workflows/add-labels-to-issue.yaml@main
-    secrets:
-      ORG_MEMBERSHIP_TOKEN: ${{ secrets.ORG_MEMBERSHIP_TOKEN }}
-      SENZING_MEMBERS: ${{ secrets.SENZING_MEMBERS }}
