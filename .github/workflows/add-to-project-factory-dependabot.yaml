@@ -15,7 +15,7 @@ jobs:
         run: echo "$GITHUB_CONTEXT"
 
   add-pr-to-project:
-    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' ) }}
+    if: ${{ github.actor == 'dependabot[bot]' && ( contains(fromJSON('["opened", "reopened", synchronize"]'), github.event.action) ) }}
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
     uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@main
@@ -25,7 +25,7 @@ jobs:
       project-number: ${{ vars.SENZING_PROJECT_FACTORY_VALUE }}
 
   move-pr-to-project-column:
-    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' ) }}
+    if: ${{ github.actor == 'dependabot[bot]' && ( contains(fromJSON('["opened", "reopened", synchronize"]'), github.event.action) ) }}
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
     uses: senzing-factory/build-resources/.github/workflows/move-pr-to-project-column.yaml@main
