@@ -1,0 +1,28 @@
+name: 'move pr to project column'
+
+on:
+  workflow_call:
+    inputs:
+      column:
+        required: true
+        type: string
+      project:
+        default: "Garage"
+        required: false
+        type: string
+    secrets:
+      SENZING_GITHUB_PROJECT_RW_TOKEN:
+        required: true
+
+jobs:
+  move-pr-to-project-column:
+    runs-on: ubuntu-latest
+    # if: ${{ github.actor == 'dependabot[bot]' }}
+    steps:
+      - name: Move PR to project column
+        if: ${{ github.event.pull_request.merged == true }}
+        uses: alex-page/github-project-automation-plus@v0.9.0
+        with:
+          column: ${{ inputs.column }}
+          project: ${{ inputs.project }}
+          repo-token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}

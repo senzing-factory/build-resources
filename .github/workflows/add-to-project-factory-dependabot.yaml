@@ -1,0 +1,27 @@
+name: 'add to project factory dependabot'
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  add-pr-to-project:
+    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' ) }}
+    secrets:
+      SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+    uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@main
+    with:
+      classic: false
+      org: ${{ vars.SENZING_GITHUB_ACCOUNT_NAME }}
+      project-number: ${{ vars.SENZING_PROJECT_FACTORY_VALUE }}
+
+  move-pr-to-project-column:
+    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' ) }}
+    secrets:
+      SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+    uses: senzing-factory/build-resources/.github/workflows/move-pr-to-project-column.yaml@main
+    with:
+      column: "In progress"
+      project: ${{ vars.SENZING_PROJECT_FACTORY }}
+    
