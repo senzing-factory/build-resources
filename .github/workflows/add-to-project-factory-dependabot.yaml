@@ -7,17 +7,17 @@ on:
 jobs:
 
   add-pr-to-project:
-    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' || github.event.action  == 'synchronize') }}
+    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened') }}
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
     uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@main
     with:
       classic: false
       org: ${{ vars.SENZING_GITHUB_ACCOUNT_NAME }}
-      project-number: ${{ vars.SENZING_PROJECT_FACTORY_VALUE }}
+      project-number: ${{ vars.SENZING_PROJECT_FACTORY }}
 
   move-pr-to-in-progress-column:
-    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' || github.event.action  == 'synchronize') }}
+    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened') }}
     runs-on: ubuntu-latest
     steps:
       - name: 'Move PR to In progress'
@@ -25,6 +25,6 @@ jobs:
         with:
           gh_token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
           organization: ${{ github.repository_owner }}
-          project_id: ${{ vars.SENZING_PROJECT_FACTORY_VALUE }}
+          project_id: ${{ vars.SENZING_PROJECT_FACTORY }}
           resource_node_id: ${{ github.event.pull_request.node_id }}
           status_value: "In progress"
