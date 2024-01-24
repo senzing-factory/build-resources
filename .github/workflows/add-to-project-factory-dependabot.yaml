@@ -16,11 +16,17 @@ jobs:
       org: ${{ vars.SENZING_GITHUB_ACCOUNT_NAME }}
       project-number: ${{ vars.SENZING_PROJECT_FACTORY_VALUE }}
 
-  move-pr-to-project-column:
+  move-pr-to-in-progress-column:
     if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened' || github.event.action  == 'synchronize') }}
-    secrets:
-      SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
-    uses: senzing-factory/build-resources/.github/workflows/move-pr-to-project-column.yaml@main
-    with:
-      column: "In progress"
-      project: ${{ vars.SENZING_PROJECT_FACTORY }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Move PR to In progress'
+        uses: leonsteinhaeuser/project-beta-automations@v2.1.0
+        env:
+          DEBUG_LOG: "true"
+        with:
+          gh_token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+          organization: ${{ github.repository_owner }}
+          project_id: ${{ vars.SENZING_PROJECT_FACTORY_VALUE }}
+          resource_node_id: ${{ github.event.pull_request.node_id }}
+          status_value: "In progress"
