@@ -1,0 +1,37 @@
+name: 'add to project dependabot'
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: 'Project ID (classic projects not supported).'
+        required: true
+        type: string
+    secrets:
+      SENZING_GITHUB_PROJECT_RW_TOKEN:
+        required: true
+
+jobs:
+
+  add-pr-to-project:
+    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened') }}
+    secrets:
+      SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+    uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@main
+    with:
+      classic: false
+      org: ${{ github.repository_owner }}
+      project-number: ${{ inputs.project }}
+
+  move-pr-to-in-progress-column:
+    if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Move PR to In progress'
+        uses: leonsteinhaeuser/project-beta-automations@v2.2.1
+        with:
+          gh_token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+          organization: ${{ github.repository_owner }}
+          project_id: ${{ inputs.project }}
+          resource_node_id: ${{ github.event.pull_request.node_id }}
+          status_value: "In progress"
