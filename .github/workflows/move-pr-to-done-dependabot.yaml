@@ -1,0 +1,27 @@
+name: move pr to done dependabot
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: 'Project ID (classic projects not supported).'
+        required: true
+        type: string
+    secrets:
+      SENZING_GITHUB_PROJECT_RW_TOKEN:
+        required: true
+
+jobs:
+  move-pr-to-done-column:
+    if: ${{ github.actor == 'dependabot[bot]' && github.event.action  == 'closed' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: move PR to Done
+        uses: leonsteinhaeuser/project-beta-automations@v2.2.1
+        with:
+          gh_token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+          organization: ${{ github.repository_owner }}
+          project_id: ${{ inputs.project }}
+          resource_node_id: ${{ github.event.pull_request.node_id }}
+          status_value: "Done"
