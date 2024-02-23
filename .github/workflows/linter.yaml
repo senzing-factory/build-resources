@@ -37,3 +37,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # only lint new and modified files
           VALIDATE_ALL_CODEBASE: ${{ inputs.validate-all-codebase }}
+          VALIDATE_SHELL_SHFMT: false
