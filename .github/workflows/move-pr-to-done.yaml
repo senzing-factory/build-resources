@@ -1,10 +1,10 @@
-name: 'move pr to done'
+name: move pr to done
 
 on:
   workflow_call:
     inputs:
       project:
-        default: "Garage"
+        default: Garage
         required: false
         type: string
     secrets:
@@ -15,11 +15,12 @@ jobs:
   move-pr-to-done:
     runs-on: ubuntu-latest
     if: ${{ github.actor == 'dependabot[bot]' }}
+
     steps:
-      - name: Move PR to done
+      - name: Mmve PR to done
         if: ${{ github.event.pull_request.merged == true }}
         uses: alex-page/github-project-automation-plus@v0.9.0
         with:
-          project: ${{ inputs.project }}
           column: Done
+          project: ${{ inputs.project }}
           repo-token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}

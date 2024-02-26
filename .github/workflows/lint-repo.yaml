@@ -1,4 +1,4 @@
-name: 'lint repo'
+name: lint repo
 
 on:
   push:

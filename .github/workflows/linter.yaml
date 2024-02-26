@@ -1,11 +1,11 @@
-name: 'linter'
+name: linter
 
 on:
   workflow_call:
     inputs:
       filter-regex-include:
         default: ".*"
-        description: 'Regular expression defining which files will be processed by linters.'
+        description: Regular expression defining which files will be processed by linters.
         required: false
         type: string
       validate-all-codebase:
@@ -16,7 +16,7 @@ on:
 
 jobs:
   lint-code-base:
-    name: Lint Code Base
+    name: lint code base
     runs-on: ubuntu-latest
 
     permissions:
@@ -25,12 +25,12 @@ jobs:
       statuses: write
 
     steps:
-      - name: Checkout Code
+      - name: checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Lint Code Base
+      - name: lint code base
         uses: super-linter/super-linter@v6.2.0
         env:
           DEFAULT_BRANCH: main

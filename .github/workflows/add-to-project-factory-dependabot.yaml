@@ -1,14 +1,13 @@
-name: 'add to project factory dependabot'
+name: add to project factory dependabot
 
 on:
   pull_request:
     branches: [main]
 
 jobs:
-
   add-issue-labels:
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
-    uses: senzing-factory/build-resources/.github/workflows/add-to-project-dependabot.yaml@main
+    uses: senzing-factory/build-resources/.github/workflows/add-to-project-dependabot.yaml@v1
     with:
       project: ${{ vars.SENZING_PROJECT_FACTORY }}

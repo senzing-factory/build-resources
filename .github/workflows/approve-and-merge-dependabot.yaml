@@ -1,4 +1,4 @@
-name: 'approve and merge dependabot'
+name: approve and merge dependabot
 
 on:
   pull_request:
