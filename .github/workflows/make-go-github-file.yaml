@@ -10,6 +10,10 @@ on:
       SENZING_GITHUB_GPG_PRIVATE_KEY:
         required: true
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   make-go-github-file:
     name: update cmd/github.go

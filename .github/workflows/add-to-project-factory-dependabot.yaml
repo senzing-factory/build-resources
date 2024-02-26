@@ -4,8 +4,11 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  repository-projects: write
+
 jobs:
-  add-issue-labels:
+  add-to-project-dependabot:
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
     uses: senzing-factory/build-resources/.github/workflows/add-to-project-dependabot.yaml@v1

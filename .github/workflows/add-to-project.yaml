@@ -18,6 +18,9 @@ on:
       SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: false
 
+permissions:
+  repository-projects: write
+
 jobs:
   # Does not support classic projects
   add-to-project:
