@@ -15,5 +15,3 @@ permissions:
 jobs:
   lint-code-base:
     uses: senzing-factory/build-resources/.github/workflows/linter.yaml@main
-    with:
-      validate-all-codebase: true
