@@ -4,22 +4,17 @@ on:
   workflow_call:
     inputs:
       project:
-        description: 'Project ID (classic projects not supported).'
+        description: Project ID (classic projects not supported).
         required: true
         type: string
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: true
 
-jobs:
-  dump_contexts_to_log:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dump GitHub context
-        env:
-          GITHUB_CONTEXT: ${{ toJson(github) }}
-        run: echo "$GITHUB_CONTEXT"
+permissions:
+  repository-projects: write
 
+jobs:
   move-pr-to-done-column:
     if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.event.action  == 'closed' }}
     runs-on: ubuntu-latest

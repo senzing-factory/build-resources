@@ -1,15 +1,15 @@
-name: 'add to project'
+name: add to project
 
 on:
   workflow_call:
     inputs:
-      project-number:
-        required: true
-        type: string
       classic:
         required: true
         type: boolean
       org:
+        required: true
+        type: string
+      project-number:
         required: true
         type: string
     secrets:
@@ -18,32 +18,35 @@ on:
       SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: false
 
-jobs:
+permissions:
+  repository-projects: write
 
-  # https://github.com/actions/add-to-project
+jobs:
   # Does not support classic projects
   add-to-project:
-    name: Add to project
+    name: add to project
     runs-on: ubuntu-latest
+
     steps:
-      - name: Add to project
+      - name: add to project
         if: ${{ ! inputs.classic }}
         uses: actions/add-to-project@v0.5.0
         with:
-          project-url: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
           github-token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+          project-url: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
 
   # https://github.com/srggrs/assign-one-project-github-action/issues/89
   # Only classic projects supported
   add-to-classic-project:
-    name: Add to classic project
+    name: add to classic project
     runs-on: ubuntu-latest
+
     steps:
-      - name: Add to classic project
-        if: ${{ inputs.classic }}
-        uses: senzing-factory/github-action-add-issue-to-project@main
-        with:
-          project: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
-          column_name: "Backlog"
+      - name: add to classic project
         env:
           GITHUB_TOKEN: ${{ secrets.SENZING_GITHUB_ACCESS_TOKEN }}
+        if: ${{ inputs.classic }}
+        uses: senzing-factory/github-action-add-issue-to-project@v1
+        with:
+          column_name: "Backlog"
+          project: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"

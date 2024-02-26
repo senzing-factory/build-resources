@@ -12,7 +12,7 @@ on:
 permissions:
   contents: read
   packages: read
-  # pull-requests: read
+  pull-requests: read
   statuses: write
 
 jobs:
@@ -35,18 +35,18 @@ jobs:
               - '.github/workflows/**'
 
   lint-workflows:
-    name: Lint Workflows
+    name: lint workflows
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.workflows == 'true' }}
 
     steps:
-      - name: Checkout Code
+      - name: checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Lint Code Base
+      - name: lint code base
         uses: github/super-linter@v5
         env:
           DEFAULT_BRANCH: main

@@ -1,4 +1,4 @@
-name: 'gofmt'
+name: gofmt
 
 on: [workflow_call]
 
@@ -8,11 +8,13 @@ permissions:
 jobs:
   gofmt:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: '0'
+          fetch-depth: 0
+
       - name: gofmt
         run: |
           gofmt_out="$(gofmt -s -l .)"

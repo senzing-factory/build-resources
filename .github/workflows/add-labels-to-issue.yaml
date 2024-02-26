@@ -1,4 +1,4 @@
-name: 'add labels to issue'
+name: add labels to issue
 
 on:
   workflow_call:
@@ -12,10 +12,10 @@ permissions:
   issues: write
 
 jobs:
-
   add-customer-submission-label:
-    name: Add customer-submission label
+    name: add customer-submission label
     runs-on: ubuntu-latest
+
     steps:
       - name: Add customer-submission label
         if: ${{ env.SENZING_MEMBER == 'false' }}
@@ -27,10 +27,11 @@ jobs:
           SENZING_MEMBER: ${{ contains( secrets.SENZING_MEMBERS, github.actor ) }}
 
   add-triage-label:
-    name: Add triage label
+    name: add triage label
     runs-on: ubuntu-latest
+
     steps:
-      - name: Add triage label
+      - name: add triage label
         uses: andymckay/labeler@1.0.4
         with:
           add-labels: "triage"
