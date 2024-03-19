@@ -11,6 +11,9 @@ on:
       SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: true
 
+permissions:
+  repository-projects: write
+
 jobs:
 
   add-pr-to-project:
