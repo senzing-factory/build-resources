@@ -1,4 +1,4 @@
-name: 'dependabot approve and merge'
+name: dependabot approve and merge
 
 on:
   workflow_call:
@@ -14,22 +14,25 @@ jobs:
   dependabot-approve-and-merge:
     runs-on: ubuntu-latest
     if: ${{ github.actor == 'dependabot[bot]' }}
+
     steps:
-      - name: Dependabot metadata
+      - name: dependabot metadata
         id: dependabot-metadata
-        uses: dependabot/fetch-metadata@v1
+        uses: dependabot/fetch-metadata@v2
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
-      - name: Approve patch version PRs
-        if: ${{ steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' }}
-        run: |
-          gh pr review --approve "$PR_URL" -b "Automated: **approving** this pull request because **it includes a patch update**"
+
+      - name: approve patch version PRs
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN }}
-      - name: Auto merge patch version PRs
         if: ${{ steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' }}
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: |
+          gh pr review --approve "$PR_URL" -b "Automated: **approving** this pull request because **it includes a patch update**"
+
+      - name: auto merge patch version PRs
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        if: ${{ steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' }}
+        run: gh pr merge --auto --squash "$PR_URL"
