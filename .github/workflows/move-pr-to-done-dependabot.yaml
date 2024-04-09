@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   move-pr-to-done-column:
-    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.event.action  == 'closed' }}
+    if: ${{ github.event.pull_request.merged == true || github.event.action  == 'closed' }}
     runs-on: ubuntu-latest
 
     steps:
