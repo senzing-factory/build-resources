@@ -4,8 +4,7 @@ on:
   workflow_call:
 
 permissions:
-  pull-requests: write
-  contents: write
+  contents: read
 
 jobs:
   go-coverage:
