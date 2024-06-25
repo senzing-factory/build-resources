@@ -30,7 +30,7 @@ jobs:
     steps:
       - name: add to project
         if: ${{ ! inputs.classic }}
-        uses: actions/add-to-project@v1.0.1
+        uses: actions/add-to-project@v1.0.2
         with:
           github-token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
           project-url: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
