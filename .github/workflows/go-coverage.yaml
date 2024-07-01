@@ -5,7 +5,7 @@ on:
     inputs:
       coverage-config:
         default: "./.testcoverage.yml"
-        description: 'Path to coverage config, relative to the github workspace.'
+        description: Path to coverage config, relative to the github workspace.
         required: false
         type: string
 
