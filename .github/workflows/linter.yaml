@@ -10,7 +10,7 @@ on:
         type: string
       validate-all-codebase:
         default: false
-        description: 'Lint all files or only modified: true/false.'
+        description: "Lint all files or only modified: true/false."
         required: false
         type: boolean
 
@@ -32,7 +32,7 @@ jobs:
           fetch-depth: 0
 
       - name: lint code base
-        uses: super-linter/super-linter@v7.0.0
+        uses: super-linter/super-linter@v7.1.0
         env:
           DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
