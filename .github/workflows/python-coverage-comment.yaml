@@ -17,13 +17,14 @@ jobs:
       - uses: actions/download-artifact@v4
         id: download
         with:
+          path: coverage-reports
           pattern: coverage-*
           merge-multiple: true
 
       - name: Merge coverage reports
         run: |
-          ls -tlc
-          pipx run coverage combine coverage-*
+          ls -tlc coverage-reports/
+          pipx run coverage combine coverage-reports/
 
       - name: Coverage comment
         id: coverage_comment
