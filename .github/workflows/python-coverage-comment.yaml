@@ -23,8 +23,7 @@ jobs:
 
       - name: Merge coverage reports
         run: |
-          ls -tlc coverage-reports/
-          pipx run coverage combine coverage-reports/
+          pipx run coverage combine coverage-reports/coverage.*
 
       - name: Coverage comment
         id: coverage_comment
