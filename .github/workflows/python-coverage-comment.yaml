@@ -21,7 +21,7 @@ jobs:
           pattern: coverage-*
           merge-multiple: true
 
-      - name: Merge coverage reports
+      - name: Combine coverage reports
         run: |
           pipx run coverage combine coverage-reports/coverage.*
 
