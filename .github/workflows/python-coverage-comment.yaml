@@ -23,7 +23,7 @@ jobs:
 
       - name: Combine coverage reports
         run: |
-          pipx run coverage combine coverage-reports/coverage.*
+          pipx run coverage combine coverage-reports/*coverage.*
 
       - name: Coverage comment
         id: coverage_comment
