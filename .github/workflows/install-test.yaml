@@ -12,5 +12,5 @@ jobs:
       - name: install Senzing API
         uses: senzing-factory/github-action-install-senzing-api@65-skern
         with:
-          packages-to-install: "senzingapi-poc"
-          senzingapi-version: "4.0.0-24276"
+          packages-to-install: "senzingapi senzingdata-v5"
+          senzingapi-version: "3.12.0-24261"
