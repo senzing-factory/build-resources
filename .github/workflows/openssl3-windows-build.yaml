@@ -30,4 +30,4 @@ jobs:
         run: |
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
           vcpkg install openssl
-          ls C:/vcpkg/packages/openssl_x64-windows
+          ls C:/vcpkg/packages/openssl_x64-windows/bin
