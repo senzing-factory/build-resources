@@ -1,0 +1,33 @@
+name: openssl3 windows build
+
+on:
+  push:
+    paths:
+      - .github/workflows/openssl3-windows-build.yaml
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/openssl3-windows-build.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  openssl3-windows-build:
+    name: openssl3 windows build
+    runs-on: windows-latest
+
+    steps:
+      #- name: install openssl3
+      #  run: |
+      #    choco install -y --no-progress curl
+      #    curl https://raw.githubusercontent.com/actions/runner-images/refs/heads/main/images/windows/scripts/build/Install-OpenSSL.ps1 -o Install-OpenSSL.ps1
+      #    ./Install-OpenSSL.ps1
+
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
+          vcpkg install openssl
+          ls C:/vcpkg/packages/openssl_x64-windows
