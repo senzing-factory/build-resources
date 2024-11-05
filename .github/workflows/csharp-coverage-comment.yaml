@@ -18,14 +18,13 @@ jobs:
 
       - run: |
           ls -tlc
-          find / -name coverage.cobertura.xml
 
       - name: Code Coverage Summary Report
         uses: irongut/CodeCoverageSummary@v1.3.0
         with:
           badge: true
           fail_below_min: true
-          filename: coverage.cobertura.xml
+          filename: ${{ github.workspace }}/coverage.cobertura.xml
           format: markdown
           hide_branch_rate: false
           hide_complexity: false
