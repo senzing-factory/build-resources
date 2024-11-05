@@ -18,7 +18,7 @@ jobs:
 
       - run: |
           mkdir coverage
-          cp coverage.cobertura.xml coverage/
+          cp coverage.cobertura.xml coverage/coverage.cobertura.xml
           ls
           dir=$(pwd)
           echo "path is $dir"
