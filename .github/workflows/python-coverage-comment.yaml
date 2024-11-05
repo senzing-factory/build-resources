@@ -4,16 +4,14 @@ on:
   workflow_call:
 
 permissions:
-  pull-requests: write
   contents: write
+  pull-requests: write
 
 jobs:
   coverage:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         id: download
         with:
