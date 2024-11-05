@@ -24,7 +24,7 @@ jobs:
         with:
           badge: true
           fail_below_min: true
-          filename: ${{ github.workspace }}/coverage.cobertura.xml
+          filename: "coverage.cobertura.xml"
           format: markdown
           hide_branch_rate: false
           hide_complexity: false
