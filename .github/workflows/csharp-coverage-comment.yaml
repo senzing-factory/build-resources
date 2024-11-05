@@ -16,6 +16,10 @@ jobs:
         with:
           pattern: coverage.cobertura.xml
 
+      - run: |
+          ls -tlc
+          find / -name coverage.cobertura.xml
+
       - name: Code Coverage Summary Report
         uses: irongut/CodeCoverageSummary@v1.3.0
         with:
