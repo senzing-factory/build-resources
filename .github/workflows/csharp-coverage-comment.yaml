@@ -20,7 +20,8 @@ jobs:
           mkdir coverage
           cp coverage.cobertura.xml coverage/
           ls
-          pwd
+          dir=$(pwd)
+          echo "path is $dir"
 
       - name: Code Coverage Summary Report
         uses: irongut/CodeCoverageSummary@v1.3.0
