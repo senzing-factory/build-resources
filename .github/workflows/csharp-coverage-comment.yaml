@@ -2,6 +2,11 @@ name: chsarp coverage comment
 
 on:
   workflow_call:
+    inputs:
+      thresholds:
+        default: "80 90"
+        required: false
+        type: string
 
 permissions:
   pull-requests: write
@@ -27,7 +32,7 @@ jobs:
           hide_complexity: false
           indicators: true
           output: both
-          thresholds: "80 90"
+          thresholds: ${{ inputs.thresholds }}
 
       - name: Add Coverage PR Comment
         if: github.event_name == 'pull_request'
