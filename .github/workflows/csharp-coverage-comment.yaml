@@ -17,9 +17,7 @@ jobs:
           pattern: coverage.cobertura.xml
 
       - run: |
-          mkdir coverage
-          ls -tlc
-          cp -r coverage.cobertura.xml coverage/coverage.cobertura.xml
+          ls - tlc coverage.cobertura.xml
           dir=$(pwd)
           echo "path is $dir"
 
@@ -28,7 +26,7 @@ jobs:
         with:
           badge: true
           fail_below_min: true
-          filename: "coverage/coverage.cobertura.xml"
+          filename: "coverage.cobertura.xml/coverage.cobertura.xml"
           format: markdown
           hide_branch_rate: false
           hide_complexity: false
