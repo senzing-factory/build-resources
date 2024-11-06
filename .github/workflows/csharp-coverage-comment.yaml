@@ -1,4 +1,4 @@
-name: python coverage comment
+name: chsarp coverage comment
 
 on:
   workflow_call:
@@ -15,11 +15,6 @@ jobs:
         id: download
         with:
           pattern: coverage.cobertura.xml
-
-      - run: |
-          ls -tlc coverage.cobertura.xml
-          dir=$(pwd)
-          echo "path is $dir"
 
       - name: Code Coverage Summary Report
         uses: irongut/CodeCoverageSummary@v1.3.0
