@@ -3,6 +3,11 @@ name: lint workflows
 on:
   workflow_call:
     inputs:
+      default-branch:
+        default: main
+        description: "Default branch of the repository"
+        required: false
+        type: string
       validate-all-codebase:
         default: false
         description: "Lint all files or only modified: true/false."
@@ -49,8 +54,8 @@ jobs:
       - name: lint code base
         uses: super-linter/super-linter@v7.2.1
         env:
-          DEFAULT_BRANCH: main
+          DEFAULT_BRANCH: ${{ inputs.default-branch }}
           FILTER_REGEX_INCLUDE: .*.github/workflows/.*
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # only lint new and modified files
-          VALIDATE_ALL_CODEBASE: false
+          VALIDATE_ALL_CODEBASE: ${{ inputs.validate-all-codebase }}
