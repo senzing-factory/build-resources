@@ -1,5 +1,8 @@
 name: lint workflows
 
+env:
+  LINTER_RULES_PATH: .github/linters
+
 on:
   workflow_call:
     inputs:
