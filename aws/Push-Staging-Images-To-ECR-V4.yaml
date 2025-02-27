@@ -53,7 +53,7 @@ phases:
         declare -A repos
         repos=(["redoer"]="redoer" ["init-postgresql"]="init-postgresql" \
         ["senzing-poc-server"]="senzing-poc-server" ["docker-sshd"]=sshd ["stream-loader"]="stream-loader" \
-        ["docker-xterm"]="xterm" ["sz_sqs_consumer"]="sz_sqs_consumer" ["sz_simple_redoer"]="sz_simple_redoer")
+        ["docker-xterm"]="xterm" ["sz_sqs_consumer-v4"]="sz_sqs_consumer-v4" ["sz_simple_redoer-v4"]="sz_simple_redoer-v4")
 
         for repo in "${!repos[@]}"; do
 
