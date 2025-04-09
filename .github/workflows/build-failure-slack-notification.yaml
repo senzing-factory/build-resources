@@ -33,7 +33,7 @@ jobs:
               - type: "section"
                 text:
                   type: "mrkdwn"
-                  text: "_*${{ github.repository }}*_ _*${{ env.BRANCH_NAME }}*_ build failed. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Job Link>"
+                  text: "REPO: _*${{ github.repository }}*_ BRANCH: _*${{ env.BRANCH_NAME }}*_ build failed. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Job Link>"
             channel: "devops-community"
-            text: "_*${{ github.repository }}*_ _*${{ env.BRANCH_NAME }}*_ build failed. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Job Link>"
+            text: "REPO: _*${{ github.repository }}*_ BRANCH: _*${{ env.BRANCH_NAME }}*_ build failed. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Job Link>"
           token: ${{ secrets.SLACK_BOT_TOKEN }}
