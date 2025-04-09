@@ -1,0 +1,37 @@
+name: build failure slack notification
+
+on:
+  workflow_call:
+    secrets:
+      SLACK_BOT_TOKEN:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build-failure-slack-notification:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: slackapi/slack-github-action@v2
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+        with:
+          method: chat.postMessage
+          payload: |
+            attachments:
+              - color: "FF0000"
+                fields:
+                  - title: "Status"
+                    short: true
+                    value: "${{ job.status }}"
+            blocks:
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "_*${{ github.repository }}*_ _*${{ env.BRANCH_NAME }}*_ build failed. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Job Link>"
+            channel: "devops-community"
+            text: "_*${{ github.repository }}*_ _*${{ env.BRANCH_NAME }}*_ build failed. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Job Link>"
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
