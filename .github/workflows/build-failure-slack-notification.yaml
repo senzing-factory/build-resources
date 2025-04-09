@@ -5,6 +5,10 @@ on:
     secrets:
       SLACK_BOT_TOKEN:
         required: true
+    inputs:
+      job-status:
+        required: true
+        type: string
 
 permissions: {}
 
@@ -24,7 +28,7 @@ jobs:
                 fields:
                   - title: "Status"
                     short: true
-                    value: "${{ job.status }}"
+                    value: "${{ inputs.job-status }}"
             blocks:
               - type: "section"
                 text:
