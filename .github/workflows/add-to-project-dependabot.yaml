@@ -23,7 +23,7 @@ jobs:
     if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened') }}
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
-    uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@179-skern
+    uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@v2
     with:
       classic: false
       org: ${{ github.repository_owner }}
