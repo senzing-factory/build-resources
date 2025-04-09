@@ -29,6 +29,9 @@ jobs:
                   - title: "Status"
                     short: true
                     value: "${{ inputs.job-status }}"
+                  - title: "Actor"
+                    short: true
+                    value: "${{ github.actor }}"
             blocks:
               - type: "section"
                 text:
