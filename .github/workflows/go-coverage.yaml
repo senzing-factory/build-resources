@@ -8,6 +8,10 @@ on:
         description: Path to coverage config, relative to the github workspace.
         required: false
         type: string
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.go-coverage.outputs.job-status }}
 
 permissions:
   contents: read
@@ -15,6 +19,8 @@ permissions:
 jobs:
   go-coverage:
     name: go coverage
+    outputs:
+      job-status: ${{ job.status }}
     runs-on: ubuntu-latest
 
     steps:

@@ -7,12 +7,18 @@ on:
         default: "80 90"
         required: false
         type: string
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.coverage.outputs.job-status }}
 
 permissions:
   pull-requests: write
 
 jobs:
   coverage:
+    outputs:
+      job-status: ${{ job.status }}
     runs-on: ubuntu-latest
 
     steps:

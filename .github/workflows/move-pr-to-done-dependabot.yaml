@@ -7,6 +7,10 @@ on:
         description: Project ID (classic projects not supported).
         required: true
         type: string
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.move-pr-to-done-column.outputs.job-status }}
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: true
@@ -17,6 +21,8 @@ permissions:
 jobs:
   move-pr-to-done-column:
     if: ${{ github.event.pull_request.merged == true || github.event.action  == 'closed' }}
+    outputs:
+      job-status: ${{ job.status }}
     runs-on: ubuntu-latest
 
     steps:
