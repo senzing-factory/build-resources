@@ -6,9 +6,7 @@ on:
       SLACK_BOT_TOKEN:
         required: true
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   build-failure-slack-notification:
