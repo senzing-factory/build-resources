@@ -37,6 +37,6 @@ jobs:
                 text:
                   type: "mrkdwn"
                   text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>"
-            channel: "devops-community"
+            channel: ${{ secrets.SLACK_BOT_CHANNEL }}
             text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>"
           token: ${{ secrets.SLACK_BOT_TOKEN }}
