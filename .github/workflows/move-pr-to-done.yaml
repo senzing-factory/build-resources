@@ -7,6 +7,10 @@ on:
         default: Garage
         required: false
         type: string
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.move-pr-to-done.outputs.job-status }}
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: true
@@ -16,8 +20,10 @@ permissions:
 
 jobs:
   move-pr-to-done:
-    runs-on: ubuntu-latest
     if: ${{ github.actor == 'dependabot[bot]' }}
+    outputs:
+      job-status: ${{ job.status }}
+    runs-on: ubuntu-latest
 
     steps:
       - name: move PR to done
