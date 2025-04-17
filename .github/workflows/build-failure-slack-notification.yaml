@@ -5,6 +5,8 @@ on:
     secrets:
       SLACK_BOT_TOKEN:
         required: true
+      SLACK_BOT_CHANNEL:
+        required: true
     inputs:
       job-status:
         required: true
