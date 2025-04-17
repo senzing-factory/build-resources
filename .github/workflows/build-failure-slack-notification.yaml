@@ -5,8 +5,6 @@ on:
     secrets:
       SLACK_BOT_TOKEN:
         required: true
-      SLACK_BOT_CHANNEL:
-        required: true
     inputs:
       job-status:
         required: true
@@ -39,6 +37,6 @@ jobs:
                 text:
                   type: "mrkdwn"
                   text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>"
-            channel: ${{ secrets.SLACK_BOT_CHANNEL }}
+            channel: "devops-community"
             text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>"
           token: ${{ secrets.SLACK_BOT_TOKEN }}
