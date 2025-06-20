@@ -1,15 +1,12 @@
 ---
-
 version: 0.2
 
 env:
   shell: bash
 
 phases:
-
   install:
     commands:
-
       - docker info
       - sudo apt-get update
       - sudo apt-get install -y qemu-user-static
@@ -21,14 +18,13 @@ phases:
       - echo "[INFO] Login in to Amazon ECR"
       - aws ecr-public get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin public.ecr.aws
       - |
-          echo "[INFO] Login to dockerhub"
-          DOCKERHUB_ARN="arn:aws:secretsmanager:$AWS_DEFAULT_REGION:$AWS_ACCOUNT_ID:secret:$DOCKERHUB_SECRET"
-          aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ARN | jq --raw-output '.SecretString' | jq -r .DOCKERHUB_ACCESS_TOKEN | docker login \
-            --username $(aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ARN| jq --raw-output '.SecretString' | jq -r .DOCKERHUB_USERNAME) --password-stdin
+        echo "[INFO] Login to dockerhub"
+        DOCKERHUB_ARN="arn:aws:secretsmanager:$AWS_DEFAULT_REGION:$AWS_ACCOUNT_ID:secret:$DOCKERHUB_SECRET"
+        aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ARN | jq --raw-output '.SecretString' | jq -r .DOCKERHUB_ACCESS_TOKEN | docker login \
+          --username $(aws secretsmanager get-secret-value --secret-id $DOCKERHUB_ARN| jq --raw-output '.SecretString' | jq -r .DOCKERHUB_USERNAME) --password-stdin
 
   build:
     commands:
-
       # Build senzingapi-runtime base image
       - |
         cd $CODEBUILD_SRC_DIR_senzingapi_runtime  || { echo "Failed to change directory"; exit 1; }

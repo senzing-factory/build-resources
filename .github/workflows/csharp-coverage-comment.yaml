@@ -1,4 +1,4 @@
-name: chsarp coverage comment
+name: csharp coverage comment
 
 on:
   workflow_call:

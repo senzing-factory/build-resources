@@ -1,0 +1,30 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "andymckay",
+    "buildx",
+    "CCLA",
+    "CODEOWNER",
+    "dockerhub",
+    "dorny",
+    "ghaction",
+    "gofmt",
+    "gpgsign",
+    "ICLA",
+    "irongut",
+    "leonsteinhaeuser",
+    "marocchino",
+    "pipx",
+    "Pylint",
+    "redoer",
+    "Senzing",
+    "senzingapi",
+    "SHFMT",
+    "signingkey",
+    "stackoverflow",
+    "testcoverage",
+    "vladopajic"
+  ],
+  "ignorePaths": [".git/**"]
+}
