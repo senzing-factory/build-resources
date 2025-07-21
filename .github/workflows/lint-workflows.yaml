@@ -59,7 +59,7 @@ jobs:
           fetch-depth: 0
 
       - name: lint code base
-        uses: super-linter/super-linter@v7.4.0
+        uses: super-linter/super-linter@v8.0.0
         env:
           DEFAULT_BRANCH: ${{ inputs.default-branch }}
           FILTER_REGEX_INCLUDE: .*.github/workflows/.*
