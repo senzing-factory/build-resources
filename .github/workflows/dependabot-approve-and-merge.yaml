@@ -3,7 +3,7 @@ name: dependabot approve and merge
 on:
   workflow_call:
     inputs:
-      update-types:
+      update-type:
         description: "Semantic version update type: major, minor, patch"
         default: "patch"
         required: false
@@ -34,17 +34,17 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
-      - name: approve ${{ inputs.update-types }} version PRs
+      - name: approve ${{ inputs.update-type }} version PRs
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN }}
-        if: ${{ steps.dependabot-metadata.outputs.update-type }} == 'version-update:semver-'${{ inputs.update-types }}
+        if: ${{ steps.dependabot-metadata.outputs.update-type }} == 'version-update:semver-'${{ inputs.update-type }}
         run: |
-          gh pr review --approve "$PR_URL" -b "Automated: **approving** this pull request because **it includes a ${{ inputs.update-types }} update**"
+          gh pr review --approve "$PR_URL" -b "Automated: **approving** this pull request because **it includes a ${{ inputs.update-type }} update**"
 
-      - name: auto merge ${{ inputs.update-types }} version PRs
+      - name: auto merge ${{ inputs.update-type }} version PRs
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        if: ${{ steps.dependabot-metadata.outputs.update-type }} == 'version-update:semver-'${{ inputs.update-types }}
+        if: ${{ steps.dependabot-metadata.outputs.update-type }} == 'version-update:semver-'${{ inputs.update-type }}
         run: gh pr merge --auto --squash "$PR_URL"
