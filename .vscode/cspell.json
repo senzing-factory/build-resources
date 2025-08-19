@@ -8,6 +8,7 @@
     "CODEOWNER",
     "dockerhub",
     "dorny",
+    "esac",
     "ghaction",
     "gofmt",
     "gpgsign",
@@ -26,5 +27,7 @@
     "testcoverage",
     "vladopajic"
   ],
-  "ignorePaths": [".git/**"]
+  "ignorePaths": [
+    ".git/**"
+  ]
 }

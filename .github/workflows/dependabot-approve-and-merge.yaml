@@ -28,6 +28,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: verify input
+        run: |
+          case "${{ inputs.update-type }}" in
+            "major"|"minor"|"patch")
+              echo "[INFO] Update type found."
+              ;;
+            *)
+              echo "[ERROR] Update type provided is not one of: major, minor, patch."
+              exit 1
+              ;;
+          esac
+
       - name: dependabot metadata
         id: dependabot-metadata
         uses: dependabot/fetch-metadata@v2
