@@ -38,7 +38,7 @@ jobs:
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN }}
-        if: ${{ steps.dependabot-metadata.outputs.update-type }} == 'version-update:semver-'${{ inputs.update-type }}
+        if: contains( steps.dependabot-metadata.outputs.update-type, inputs.update-type )
         run: |
           gh pr review --approve "$PR_URL" -b "Automated: **approving** this pull request because **it includes a ${{ inputs.update-type }} update**"
 
@@ -46,5 +46,5 @@ jobs:
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        if: ${{ steps.dependabot-metadata.outputs.update-type }} == 'version-update:semver-'${{ inputs.update-type }}
+        if: contains( steps.dependabot-metadata.outputs.update-type, inputs.update-type )
         run: gh pr merge --auto --squash "$PR_URL"
