@@ -34,7 +34,7 @@ jobs:
       - uses: actions/download-artifact@v5
         id: download
         with:
-          pattern: cover.out
+          pattern: cover*
           merge-multiple: true
 
       - name: check test coverage
