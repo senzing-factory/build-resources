@@ -8,6 +8,11 @@ on:
         description: Path to coverage config, relative to the github workspace.
         required: false
         type: string
+      profile:
+        default: "cover.out"
+        description: Path to coverage profile file.
+        required: false
+        type: string
     outputs:
       job-status:
         description: "job status"
@@ -29,10 +34,11 @@ jobs:
       - uses: actions/download-artifact@v5
         id: download
         with:
-          pattern: cover.out
+          pattern: cover*
           merge-multiple: true
 
       - name: check test coverage
         uses: vladopajic/go-test-coverage@v2
         with:
           config: ${{ inputs.coverage-config }}
+          profile: ${{ inputs.profile }}
