@@ -3,6 +3,10 @@ name: csharp coverage comment
 on:
   workflow_call:
     inputs:
+      filename:
+        default: "coverage.cobertura.xml"
+        required: false
+        type: string
       thresholds:
         default: "80 90"
         required: false
