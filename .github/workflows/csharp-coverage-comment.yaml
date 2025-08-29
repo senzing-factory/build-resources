@@ -36,7 +36,7 @@ jobs:
         with:
           badge: true
           fail_below_min: true
-          filename: "coverage.cobertura.xml"
+          filename: ${{ inputs.filename }}
           format: markdown
           hide_branch_rate: false
           hide_complexity: false
