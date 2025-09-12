@@ -51,9 +51,7 @@ phases:
 
       - |
         declare -A repos
-        repos=(["redoer"]="redoer" ["init-postgresql"]="init-postgresql" \
-        ["senzing-poc-server"]="senzing-poc-server" ["docker-sshd"]=sshd ["stream-loader"]="stream-loader" \
-        ["docker-xterm"]="xterm" ["sz_sqs_consumer-v4"]="sz_sqs_consumer-v4" ["sz_simple_redoer-v4"]="sz_simple_redoer-v4")
+        repos=(["docker-sshd"]=sshd ["sz_sqs_consumer-v4"]="sz_sqs_consumer-v4" ["sz_simple_redoer-v4"]="sz_simple_redoer-v4")
 
         for repo in "${!repos[@]}"; do
 
@@ -64,7 +62,7 @@ phases:
           echo "[INFO] git submodule update --init --recursive"
           git submodule update --init --recursive
 
-          if [[ $repo =~ "xterm" || $repo =~ "sshd" ]]; then
+          if [[ $repo =~ "sshd" ]]; then
             BASE="public.ecr.aws/senzing/senzingsdk-tools:staging"
           else
             BASE="public.ecr.aws/senzing/senzingsdk-runtime:staging"
