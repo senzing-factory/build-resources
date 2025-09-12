@@ -1,5 +1,4 @@
 ---
-
 # Extends the default yamllint config by adjusting some options.
 extends: default
 

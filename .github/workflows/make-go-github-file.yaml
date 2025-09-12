@@ -2,6 +2,10 @@ name: make go github file
 
 on:
   workflow_call:
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.make-go-github-file.outputs.job-status }}
     secrets:
       SENZING_GITHUB_ACTOR:
         required: true
@@ -17,11 +21,13 @@ permissions:
 jobs:
   make-go-github-file:
     name: update cmd/github.go
+    outputs:
+      job-status: ${{ job.status }}
     runs-on: ubuntu-latest
 
     steps:
       - name: checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 

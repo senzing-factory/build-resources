@@ -13,6 +13,10 @@ on:
         description: "Lint all files or only modified: true/false."
         required: false
         type: boolean
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.lint-code-base.outputs.job-status }}
 
 permissions:
   contents: read
@@ -23,16 +27,18 @@ permissions:
 jobs:
   lint-code-base:
     name: lint code base
+    outputs:
+      job-status: ${{ job.status }}
     runs-on: ubuntu-latest
 
     steps:
       - name: checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: lint code base
-        uses: super-linter/super-linter@v7.3.0
+        uses: super-linter/super-linter@v8.0.0
         env:
           DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

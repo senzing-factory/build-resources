@@ -1,17 +1,24 @@
 name: gofmt
 
-on: [workflow_call]
+on:
+  workflow_call:
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.gofmt.outputs.job-status }}
 
 permissions:
   contents: read
 
 jobs:
   gofmt:
+    outputs:
+      job-status: ${{ job.status }}
     runs-on: ubuntu-latest
 
     steps:
       - name: checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 

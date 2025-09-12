@@ -1,32 +1,42 @@
-name: chsarp coverage comment
+name: csharp coverage comment
 
 on:
   workflow_call:
     inputs:
+      filename:
+        default: "coverage.cobertura.xml"
+        required: false
+        type: string
       thresholds:
         default: "80 90"
         required: false
         type: string
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.coverage.outputs.job-status }}
 
 permissions:
   pull-requests: write
 
 jobs:
   coverage:
+    outputs:
+      job-status: ${{ job.status }}
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         id: download
         with:
-          pattern: coverage.cobertura.xml
+          pattern: ${{ inputs.filename }}
 
       - name: Code Coverage Summary Report
         uses: irongut/CodeCoverageSummary@v1.3.0
         with:
           badge: true
           fail_below_min: true
-          filename: "coverage.cobertura.xml/coverage.cobertura.xml"
+          filename: ${{ inputs.filename }}
           format: markdown
           hide_branch_rate: false
           hide_complexity: false

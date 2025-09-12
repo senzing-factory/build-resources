@@ -2,6 +2,10 @@ name: python coverage comment
 
 on:
   workflow_call:
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.coverage.outputs.job-status }}
 
 permissions:
   contents: write
@@ -9,12 +13,14 @@ permissions:
 
 jobs:
   coverage:
+    outputs:
+      job-status: ${{ job.status }}
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         id: download
         with:
           path: coverage-reports

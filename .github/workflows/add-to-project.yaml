@@ -12,6 +12,10 @@ on:
       project-number:
         required: true
         type: string
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.add-to-project.outputs.job-status && jobs.add-to-classic-project.outputs.job-status }}
     secrets:
       SENZING_GITHUB_ACCESS_TOKEN:
         required: false
@@ -25,6 +29,8 @@ jobs:
   # Does not support classic projects
   add-to-project:
     name: add to project
+    outputs:
+      job-status: ${{ job.status }}
     runs-on: ubuntu-latest
 
     steps:
@@ -39,6 +45,8 @@ jobs:
   # Only classic projects supported
   add-to-classic-project:
     name: add to classic project
+    outputs:
+      job-status: ${{ job.status }}
     runs-on: ubuntu-latest
 
     steps:

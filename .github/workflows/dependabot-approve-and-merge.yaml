@@ -2,6 +2,16 @@ name: dependabot approve and merge
 
 on:
   workflow_call:
+    inputs:
+      update-type:
+        description: "Semantic version update type: major, minor, patch"
+        default: "patch"
+        required: false
+        type: string
+    outputs:
+      job-status:
+        description: "job status"
+        value: ${{ jobs.dependabot-approve-and-merge.outputs.job-status }}
     secrets:
       SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN:
         required: true
@@ -12,27 +22,41 @@ permissions:
 
 jobs:
   dependabot-approve-and-merge:
-    runs-on: ubuntu-latest
     if: ${{ github.actor == 'dependabot[bot]' }}
+    outputs:
+      job-status: ${{ job.status }}
+    runs-on: ubuntu-latest
 
     steps:
+      - name: verify input
+        run: |
+          case "${{ inputs.update-type }}" in
+            "major"|"minor"|"patch")
+              echo "[INFO] Update type found."
+              ;;
+            *)
+              echo "[ERROR] Update type provided is not one of: major, minor, patch."
+              exit 1
+              ;;
+          esac
+
       - name: dependabot metadata
         id: dependabot-metadata
         uses: dependabot/fetch-metadata@v2
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
-      - name: approve patch version PRs
+      - name: approve ${{ inputs.update-type }} version PRs
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN }}
-        if: ${{ steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' }}
+        if: contains( steps.dependabot-metadata.outputs.update-type, inputs.update-type )
         run: |
-          gh pr review --approve "$PR_URL" -b "Automated: **approving** this pull request because **it includes a patch update**"
+          gh pr review --approve "$PR_URL" -b "Automated: **approving** this pull request because **it includes a ${{ inputs.update-type }} update**"
 
-      - name: auto merge patch version PRs
+      - name: auto merge ${{ inputs.update-type }} version PRs
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        if: ${{ steps.dependabot-metadata.outputs.update-type == 'version-update:semver-patch' }}
+        if: contains( steps.dependabot-metadata.outputs.update-type, inputs.update-type )
         run: gh pr merge --auto --squash "$PR_URL"
