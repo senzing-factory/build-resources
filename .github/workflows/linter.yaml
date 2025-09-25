@@ -18,7 +18,11 @@ on:
         description: "job status"
         value: ${{ jobs.lint-code-base.outputs.job-status }}
 
-permissions: {}
+permissions:
+  contents: read
+  packages: read
+  pull-requests: read
+  statuses: write
 
 jobs:
   lint-code-base:
@@ -35,8 +39,8 @@ jobs:
     steps:
       - name: checkout repository
         uses: actions/checkout@v5
-        #with:
-        #  persist-credentials: false
+        with:
+          persist-credentials: false
 
       - name: lint code base
         uses: super-linter/super-linter@v8.1.0
