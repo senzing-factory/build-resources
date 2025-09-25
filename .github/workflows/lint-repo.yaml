@@ -6,7 +6,11 @@ on:
   pull_request:
     branches: [main]
 
-permissions: {}
+permissions:
+  contents: read
+  packages: read
+  pull-requests: read
+  statuses: write
 
 jobs:
   lint-code-base:
