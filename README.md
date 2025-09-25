@@ -6,6 +6,7 @@
 <a href="https://github.com/senzing-factory/build-resources/actions/workflows/lint-repo.yaml">
     <img alt="linter" src="https://github.com/senzing-factory/build-resources/actions/workflows/lint-repo.yaml/badge.svg" />
 </a>
+
 <a href="https://github.com/senzing-factory/build-resources/actions/workflows/add-labels-standardized.yaml">
     <img alt="labels" src="https://github.com/senzing-factory/build-resources/actions/workflows/add-labels-standardized.yaml/badge.svg" />
 </a>
