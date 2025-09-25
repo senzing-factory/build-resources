@@ -20,7 +20,7 @@ permissions: {}
 
 jobs:
   dependabot-approve-and-merge:
-    if: ${{ github.actor == 'dependabot[bot]' }}
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
     outputs:
       job-status: ${{ job.status }}
     permissions:
@@ -30,8 +30,10 @@ jobs:
 
     steps:
       - name: verify input
+        env:
+          UPDATE_TYPE: ${{ inputs.update-type }}
         run: |
-          case "${{ inputs.update-type }}" in
+          case "${UPDATE_TYPE}" in
             "major"|"minor"|"patch")
               echo "[INFO] Update type found."
               ;;
@@ -49,11 +51,12 @@ jobs:
 
       - name: approve ${{ inputs.update-type }} version PRs
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ inputs.update-type }}
         if: contains( steps.dependabot-metadata.outputs.update-type, inputs.update-type )
         run: |
-          gh pr review --approve "$PR_URL" -b "Automated: **approving** this pull request because **it includes a ${{ inputs.update-type }} update**"
+          gh pr review --approve "$PR_URL" -b "Automated: **approving** this pull request because **it includes a ${UPDATE_TYPE} update**"
 
       - name: auto merge ${{ inputs.update-type }} version PRs
         env:

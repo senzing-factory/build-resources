@@ -19,7 +19,7 @@ permissions: {}
 
 jobs:
   move-pr-to-done:
-    if: ${{ github.actor == 'dependabot[bot]' }}
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
     outputs:
       job-status: ${{ job.status }}
     permissions:
