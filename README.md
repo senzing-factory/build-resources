@@ -18,6 +18,7 @@
 <a href="https://github.com/senzing-factory/build-resources/actions/workflows/approve-and-merge-dependabot.yaml">
     <img alt="dependabot merge" src="https://github.com/senzing-factory/build-resources/actions/workflows/approve-and-merge-dependabot.yaml/badge.svg" />
 </a>
+
 <a href="https://github.com/senzing-factory/build-resources/actions/workflows/pages/pages-build-deployment">
     <img alt="pages" src="https://github.com/senzing-factory/build-resources/actions/workflows/pages/pages-build-deployment/badge.svg" />
 </a>
