@@ -17,14 +17,15 @@ on:
       SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: false
 
-permissions:
-  repository-projects: write
+permissions: {}
 
 jobs:
   add-to-project:
     name: add to project
     outputs:
       job-status: ${{ job.status }}
+    permissions:
+      repository-projects: write
     runs-on: ubuntu-latest
 
     steps:

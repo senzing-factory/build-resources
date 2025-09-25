@@ -15,12 +15,13 @@ on:
       SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: true
 
-permissions:
-  repository-projects: write
+permissions: {}
 
 jobs:
   add-pr-to-project:
     if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened') }}
+    permissions:
+      repository-projects: write
     secrets:
       SENZING_GITHUB_PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
     uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@v3
@@ -32,6 +33,8 @@ jobs:
     if: ${{ github.actor == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened') }}
     outputs:
       job-status: ${{ job.status }}
+    permissions:
+      repository-projects: write
     runs-on: ubuntu-latest
     steps:
       - name: move PR to In progress

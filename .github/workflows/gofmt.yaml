@@ -7,20 +7,21 @@ on:
         description: "job status"
         value: ${{ jobs.gofmt.outputs.job-status }}
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   gofmt:
     outputs:
       job-status: ${{ job.status }}
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
 
     steps:
       - name: checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: gofmt
         run: |

@@ -16,13 +16,14 @@ on:
         description: "job status"
         value: ${{ jobs.coverage.outputs.job-status }}
 
-permissions:
-  pull-requests: write
+permissions: {}
 
 jobs:
   coverage:
     outputs:
       job-status: ${{ job.status }}
+    permissions:
+      pull-requests: write
     runs-on: ubuntu-latest
 
     steps:

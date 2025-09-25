@@ -7,18 +7,21 @@ on:
         description: "job status"
         value: ${{ jobs.coverage.outputs.job-status }}
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   coverage:
     outputs:
       job-status: ${{ job.status }}
+    permissions:
+      contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@v5
         id: download

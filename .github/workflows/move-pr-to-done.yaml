@@ -15,14 +15,15 @@ on:
       SENZING_GITHUB_PROJECT_RW_TOKEN:
         required: true
 
-permissions:
-  repository-projects: write
+permissions: {}
 
 jobs:
   move-pr-to-done:
     if: ${{ github.actor == 'dependabot[bot]' }}
     outputs:
       job-status: ${{ job.status }}
+    permissions:
+      repository-projects: write
     runs-on: ubuntu-latest
 
     steps:

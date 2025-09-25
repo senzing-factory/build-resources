@@ -18,11 +18,7 @@ on:
         description: "job status"
         value: ${{ jobs.changes.outputs.job-status && jobs.lint-workflows.outputs.job-status }}
 
-permissions:
-  contents: read
-  packages: read
-  pull-requests: read
-  statuses: write
+permissions: {}
 
 jobs:
   # In order to require linting as a status check we need to
@@ -34,9 +30,14 @@ jobs:
     outputs:
       job-status: ${{ job.status }}
       workflows: ${{ steps.changes.outputs.workflows }}
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
       - uses: dorny/paths-filter@v3
         id: changes
         with:
@@ -50,13 +51,18 @@ jobs:
     needs: changes
     outputs:
       job-status: ${{ job.status }}
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: read
+      statuses: write
     runs-on: ubuntu-latest
 
     steps:
       - name: checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: lint code base
         uses: super-linter/super-linter@v8.1.0

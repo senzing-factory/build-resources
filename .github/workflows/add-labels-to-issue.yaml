@@ -12,14 +12,15 @@ on:
       SENZING_MEMBERS:
         required: false
 
-permissions:
-  issues: write
+permissions: {}
 
 jobs:
   add-customer-submission-label:
     name: add customer-submission label
     outputs:
       job-status: ${{ job.status }}
+    permissions:
+      issues: write
     runs-on: ubuntu-latest
 
     steps:
@@ -36,6 +37,8 @@ jobs:
     name: add triage label
     outputs:
       job-status: ${{ job.status }}
+    permissions:
+      issues: write
     runs-on: ubuntu-latest
 
     steps:
