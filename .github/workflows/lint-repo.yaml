@@ -15,4 +15,4 @@ jobs:
       packages: read
       pull-requests: read
       statuses: write
-    uses: senzing-factory/build-resources/.github/workflows/linter.yaml@skern-classic
+    uses: senzing-factory/build-resources/.github/workflows/linter.yaml@v3
