@@ -14,22 +14,23 @@ on:
       SENZING_GITHUB_GPG_PRIVATE_KEY:
         required: true
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   make-go-github-file:
     name: update cmd/github.go
     outputs:
       job-status: ${{ job.status }}
+    permissions:
+      contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
 
     steps:
       - name: checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: import GPG key
         uses: crazy-max/ghaction-import-gpg@v6
