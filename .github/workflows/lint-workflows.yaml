@@ -66,7 +66,7 @@ jobs:
           persist-credentials: false
 
       - name: lint code base
-        uses: super-linter/super-linter@v8.1.0
+        uses: super-linter/super-linter@v8.2.0
         env:
           DEFAULT_BRANCH: ${{ inputs.default-branch }}
           FILTER_REGEX_INCLUDE: .*.github/workflows/.*
