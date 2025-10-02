@@ -68,8 +68,12 @@ jobs:
       - name: lint code base
         uses: super-linter/super-linter@v8.2.0
         env:
-          DEFAULT_BRANCH: ${{ inputs.default-branch }}
-          FILTER_REGEX_INCLUDE: .*.github/workflows/.*
+          DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FIX_BIOME_FORMAT: false
+          FIX_BIOME_LINT: false
           # only lint new and modified files
           VALIDATE_ALL_CODEBASE: ${{ inputs.validate-all-codebase }}
+          VALIDATE_BIOME_FORMAT: false
+          VALIDATE_BIOME_LINT: false
+          VALIDATE_SHELL_SHFMT: false
