@@ -44,7 +44,10 @@ jobs:
         env:
           DEFAULT_BRANCH: main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FIX_BIOME_FORMAT: false
+          FIX_BIOME_LINT: false
           # only lint new and modified files
           VALIDATE_ALL_CODEBASE: ${{ inputs.validate-all-codebase }}
           VALIDATE_BIOME_FORMAT: false
+          VALIDATE_BIOME_LINT: false
           VALIDATE_SHELL_SHFMT: false
