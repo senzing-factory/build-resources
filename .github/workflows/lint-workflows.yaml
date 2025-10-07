@@ -32,6 +32,7 @@ jobs:
       workflows: ${{ steps.changes.outputs.workflows }}
     permissions:
       contents: read
+      pull-requests: read
 
     steps:
       - uses: actions/checkout@v5
