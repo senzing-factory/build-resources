@@ -45,7 +45,6 @@ jobs:
           filters: |
             workflows:
               - '.github/workflows/**'
-          token: ${{ secrets.GITHUB_TOKEN }}
 
   lint-workflows:
     if: ${{ needs.changes.outputs.workflows == 'true' }}
