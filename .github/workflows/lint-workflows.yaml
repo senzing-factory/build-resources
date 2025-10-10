@@ -70,7 +70,7 @@ jobs:
       - name: lint code base
         uses: super-linter/super-linter@v8.2.0
         env:
-          DEFAULT_BRANCH: main
+          DEFAULT_BRANCH: ${{ inputs.default-branch }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FILTER_REGEX_INCLUDE: .*github/.*
           FIX_BIOME_FORMAT: false
