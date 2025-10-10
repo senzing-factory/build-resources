@@ -72,6 +72,7 @@ jobs:
         env:
           DEFAULT_BRANCH: ${{ inputs.default-branch }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FILTER_REGEX_EXCLUDE: .*
           FILTER_REGEX_INCLUDE: .*github/.*
           FIX_BIOME_FORMAT: false
           FIX_BIOME_LINT: false
