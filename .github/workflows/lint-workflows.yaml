@@ -32,10 +32,12 @@ jobs:
       workflows: ${{ steps.changes.outputs.workflows }}
     permissions:
       contents: read
+      pull-requests: read
 
     steps:
       - uses: actions/checkout@v5
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: dorny/paths-filter@v3
