@@ -28,7 +28,7 @@
     "signingkey",
     "stackoverflow",
     "testcoverage",
-    "vladopajic",
+    "vladopajic"
   ],
   "ignorePaths": [".git/**"]
 }
