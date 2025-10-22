@@ -80,6 +80,7 @@ jobs:
           VALIDATE_BIOME_FORMAT: false
           VALIDATE_BIOME_LINT: false
           VALIDATE_CLANG_FORMAT: false
+          VALIDATE_CPP: false
           VALIDATE_DOCKERFILE_HADOLINT: false
           VALIDATE_GO: false
           VALIDATE_GO_MODULES: false
@@ -94,4 +95,8 @@ jobs:
           VALIDATE_PYTHON_PYLINT: false
           VALIDATE_PYTHON_RUFF: false
           VALIDATE_PYTHON_RUFF_FORMAT: false
+          VALIDATE_RUST_2015: false
+          VALIDATE_RUST_2018: false
+          VALIDATE_RUST_2021: false
+          VALIDATE_RUST_CLIPPY: false
           VALIDATE_SHELL_SHFMT: false
