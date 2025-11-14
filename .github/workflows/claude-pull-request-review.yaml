@@ -1,31 +1,17 @@
 name: Claude Pull Request Review
-
 on:
   workflow_call:
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
-
 permissions: {}
-
 jobs:
   review:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
-
     steps:
-      - name: Validate required secrets
-        run: |
-          if [ -z "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" ]; then
-            echo "❌ ERROR: CLAUDE_CODE_OAUTH_TOKEN secret is not set"
-            echo "Please add the secret in repository settings:"
-            echo "Settings → Secrets and variables → Actions → New repository secret"
-            exit 1
-          fi
-          echo "✅ CLAUDE_CODE_OAUTH_TOKEN secret is configured"
-
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -34,8 +20,29 @@ jobs:
       - name: Install Claude Code CLI
         run: |
           echo "Installing Claude Code CLI..."
-          curl -fsSL https://claude.ai/install.sh | bash
+
+          # Download install script
+          curl -fsSL https://claude.ai/install.sh -o install.sh
+
+          # Calculate checksum of downloaded script
+          SCRIPT_CHECKSUM=$(sha256sum install.sh | awk '{print $1}')
+          echo "Install script checksum: $SCRIPT_CHECKSUM"
+
+          # TODO: Verify against known good checksum when available from Claude documentation
+          # EXPECTED_CHECKSUM="..."
+          # if [ "$SCRIPT_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
+          #   echo "❌ ERROR: Install script checksum verification failed!"
+          #   exit 1
+          # fi
+
+          # Execute install script
+          bash install.sh
+
+          # Add to PATH
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          # Cleanup
+          rm install.sh
 
       - name: Verify Claude CLI installation
         run: |
@@ -52,11 +59,14 @@ jobs:
       - name: Get PR diff
         run: |
           echo "Fetching PR diff..."
-          gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt
+          gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt || true
 
           if [ ! -s pr_diff.txt ]; then
-            echo "❌ ERROR: PR diff is empty"
-            exit 1
+            echo "⚠️  PR diff is empty (no file changes detected)"
+            echo "This PR may only contain metadata changes (labels, title, etc.)"
+            echo "Skipping code review..."
+            echo "SKIP_REVIEW=true" >> "$GITHUB_ENV"
+            exit 0
           fi
 
           echo "✅ PR diff retrieved ($(wc -l < pr_diff.txt) lines)"
@@ -64,10 +74,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Create review prompt
+        if: env.SKIP_REVIEW != 'true'
         run: |
           # Use temp file instead of modifying checked-in file
           cp claude/pr-prompt.md prompt-temp.md
-
           {
             echo ""
             echo "## Pull Request Diff"
@@ -75,42 +85,51 @@ jobs:
             cat pr_diff.txt
             echo '```'
           } >> prompt-temp.md
-
           echo "✅ Review prompt created ($(wc -l < prompt-temp.md) lines)"
 
       - name: Run Claude Code Review
+        if: env.SKIP_REVIEW != 'true'
         run: |
           echo "Running Claude code review..."
-
           # The CLAUDE_CODE_OAUTH_TOKEN is used by Claude CLI for authentication
-          # No additional OIDC setup needed - the token handles authentication
-
           # Use stdin to avoid "Argument list too long" error with large diffs
           if ! cat prompt-temp.md | claude -p - > review.txt; then
             echo "❌ ERROR: Claude code review failed"
+            echo "This may be due to:"
+            echo "  - Invalid or missing CLAUDE_CODE_OAUTH_TOKEN"
+            echo "  - Network connectivity issues"
+            echo "  - Claude API errors"
             exit 1
           fi
-
           if [ ! -s review.txt ]; then
             echo "❌ ERROR: Claude produced empty review"
             exit 1
           fi
-
           echo "✅ Code review completed ($(wc -l < review.txt) lines)"
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
       - name: Post review comment
+        if: env.SKIP_REVIEW != 'true'
         run: |
           echo "Posting review to PR..."
-
           gh pr comment ${{ github.event.pull_request.number }} --body "## 🤖 Claude Code Review
-
           $(cat review.txt)
-
           ---
           *Automated code review analyzing defects and coding standards*"
-
           echo "✅ Review posted to PR #${{ github.event.pull_request.number }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Post skip message
+        if: env.SKIP_REVIEW == 'true'
+        run: |
+          echo "Posting skip message to PR..."
+          gh pr comment ${{ github.event.pull_request.number }} --body "## 🤖 Claude Code Review
+
+          ⚠️ **No file changes detected** - skipping code review.
+
+          This PR appears to contain only metadata changes (labels, description, etc.)."
+          echo "✅ Skip message posted to PR #${{ github.event.pull_request.number }}"
         env:
           GH_TOKEN: ${{ github.token }}
