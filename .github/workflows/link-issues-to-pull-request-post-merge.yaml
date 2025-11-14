@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: '#(\d+)'
+      max-commits:
+        description: "Maximum number of commits to scan per page (default: 100)"
+        required: false
+        type: number
+        default: 100
 
 jobs:
   link-issues:
@@ -20,23 +25,62 @@ jobs:
     steps:
       - name: Extract Issue Numbers
         id: extract
-        uses: actions/github-script@v8
+        uses: actions/github-script@v7
         with:
           script: |
             const pr = context.payload.pull_request;
             const title = pr.title || '';
             const body = pr.body || '';
 
-            // Fetch all commits in the PR
-            const commits = await github.rest.pulls.listCommits({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: pr.number,
-              per_page: 100
-            });
+            let allCommits = [];
+            let commitMessages = '';
 
-            // Extract commit messages
-            const commitMessages = commits.data.map(commit => commit.commit.message).join('\n');
+            try {
+              // Fetch commits with pagination support
+              const maxCommits = ${{ inputs.max-commits }} || 100;
+              let page = 1;
+              let hasMore = true;
+              
+              console.log('=== Fetching commits ===');
+              
+              while (hasMore && allCommits.length < 250) { // Safety limit: 250 commits max
+                const commits = await github.rest.pulls.listCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  per_page: maxCommits,
+                  page: page
+                });
+                
+                if (commits.data.length === 0) {
+                  hasMore = false;
+                } else {
+                  allCommits = allCommits.concat(commits.data);
+                  console.log(`Fetched page ${page}: ${commits.data.length} commits`);
+                  
+                  // If we got fewer commits than requested, we're on the last page
+                  if (commits.data.length < maxCommits) {
+                    hasMore = false;
+                  } else {
+                    page++;
+                  }
+                }
+              }
+              
+              // Extract commit messages
+              commitMessages = allCommits.map(commit => commit.commit.message).join('\n');
+              
+              console.log(`Total commits scanned: ${allCommits.length}`);
+              
+              if (allCommits.length >= 250) {
+                console.log('⚠️  Warning: Reached 250 commit limit. Some commits may not be scanned.');
+              }
+              
+            } catch (error) {
+              console.error('❌ Error fetching commits:', error.message);
+              console.log('Continuing with PR title and description only...');
+              // Continue execution - we'll still search title and body
+            }
 
             // Combine title, body, and commit messages for searching
             const searchText = `${title}\n${body}\n${commitMessages}`;
@@ -44,26 +88,24 @@ jobs:
             console.log('=== Searching in ===');
             console.log('PR Title:', title);
             console.log('PR Body length:', body.length, 'chars');
-            console.log('Commit count:', commits.data.length);
+            console.log('Commits scanned:', allCommits.length);
             console.log('---');
 
-            // Use custom pattern if provided, otherwise default
-            // IMPORTANT: Pattern must include the # prefix to ensure it's a GitHub issue
-            const pattern = '${{ inputs.issue-pattern }}' || '#(\\d+)';
-
             // Pattern for same-repo issues: #123
+            // Note: We want to capture the full match including the # prefix
+            const pattern = '${{ inputs.issue-pattern }}' || '#(\\d+)';
             const sameRepoRegex = new RegExp(pattern, 'g');
 
             // Pattern for cross-repo issues: owner/repo#123 or org/repo#123
-            const crossRepoRegex = /([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+)#(\d+)/g;
+            const crossRepoRegex = /([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+#\d+)/g;
 
-            // Extract same-repo issues
+            // Extract same-repo issues (keep full match including #)
             const sameRepoMatches = [...searchText.matchAll(sameRepoRegex)];
-            const sameRepoIssues = sameRepoMatches.map(m => `#${m[1]}`);
+            const sameRepoIssues = sameRepoMatches.map(m => m[0]); // Full match: #123
 
-            // Extract cross-repo issues
+            // Extract cross-repo issues (keep full match)
             const crossRepoMatches = [...searchText.matchAll(crossRepoRegex)];
-            const crossRepoIssues = crossRepoMatches.map(m => `${m[1]}#${m[2]}`);
+            const crossRepoIssues = crossRepoMatches.map(m => m[1]); // Capture group: owner/repo#123
 
             // Combine and deduplicate
             const allIssues = [...new Set([...sameRepoIssues, ...crossRepoIssues])];
@@ -76,53 +118,67 @@ jobs:
             }
 
             console.log(`✅ Found ${allIssues.length} issue reference(s):`);
-            sameRepoIssues.length > 0 && console.log(`   Same repo: ${sameRepoIssues.join(', ')}`);
-            crossRepoIssues.length > 0 && console.log(`   Cross repo: ${crossRepoIssues.join(', ')}`);
+            if (sameRepoIssues.length > 0) {
+              console.log(`   Same repo (${sameRepoIssues.length}): ${[...new Set(sameRepoIssues)].join(', ')}`);
+            }
+            if (crossRepoIssues.length > 0) {
+              console.log(`   Cross repo (${crossRepoIssues.length}): ${[...new Set(crossRepoIssues)].join(', ')}`);
+            }
 
             core.setOutput('found', 'true');
             core.setOutput('issues', allIssues.join(','));
 
       - name: Update PR Description
         if: steps.extract.outputs.found == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v7
         with:
           script: |
             const pr = context.payload.pull_request;
-            const issueNumbers = '${{ steps.extract.outputs.issues }}'.split(',');
+            const issues = '${{ steps.extract.outputs.issues }}'.split(',');
 
-            // Get current PR body
-            let body = pr.body || '';
-
-            // Check if "Resolves" section already exists to avoid duplicates
-            const resolvesPattern = /^#{1,6}\s*Resolves/mi;
-
-            if (resolvesPattern.test(body)) {
-              console.log('⚠️  PR description already contains a "Resolves" section');
-              console.log('Skipping update to avoid duplicates');
-              return;
+            try {
+              // Get current PR body
+              let body = pr.body || '';
+              
+              // Check if "Resolves" section already exists to avoid duplicates
+              const resolvesPattern = /^#{1,6}\s*Resolves/mi;
+              
+              if (resolvesPattern.test(body)) {
+                console.log('⚠️  PR description already contains a "Resolves" section');
+                console.log('Skipping update to avoid duplicates');
+                return;
+              }
+              
+              // Build the resolves text
+              // Issues already have correct format: "#123" or "owner/repo#123"
+              const resolvesText = issues.map(issue => `Resolves ${issue}`).join('\n');
+              
+              // Append to existing body with proper spacing
+              const separator = body.trim() ? '\n\n---\n\n' : '';
+              const updatedBody = `${body}${separator}${resolvesText}`;
+              
+              // Update the PR
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                body: updatedBody
+              });
+              
+              console.log(`✅ Updated PR #${pr.number} with:`);
+              issues.forEach(issue => console.log(`   - Resolves ${issue}`));
+              console.log(`📋 Total issues linked: ${issues.length}`);
+              
+            } catch (error) {
+              console.error('❌ Error updating PR description:', error.message);
+              core.setFailed(`Failed to update PR: ${error.message}`);
             }
-
-            // Build the resolves text
-            const resolvesText = issueNumbers.map(num => `Resolves #${num}`).join('\n');
-
-            // Append to existing body with proper spacing
-            const separator = body.trim() ? '\n\n---\n\n' : '';
-            const updatedBody = `${body}${separator}${resolvesText}`;
-
-            // Update the PR
-            await github.rest.pulls.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: pr.number,
-              body: updatedBody
-            });
-
-            console.log(`✅ Updated PR #${pr.number} with: ${resolvesText}`);
-            console.log(`📋 Total issues linked: ${issueNumbers.length}`);
 
       - name: Log No Issues Found
         if: steps.extract.outputs.found == 'false'
         run: |
           echo "ℹ️  No issue numbers found in PR title, description, or commit messages"
-          echo "💡 Tip: Reference issues with # prefix (e.g., 'Fixes #123')"
+          echo "💡 Tip: Reference issues with:"
+          echo "   - Same repo: #123"
+          echo "   - Cross repo: owner/repo#123"
           echo "Skipping issue linking - this is expected if PR doesn't reference any issues"
