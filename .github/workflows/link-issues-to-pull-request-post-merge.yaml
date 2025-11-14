@@ -31,7 +31,7 @@ jobs:
         env:
           INPUT_ISSUE_PATTERN: ${{ inputs.issue-pattern }}
           INPUT_MAX_COMMITS: ${{ inputs.max-commits }}
-          INPUT_MAX_BODY_LENGTH: ${{ inputs.max-body-length }}
+          INPUT_MAX_BODY_LENGTH: ${{ inputs['max-body-length'] }}
         with:
           script: |
             const pr = context.payload.pull_request;

@@ -2,6 +2,7 @@
   "version": "0.2",
   "language": "en",
   "words": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
     "andymckay",
     "AQAAAD",
     "buildx",
@@ -32,5 +33,7 @@
     "testcoverage",
     "vladopajic"
   ],
-  "ignorePaths": [".git/**"]
+  "ignorePaths": [
+    ".git/**"
+  ]
 }
