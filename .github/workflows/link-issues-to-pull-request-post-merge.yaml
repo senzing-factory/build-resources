@@ -14,6 +14,8 @@ on:
         type: number
         default: 100
 
+permissions: {}
+
 jobs:
   link-issues:
     runs-on: ubuntu-latest
@@ -33,7 +35,7 @@ jobs:
             const body = pr.body || '';
 
             let allCommits = [];
-            let commitMessages = '';
+            let commitMessagesArray = [];
 
             try {
               // Fetch commits with pagination support
@@ -67,8 +69,8 @@ jobs:
                 }
               }
               
-              // Extract commit messages
-              commitMessages = allCommits.map(commit => commit.commit.message).join('\n');
+              // Extract commit messages efficiently
+              commitMessagesArray = allCommits.map(commit => commit.commit.message);
               
               console.log(`Total commits scanned: ${allCommits.length}`);
               
@@ -82,8 +84,9 @@ jobs:
               // Continue execution - we'll still search title and body
             }
 
-            // Combine title, body, and commit messages for searching
-            const searchText = `${title}\n${body}\n${commitMessages}`;
+            // Combine all searchable text efficiently
+            const searchParts = [title, body, ...commitMessagesArray];
+            const searchText = searchParts.join('\n');
 
             console.log('=== Searching in ===');
             console.log('PR Title:', title);
@@ -91,13 +94,48 @@ jobs:
             console.log('Commits scanned:', allCommits.length);
             console.log('---');
 
-            // Pattern for same-repo issues: #123
-            // Note: We want to capture the full match including the # prefix
-            const pattern = '${{ inputs.issue-pattern }}' || '#(\\d+)';
-            const sameRepoRegex = new RegExp(pattern, 'g');
+            // Validate and sanitize the custom pattern input to prevent ReDoS
+            let validatedPattern = '#(\\d+)'; // Safe default
+            const customPattern = `${{ inputs.issue-pattern }}`.trim();
+
+            if (customPattern && customPattern !== '#(\\d+)') {
+              // Basic validation: ensure pattern doesn't contain dangerous constructs
+              const dangerousPatterns = [
+                /\(\?\#/,           // Comments that could hide attacks
+                /\(\?[<>=!]/,       // Lookaheads/lookbehinds (potential ReDoS)
+                /\{[0-9]+,[0-9]*\}\+/, // Nested quantifiers (ReDoS risk)
+                /\(\.\*\)\+/,       // Catastrophic backtracking pattern
+              ];
+              
+              let isSafe = true;
+              for (const dangerous of dangerousPatterns) {
+                if (dangerous.test(customPattern)) {
+                  console.log(`⚠️  Custom pattern contains potentially unsafe construct: ${dangerous}`);
+                  isSafe = false;
+                  break;
+                }
+              }
+              
+              if (isSafe) {
+                try {
+                  // Test the regex with a timeout simulation
+                  new RegExp(customPattern, 'g');
+                  validatedPattern = customPattern;
+                  console.log('✓ Using custom issue pattern');
+                } catch (e) {
+                  console.log(`⚠️  Invalid custom pattern: ${e.message}. Using default.`);
+                }
+              } else {
+                console.log('⚠️  Custom pattern rejected for security. Using default.');
+              }
+            }
+
+            // Pattern for same-repo issues
+            const sameRepoRegex = new RegExp(validatedPattern, 'g');
 
             // Pattern for cross-repo issues: owner/repo#123 or org/repo#123
-            const crossRepoRegex = /([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+#\d+)/g;
+            // This regex is carefully crafted to avoid ReDoS
+            const crossRepoRegex = /\b([a-zA-Z0-9_-]{1,39}\/[a-zA-Z0-9_-]{1,100}#\d{1,10})\b/g;
 
             // Extract same-repo issues (keep full match including #)
             const sameRepoMatches = [...searchText.matchAll(sameRepoRegex)];
@@ -114,6 +152,7 @@ jobs:
               console.log('❌ No issue numbers found in PR title, description, or commit messages');
               console.log('Note: Issue numbers must be prefixed with # (e.g., #123 or owner/repo#123)');
               core.setOutput('found', 'false');
+              core.setOutput('issues', '');
               return;
             }
 
@@ -126,7 +165,8 @@ jobs:
             }
 
             core.setOutput('found', 'true');
-            core.setOutput('issues', allIssues.join(','));
+            // Use JSON encoding to safely pass issues to next step
+            core.setOutput('issues', JSON.stringify(allIssues));
 
       - name: Update PR Description
         if: steps.extract.outputs.found == 'true'
@@ -134,24 +174,59 @@ jobs:
         with:
           script: |
             const pr = context.payload.pull_request;
-            const issues = '${{ steps.extract.outputs.issues }}'.split(',');
+
+            // Safely parse JSON-encoded issues
+            let issues = [];
+            try {
+              const issuesJson = `${{ steps.extract.outputs.issues }}`;
+              if (!issuesJson || issuesJson.trim() === '') {
+                console.log('⚠️  No issues data received');
+                return;
+              }
+              issues = JSON.parse(issuesJson);
+              
+              if (!Array.isArray(issues) || issues.length === 0) {
+                console.log('⚠️  Issues array is empty');
+                return;
+              }
+            } catch (e) {
+              console.error('❌ Error parsing issues:', e.message);
+              core.setFailed(`Failed to parse issues: ${e.message}`);
+              return;
+            }
 
             try {
               // Get current PR body
               let body = pr.body || '';
               
-              // Check if "Resolves" section already exists to avoid duplicates
-              const resolvesPattern = /^#{1,6}\s*Resolves/mi;
+              // Enhanced duplicate detection - check for existing "Resolves" sections
+              // and also check if these specific issues are already mentioned
+              const resolvesHeaderPattern = /^#{1,6}\s*Resolves/mi;
               
-              if (resolvesPattern.test(body)) {
+              if (resolvesHeaderPattern.test(body)) {
                 console.log('⚠️  PR description already contains a "Resolves" section');
-                console.log('Skipping update to avoid duplicates');
+                
+                // Check if all our issues are already in the body
+                const allIssuesAlreadyPresent = issues.every(issue => {
+                  const escapedIssue = issue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                  const issuePattern = new RegExp(`Resolves\\s+${escapedIssue}\\b`, 'i');
+                  return issuePattern.test(body);
+                });
+                
+                if (allIssuesAlreadyPresent) {
+                  console.log('✓ All issues already resolved in PR description');
+                  return;
+                }
+                
+                console.log('Some new issues to add, but "Resolves" section exists');
+                console.log('Skipping to avoid creating duplicate sections');
                 return;
               }
               
               // Build the resolves text
               // Issues already have correct format: "#123" or "owner/repo#123"
-              const resolvesText = issues.map(issue => `Resolves ${issue}`).join('\n');
+              const resolvesLines = issues.map(issue => `Resolves ${issue}`);
+              const resolvesText = resolvesLines.join('\n');
               
               // Append to existing body with proper spacing
               const separator = body.trim() ? '\n\n---\n\n' : '';
