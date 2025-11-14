@@ -33,7 +33,5 @@
     "testcoverage",
     "vladopajic"
   ],
-  "ignorePaths": [
-    ".git/**"
-  ]
+  "ignorePaths": [".git/**"]
 }

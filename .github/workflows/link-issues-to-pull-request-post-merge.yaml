@@ -31,7 +31,6 @@ jobs:
         env:
           INPUT_ISSUE_PATTERN: ${{ inputs.issue-pattern }}
           INPUT_MAX_COMMITS: ${{ inputs.max-commits }}
-          INPUT_MAX_BODY_LENGTH: ${{ inputs['max-body-length'] }}
         with:
           script: |
             const pr = context.payload.pull_request;
@@ -46,13 +45,8 @@ jobs:
               console.log(`⚠️  max-commits adjusted from ${rawMaxCommits} to ${maxCommits} (valid range: 1-100)`);
             }
 
-            // Validate and sanitize max body length
-            const rawMaxBodyLength = parseInt(process.env.INPUT_MAX_BODY_LENGTH || '65536', 10);
-            const maxBodyLength = Math.max(1024, Math.min(Math.floor(rawMaxBodyLength), 65536));
-
-            if (rawMaxBodyLength !== maxBodyLength) {
-              console.log(`⚠️  max-body-length adjusted from ${rawMaxBodyLength} to ${maxBodyLength} (valid range: 1024-65536)`);
-            }
+            // Validate and sanitize max body length (hardcoded for security)
+            const maxBodyLength = 65536; // GitHub's PR description limit
 
             // Truncate body if too long to prevent memory issues
             if (body.length > maxBodyLength) {
