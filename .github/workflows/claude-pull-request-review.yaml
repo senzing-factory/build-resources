@@ -3,7 +3,7 @@ name: Claude Pull Request Review
 on:
   workflow_call:
     secrets:
-      SLACK_BOT_TOKEN:
+      CLAUDE_CODE_OAUTH_TOKEN:
         required: true
 
 permissions: {}
