@@ -4,7 +4,7 @@ Review this PR against our team checklist (Provide specific feedback, reference 
 
 ## Code Quality
 
-- [ ] Code follows our style guide: https://github.com/senzing-garage/knowledge-base/blob/main/WHATIS/code-style.md
+- [ ] Code follows our style guide: `https://github.com/senzing-garage/knowledge-base/blob/main/WHATIS/code-style.md`
 - [ ] No commented-out code
 - [ ] Meaningful variable names
 - [ ] DRY principle followed
@@ -19,7 +19,7 @@ Review this PR against our team checklist (Provide specific feedback, reference 
 
 ## Documentation
 
-- [ ] README updated if needed
+- [ ] Readme updated if needed
 - [ ] API docs updated
 - [ ] Inline comments for complex logic
 - [ ] CHANGELOG.md updated
