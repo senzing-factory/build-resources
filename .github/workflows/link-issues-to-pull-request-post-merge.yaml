@@ -1,0 +1,128 @@
+name: Link Issues to Pull Request Post Merge
+
+on:
+  workflow_call:
+    inputs:
+      issue-pattern:
+        description: "Custom regex pattern for matching issue numbers (optional)"
+        required: false
+        type: string
+        default: '#(\d+)'
+
+jobs:
+  link-issues:
+    runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: Extract Issue Numbers
+        id: extract
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const title = pr.title || '';
+            const body = pr.body || '';
+
+            // Fetch all commits in the PR
+            const commits = await github.rest.pulls.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100
+            });
+
+            // Extract commit messages
+            const commitMessages = commits.data.map(commit => commit.commit.message).join('\n');
+
+            // Combine title, body, and commit messages for searching
+            const searchText = `${title}\n${body}\n${commitMessages}`;
+
+            console.log('=== Searching in ===');
+            console.log('PR Title:', title);
+            console.log('PR Body length:', body.length, 'chars');
+            console.log('Commit count:', commits.data.length);
+            console.log('---');
+
+            // Use custom pattern if provided, otherwise default
+            // IMPORTANT: Pattern must include the # prefix to ensure it's a GitHub issue
+            const pattern = '${{ inputs.issue-pattern }}' || '#(\\d+)';
+
+            // Pattern for same-repo issues: #123
+            const sameRepoRegex = new RegExp(pattern, 'g');
+
+            // Pattern for cross-repo issues: owner/repo#123 or org/repo#123
+            const crossRepoRegex = /([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+)#(\d+)/g;
+
+            // Extract same-repo issues
+            const sameRepoMatches = [...searchText.matchAll(sameRepoRegex)];
+            const sameRepoIssues = sameRepoMatches.map(m => `#${m[1]}`);
+
+            // Extract cross-repo issues
+            const crossRepoMatches = [...searchText.matchAll(crossRepoRegex)];
+            const crossRepoIssues = crossRepoMatches.map(m => `${m[1]}#${m[2]}`);
+
+            // Combine and deduplicate
+            const allIssues = [...new Set([...sameRepoIssues, ...crossRepoIssues])];
+
+            if (allIssues.length === 0) {
+              console.log('❌ No issue numbers found in PR title, description, or commit messages');
+              console.log('Note: Issue numbers must be prefixed with # (e.g., #123 or owner/repo#123)');
+              core.setOutput('found', 'false');
+              return;
+            }
+
+            console.log(`✅ Found ${allIssues.length} issue reference(s):`);
+            sameRepoIssues.length > 0 && console.log(`   Same repo: ${sameRepoIssues.join(', ')}`);
+            crossRepoIssues.length > 0 && console.log(`   Cross repo: ${crossRepoIssues.join(', ')}`);
+
+            core.setOutput('found', 'true');
+            core.setOutput('issues', allIssues.join(','));
+
+      - name: Update PR Description
+        if: steps.extract.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const issueNumbers = '${{ steps.extract.outputs.issues }}'.split(',');
+
+            // Get current PR body
+            let body = pr.body || '';
+
+            // Check if "Resolves" section already exists to avoid duplicates
+            const resolvesPattern = /^#{1,6}\s*Resolves/mi;
+
+            if (resolvesPattern.test(body)) {
+              console.log('⚠️  PR description already contains a "Resolves" section');
+              console.log('Skipping update to avoid duplicates');
+              return;
+            }
+
+            // Build the resolves text
+            const resolvesText = issueNumbers.map(num => `Resolves #${num}`).join('\n');
+
+            // Append to existing body with proper spacing
+            const separator = body.trim() ? '\n\n---\n\n' : '';
+            const updatedBody = `${body}${separator}${resolvesText}`;
+
+            // Update the PR
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              body: updatedBody
+            });
+
+            console.log(`✅ Updated PR #${pr.number} with: ${resolvesText}`);
+            console.log(`📋 Total issues linked: ${issueNumbers.length}`);
+
+      - name: Log No Issues Found
+        if: steps.extract.outputs.found == 'false'
+        run: |
+          echo "ℹ️  No issue numbers found in PR title, description, or commit messages"
+          echo "💡 Tip: Reference issues with # prefix (e.g., 'Fixes #123')"
+          echo "Skipping issue linking - this is expected if PR doesn't reference any issues"
