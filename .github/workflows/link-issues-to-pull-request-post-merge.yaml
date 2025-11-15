@@ -214,13 +214,25 @@ jobs:
             }
 
             // Pattern for same-repo issues with timeout protection
+            // Use negative lookbehind to avoid matching #123 in owner/repo#123
             let sameRepoMatches = [];
             try {
               const sameRepoRegex = new RegExp(validatedPattern, 'g');
               const regexStart = Date.now();
               const regexTimeout = 5000; // 5 second timeout for regex operations
 
-              sameRepoMatches = [...searchText.matchAll(sameRepoRegex)];
+              // Get all matches
+              const allMatches = [...searchText.matchAll(sameRepoRegex)];
+
+              // Filter out matches that are part of cross-repo references
+              // Look for owner/repo# before the match
+              sameRepoMatches = allMatches.filter(match => {
+                const matchIndex = match.index;
+                const textBefore = searchText.substring(Math.max(0, matchIndex - 100), matchIndex);
+                // Check if there's owner/repo pattern immediately before the #
+                const crossRepoPrefix = /[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/;
+                return !crossRepoPrefix.test(textBefore);
+              });
 
               if (Date.now() - regexStart > regexTimeout) {
                 throw new Error('Regex execution timeout');
