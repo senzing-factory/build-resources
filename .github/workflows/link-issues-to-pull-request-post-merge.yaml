@@ -1,4 +1,4 @@
-name: Link Issues After Merge
+name: Link Issues to Pull Request Post Merge
 
 on:
   workflow_call:
@@ -13,6 +13,8 @@ on:
         required: false
         type: number
         default: 100
+
+permissions: {}
 
 jobs:
   link-issues:
