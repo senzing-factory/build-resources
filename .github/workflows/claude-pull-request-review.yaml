@@ -78,8 +78,8 @@ jobs:
         with:
           path: build-resources
           persist-credentials: false
-          repository: senzing-factory/build-resources  # Replace with actual repo
-          token: ${{ secrets.GITHUB_TOKEN }}  # Or a PAT if private repo
+          repository: senzing-factory/build-resources # Replace with actual repo
+          token: ${{ secrets.GITHUB_TOKEN }} # Or a PAT if private repo
 
       - name: Create review prompt
         if: env.SKIP_REVIEW != 'true'
