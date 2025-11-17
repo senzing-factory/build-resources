@@ -1,20 +1,18 @@
-name: Link Issues to Pull Request Post Merge
+name: Link Issues After Merge
 
 on:
   workflow_call:
     inputs:
       issue-pattern:
-        description: "Custom regex pattern for matching issue numbers (optional)"
+        description: 'Custom regex pattern for matching issue numbers (optional)'
         required: false
         type: string
         default: '#(\d+)'
       max-commits:
-        description: "Maximum number of commits to scan per page (default: 100)"
+        description: 'Maximum number of commits to scan per page (default: 100)'
         required: false
         type: number
         default: 100
-
-permissions: {}
 
 jobs:
   link-issues:
@@ -36,6 +34,23 @@ jobs:
             const pr = context.payload.pull_request;
             const title = pr.title || '';
             let body = pr.body || '';
+
+            // Detect if title was truncated by GitHub (ends with ellipsis)
+            const titleTruncated = title.endsWith('…') || title.endsWith('...');
+
+            if (titleTruncated) {
+              console.log('⚠️  PR title appears truncated');
+
+              // If title is truncated and body starts with what looks like continuation,
+              // try to clean it up by removing the partial issue reference at start of body
+              // Pattern: starts with optional whitespace, then digits or fragments
+              const bodyStartPattern = /^[\s\u2026.]*(\d+\s+)/;
+              if (bodyStartPattern.test(body)) {
+                const originalBody = body;
+                body = body.replace(bodyStartPattern, '');
+                console.log(`Removed truncation artifacts from body start: "${originalBody.substring(0, 50)}" -> "${body.substring(0, 50)}"`);
+              }
+            }
 
             // Safely read inputs from environment variables (no template expansion)
             const rawMaxCommits = parseInt(process.env.INPUT_MAX_COMMITS || '100', 10);
