@@ -73,11 +73,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      - name: Checkout build resources
+        uses: actions/checkout@v5
+        with:
+          path: build-resources
+          persist-credentials: false
+          repository: senzing-factory/build-resources  # Replace with actual repo
+          token: ${{ secrets.GITHUB_TOKEN }}  # Or a PAT if private repo
+
       - name: Create review prompt
         if: env.SKIP_REVIEW != 'true'
         run: |
-          # Use temp file instead of modifying checked-in file
-          cp claude/pr-prompt.md prompt-temp.md
+          cp build-resources/claude/pr-prompt.md prompt-temp.md
           {
             echo ""
             echo "## Pull Request Diff"
