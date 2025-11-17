@@ -37,6 +37,23 @@ jobs:
             const title = pr.title || '';
             let body = pr.body || '';
 
+            // Detect if title was truncated by GitHub (ends with ellipsis)
+            const titleTruncated = title.endsWith('…') || title.endsWith('...');
+
+            if (titleTruncated) {
+              console.log('⚠️  PR title appears truncated');
+
+              // If title is truncated and body starts with what looks like continuation,
+              // try to clean it up by removing the partial issue reference at start of body
+              // Pattern: starts with optional whitespace, then digits or fragments
+              const bodyStartPattern = /^[\s\u2026.]*(\d+\s+)/;
+              if (bodyStartPattern.test(body)) {
+                const originalBody = body;
+                body = body.replace(bodyStartPattern, '');
+                console.log(`Removed truncation artifacts from body start: "${originalBody.substring(0, 50)}" -> "${body.substring(0, 50)}"`);
+              }
+            }
+
             // Safely read inputs from environment variables (no template expansion)
             const rawMaxCommits = parseInt(process.env.INPUT_MAX_COMMITS || '100', 10);
             const maxCommits = Math.max(1, Math.min(Math.floor(rawMaxCommits), 100));
