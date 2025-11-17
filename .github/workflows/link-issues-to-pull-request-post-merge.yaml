@@ -4,12 +4,12 @@ on:
   workflow_call:
     inputs:
       issue-pattern:
-        description: 'Custom regex pattern for matching issue numbers (optional)'
+        description: "Custom regex pattern for matching issue numbers (optional)"
         required: false
         type: string
         default: '#(\d+)'
       max-commits:
-        description: 'Maximum number of commits to scan per page (default: 100)'
+        description: "Maximum number of commits to scan per page (default: 100)"
         required: false
         type: number
         default: 100
