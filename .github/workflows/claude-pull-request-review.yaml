@@ -1,16 +1,20 @@
 name: Claude Pull Request Review
+
 on:
   workflow_call:
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
+
 permissions: {}
+
 jobs:
   review:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
+
     steps:
       - uses: actions/checkout@v5
         with:
@@ -45,6 +49,8 @@ jobs:
           rm install.sh
 
       - name: Verify Claude CLI installation
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           # Verify installation succeeded
           if ! command -v claude &> /dev/null; then
@@ -53,10 +59,10 @@ jobs:
           fi
           claude --version
           echo "✅ Claude CLI installed successfully"
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
       - name: Get PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "Fetching PR diff..."
           gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt || true
@@ -70,8 +76,6 @@ jobs:
           fi
 
           echo "✅ PR diff retrieved ($(wc -l < pr_diff.txt) lines)"
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: Checkout build resources
         uses: actions/checkout@v5
@@ -101,28 +105,38 @@ jobs:
           echo "✅ Review prompt created ($(wc -l < prompt-temp.md) lines)"
 
       - name: Run Claude Code Review
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         if: env.SKIP_REVIEW != 'true'
         run: |
           echo "Running Claude code review..."
-          # The CLAUDE_CODE_OAUTH_TOKEN is used by Claude CLI for authentication
-          # Use stdin to avoid "Argument list too long" error with large diffs
-          if ! cat prompt-temp.md | claude -p - > review.txt; then
+          echo "Prompt size: $(wc -l < prompt-temp.md) lines, $(wc -c < prompt-temp.md) bytes"
+
+          # Show first and last few lines of prompt to verify it's complete
+          echo "First 5 lines of prompt:"
+          head -5 prompt-temp.md
+          echo "Last 5 lines of prompt:"
+          tail -5 prompt-temp.md
+
+          # Try direct file input instead of stdin
+          if ! claude -p prompt-temp.md > review.txt; then
             echo "❌ ERROR: Claude code review failed"
-            echo "This may be due to:"
-            echo "  - Invalid or missing CLAUDE_CODE_OAUTH_TOKEN"
-            echo "  - Network connectivity issues"
-            echo "  - Claude API errors"
             exit 1
           fi
+
+          # Show the actual review output for debugging
+          echo "Review output:"
+          cat review.txt
+
           if [ ! -s review.txt ]; then
             echo "❌ ERROR: Claude produced empty review"
             exit 1
           fi
           echo "✅ Code review completed ($(wc -l < review.txt) lines)"
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
       - name: Post review comment
+        env:
+          GH_TOKEN: ${{ github.token }}
         if: env.SKIP_REVIEW != 'true'
         run: |
           echo "Posting review to PR..."
@@ -131,10 +145,10 @@ jobs:
           ---
           *Automated code review analyzing defects and coding standards*"
           echo "✅ Review posted to PR #${{ github.event.pull_request.number }}"
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: Post skip message
+        env:
+          GH_TOKEN: ${{ github.token }}
         if: env.SKIP_REVIEW == 'true'
         run: |
           echo "Posting skip message to PR..."
@@ -144,5 +158,3 @@ jobs:
 
           This PR appears to contain only metadata changes (labels, description, etc.)."
           echo "✅ Skip message posted to PR #${{ github.event.pull_request.number }}"
-        env:
-          GH_TOKEN: ${{ github.token }}
