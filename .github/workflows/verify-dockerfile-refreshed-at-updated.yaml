@@ -161,10 +161,10 @@ jobs:
           DOCKERFILES: ${{ steps.find-dockerfiles.outputs.dockerfiles }}
         if: steps.find-dockerfiles.outputs.dockerfiles != ''
         run: |
+          # Use process substitution to avoid subshell issues
           CHECK_FAILED=0
 
-          # Parse JSON array
-          echo "$DOCKERFILES" | jq -r '.[]' | while read -r dockerfile; do
+          while read -r dockerfile; do
             echo "================================================"
             echo "Checking: $dockerfile"
             echo "================================================"
@@ -233,7 +233,7 @@ jobs:
             fi
 
             echo ""
-          done
+          done < <(echo "$DOCKERFILES" | jq -r '.[]')
 
           # Exit with error if any file failed
           if [ "$CHECK_FAILED" -eq 1 ]; then
