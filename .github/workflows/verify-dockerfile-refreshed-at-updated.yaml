@@ -54,8 +54,8 @@ jobs:
 
     # Skip only if no Dockerfiles changed OR if the commit author is Renovate
     if: |
-      needs.detect-changes.outputs.dockerfiles == 'true' && 
-      github.event.head_commit.author.username != 'renovate[bot]' && 
+      needs.detect-changes.outputs.dockerfiles == 'true' &&
+      github.event.head_commit.author.username != 'renovate[bot]' &&
       github.event.head_commit.author.username != 'renovate'
 
     steps:
@@ -66,28 +66,34 @@ jobs:
 
       - name: Get base commit
         id: base
+        env:
+          INPUT_BASE_SHA: ${{ inputs.base-sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if [ -n "${{ inputs.base-sha }}" ]; then
-            echo "base=${{ inputs.base-sha }}" >> "$GITHUB_OUTPUT"
+          if [ -n "$INPUT_BASE_SHA" ]; then
+            echo "base=$INPUT_BASE_SHA" >> "$GITHUB_OUTPUT"
           else
-            echo "base=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+            echo "base=$PR_BASE_SHA" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Get head commit
         id: head
+        env:
+          INPUT_HEAD_SHA: ${{ inputs.head-sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ -n "${{ inputs.head-sha }}" ]; then
-            echo "head=${{ inputs.head-sha }}" >> "$GITHUB_OUTPUT"
+          if [ -n "$INPUT_HEAD_SHA" ]; then
+            echo "head=$INPUT_HEAD_SHA" >> "$GITHUB_OUTPUT"
           else
-            echo "head=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+            echo "head=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Find modified Dockerfiles
         id: find-dockerfiles
+        env:
+          BASE_SHA: ${{ steps.base.outputs.base }}
+          HEAD_SHA: ${{ steps.head.outputs.head }}
         run: |
-          BASE_SHA="${{ steps.base.outputs.base }}"
-          HEAD_SHA="${{ steps.head.outputs.head }}"
-
           # Find all modified Dockerfiles and package.Dockerfile files
           MODIFIED_DOCKERFILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -E '(Dockerfile.*|package\.Dockerfile)$' || true)
 
