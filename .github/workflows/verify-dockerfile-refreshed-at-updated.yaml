@@ -99,11 +99,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: detect-changes
 
-    # Skip only if no Dockerfiles changed OR if the commit author is Renovate
+    # Skip only if no Dockerfiles changed OR if the actor is Renovate
+    # Using github.actor which is reliable in PR contexts
     if: |
       needs.detect-changes.outputs.dockerfiles == 'true' &&
-      github.event.head_commit.author.username != 'renovate[bot]' &&
-      github.event.head_commit.author.username != 'renovate'
+      github.actor != 'renovate[bot]' &&
+      github.actor != 'renovate'
 
     steps:
       - uses: actions/checkout@v5
