@@ -150,8 +150,16 @@ jobs:
           else
             echo "[INFO] Modified Dockerfiles:"
             echo "[INFO] $MODIFIED_DOCKERFILES"
-            # Convert to JSON array
-            DOCKERFILES_JSON=$(echo "$MODIFIED_DOCKERFILES" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            # Convert to JSON array with error handling
+            if ! DOCKERFILES_JSON=$(echo "$MODIFIED_DOCKERFILES" | jq -R -s -c 'split("\n") | map(select(length > 0))'); then
+              echo "::error::[ERROR] Failed to parse Dockerfile list with jq"
+              exit 1
+            fi
+            # Validate JSON output
+            if [ -z "$DOCKERFILES_JSON" ] || [ "$DOCKERFILES_JSON" = "null" ]; then
+              echo "::error::[ERROR] Invalid JSON output from jq"
+              exit 1
+            fi
             echo "dockerfiles=$DOCKERFILES_JSON" >> "$GITHUB_OUTPUT"
           fi
 
@@ -161,22 +169,47 @@ jobs:
           DOCKERFILES: ${{ steps.find-dockerfiles.outputs.dockerfiles }}
         if: steps.find-dockerfiles.outputs.dockerfiles != ''
         run: |
-          # Use process substitution to avoid subshell issues
-          CHECK_FAILED=0
+          # Exit on error, undefined variables, and pipeline failures
+          # -e: exit on error
+          # -u: treat unset variables as error
+          # -o pipefail: pipeline fails if any command fails
+          set -euo pipefail
 
-          while read -r dockerfile; do
+          CHECK_FAILED=0
+          FAILED_FILES=()
+
+          # Process each Dockerfile from the JSON array
+          # Using process substitution to avoid subshell variable scope issues
+          while IFS= read -r dockerfile; do
             echo "================================================"
             echo "Checking: $dockerfile"
             echo "================================================"
 
-            # Check if file has REFRESHED_AT lines
+            # Security: Validate path doesn't contain directory traversal
+            if [[ "$dockerfile" =~ \.\. ]]; then
+              echo "::error file=${dockerfile}::[ERROR] Invalid path (contains ..): $dockerfile"
+              CHECK_FAILED=1
+              FAILED_FILES+=("$dockerfile (invalid path)")
+              continue
+            fi
+
+            # Validate file exists before processing
+            if [ ! -f "$dockerfile" ]; then
+              echo "::error file=${dockerfile}::[ERROR] File does not exist: $dockerfile"
+              CHECK_FAILED=1
+              FAILED_FILES+=("$dockerfile (file not found)")
+              continue
+            fi
+
+            # Check if file has REFRESHED_AT lines, skip if none found
             if ! grep -q "REFRESHED_AT=" "$dockerfile" 2>/dev/null; then
               echo "[INFO] No REFRESHED_AT lines found in $dockerfile (skipping)"
               continue
             fi
 
-            # Get all REFRESHED_AT lines from current version
-            CURRENT_LINES=$(grep "REFRESHED_AT=" "$dockerfile" | sort)
+            # Get all REFRESHED_AT lines from current version and sort for comparison
+            # Using || true to prevent exit on empty result (grep returns 1 when no matches)
+            CURRENT_LINES=$(grep "REFRESHED_AT=" "$dockerfile" | sort || true)
 
             if [ -z "$CURRENT_LINES" ]; then
               echo "[INFO] No REFRESHED_AT lines in current version"
@@ -184,13 +217,13 @@ jobs:
             fi
 
             echo "[INFO] Found REFRESHED_AT lines in current version:"
-            echo "[INFO] $CURRENT_LINES"
-            echo "[INFO] "
+            # Use printf for safe output formatting with proper line prefix
+            printf '%s\n' "$CURRENT_LINES" | sed 's/^/[INFO] /'
+            echo ""
 
-            # Get the old version of the file
-            OLD_CONTENT=$(git show "$BASE_SHA:$dockerfile" 2>/dev/null || echo "")
-
-            if [ -z "$OLD_CONTENT" ]; then
+            # Get the old version of the file from git history
+            # Fail gracefully if file is new or git command fails
+            if ! OLD_CONTENT=$(git show "$BASE_SHA:$dockerfile" 2>/dev/null); then
               echo "[INFO] New Dockerfile (no previous version to compare)"
               continue
             fi
@@ -204,30 +237,38 @@ jobs:
             fi
 
             echo "[INFO] REFRESHED_AT lines in previous version:"
-            echo "[INFO] $OLD_LINES"
-            echo "[INFO] "
+            printf '%s\n' "$OLD_LINES" | sed 's/^/[INFO] /'
+            echo ""
 
-            # Compare the sets of REFRESHED_AT values directly
+            # Compare the sets of REFRESHED_AT values
+            # We check if any current lines exist unchanged in the old version
             ALL_MODIFIED=true
-            UNCHANGED_LINES=""
+            UNCHANGED_LINES=()
 
-            # Check each current line against old lines
+            # Read each current REFRESHED_AT line and check against old version
+            # Using <<< heredoc to avoid subshell issues with pipes
             while IFS= read -r current_line; do
-              # Check if this exact line exists in the old version
+              # Use grep -Fxq for exact fixed-string matching:
+              # -F: treat as fixed string (no regex)
+              # -x: match whole lines only
+              # -q: quiet mode (exit status only)
               if echo "$OLD_LINES" | grep -Fxq "$current_line"; then
                 ALL_MODIFIED=false
-                UNCHANGED_LINES="${UNCHANGED_LINES}${current_line}\n"
+                UNCHANGED_LINES+=("$current_line")
               fi
             done <<< "$CURRENT_LINES"
 
+            # Report error if any REFRESHED_AT lines were not updated
             if [ "$ALL_MODIFIED" = false ]; then
               echo "::error file=${dockerfile}::[ERROR] Not all REFRESHED_AT lines were updated in $dockerfile"
-              echo "[ERROR] "
+              echo "[ERROR]"
               echo "[ERROR] Unchanged lines:"
-              echo -e "[ERROR] $UNCHANGED_LINES"
-              echo "[ERROR] "
+              # Use printf for safe array output with proper formatting
+              printf '[ERROR]   %s\n' "${UNCHANGED_LINES[@]}"
+              echo "[ERROR]"
               echo "[ERROR] Please update all REFRESHED_AT values when modifying this Dockerfile."
               CHECK_FAILED=1
+              FAILED_FILES+=("$dockerfile")
             else
               echo "[INFO] All REFRESHED_AT lines were updated in $dockerfile"
             fi
@@ -235,9 +276,12 @@ jobs:
             echo ""
           done < <(echo "$DOCKERFILES" | jq -r '.[]')
 
-          # Exit with error if any file failed
+          # Exit with error if any file failed validation
+          # Check against 1 specifically for clarity
           if [ "$CHECK_FAILED" -eq 1 ]; then
             echo "::error::[ERROR] One or more Dockerfiles have unchanged REFRESHED_AT lines"
+            echo "[ERROR] Failed files:"
+            printf '[ERROR]   - %s\n' "${FAILED_FILES[@]}"
             exit 1
           fi
 
