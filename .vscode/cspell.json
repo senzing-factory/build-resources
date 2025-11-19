@@ -26,6 +26,7 @@
     "Lookaheads",
     "marocchino",
     "MYPY",
+    "pipefail",
     "pipx",
     "Pylint",
     "redoer",
