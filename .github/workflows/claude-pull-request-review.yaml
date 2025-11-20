@@ -118,9 +118,12 @@ jobs:
           echo "Last 5 lines of prompt:"
           tail -5 prompt-temp.md
 
-          # Try direct file input instead of stdin
-          if ! claude -p prompt-temp.md > review.txt; then
+          # Pass prompt via stdin without any flags
+          echo "Calling Claude CLI..."
+          if ! cat prompt-temp.md | claude > review.txt 2>&1; then
             echo "❌ ERROR: Claude code review failed"
+            echo "Review output:"
+            cat review.txt
             exit 1
           fi
 
@@ -132,6 +135,7 @@ jobs:
             echo "❌ ERROR: Claude produced empty review"
             exit 1
           fi
+
           echo "✅ Code review completed ($(wc -l < review.txt) lines)"
 
       - name: Post review comment
