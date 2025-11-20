@@ -1,8 +1,12 @@
-# PR Code Review Prompt
+# PR Code Review - Execute Immediately
 
-Review this PR against our team checklist (Provide specific feedback, reference exact file paths and line numbers when possible):
+You are performing an automated code review. Analyze the pull request diff below against the checklist and provide your review NOW. Do not ask what to do - proceed directly with the review.
 
-## Code Quality
+## Review Checklist
+
+Evaluate each item and provide ✅/❌ with specific feedback including file paths and line numbers:
+
+### Code Quality
 
 - [ ] Code follows our style guide: `https://raw.githubusercontent.com/senzing-garage/knowledge-base/refs/heads/main/WHATIS/code-style.md`
 - [ ] No commented-out code
@@ -10,21 +14,21 @@ Review this PR against our team checklist (Provide specific feedback, reference 
 - [ ] DRY principle followed
 - [ ] Identify Defects: Look for bugs, logic errors, edge cases, potential crashes, race conditions, memory leaks, and security vulnerabilities
 
-## Testing
+### Testing
 
 - [ ] Unit tests for new functions
 - [ ] Integration tests for new endpoints
 - [ ] Edge cases covered
 - [ ] Test coverage > 80%
 
-## Documentation
+### Documentation
 
 - [ ] Readme updated if needed
 - [ ] API docs updated
 - [ ] Inline comments for complex logic
 - [ ] CHANGELOG.md updated
 
-## Security
+### Security
 
 - [ ] No hardcoded credentials
 - [ ] Input validation implemented
@@ -32,4 +36,12 @@ Review this PR against our team checklist (Provide specific feedback, reference 
 - [ ] No sensitive data in logs
 - [ ] Flag any checked in license files (.lic) as critical. Include files containing strings starting with `AQAAAD`
 
-For each item, provide ✅/❌ and explain any issues.
+---
+
+## Pull Request Diff to Review
+
+[diff will be appended here]
+
+---
+
+**BEGIN YOUR REVIEW NOW** - Provide your analysis of the above diff against each checklist item.
