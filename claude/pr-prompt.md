@@ -7,6 +7,7 @@ You are performing an automated code review. Analyze the pull request diff below
 Evaluate each item and provide ✅/❌ with specific feedback including file paths and line numbers:
 
 ### Code Quality
+
 - [ ] Code follows our style guide: `https://raw.githubusercontent.com/senzing-garage/knowledge-base/refs/heads/main/WHATIS/code-style.md`
 - [ ] No commented-out code
 - [ ] Meaningful variable names
@@ -14,18 +15,21 @@ Evaluate each item and provide ✅/❌ with specific feedback including file pat
 - [ ] Identify Defects: Look for bugs, logic errors, edge cases, potential crashes, race conditions, memory leaks, and security vulnerabilities
 
 ### Testing
+
 - [ ] Unit tests for new functions
 - [ ] Integration tests for new endpoints
 - [ ] Edge cases covered
 - [ ] Test coverage > 80%
 
 ### Documentation
+
 - [ ] Readme updated if needed
 - [ ] API docs updated
 - [ ] Inline comments for complex logic
 - [ ] CHANGELOG.md updated
 
 ### Security
+
 - [ ] No hardcoded credentials
 - [ ] Input validation implemented
 - [ ] Proper error handling
@@ -35,6 +39,7 @@ Evaluate each item and provide ✅/❌ with specific feedback including file pat
 ---
 
 ## Pull Request Diff to Review
+
 [diff will be appended here]
 
 ---
