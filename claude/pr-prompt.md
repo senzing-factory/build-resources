@@ -13,6 +13,7 @@ Evaluate each item and provide ✅/❌ with specific feedback including file pat
 - [ ] Meaningful variable names
 - [ ] DRY principle followed
 - [ ] Identify Defects: Look for bugs, logic errors, edge cases, potential crashes, race conditions, memory leaks, and security vulnerabilities
+- [ ] If there is a project memory claude configuration (./.claude/CLAUDE.md), consider it in the review. The project memory claude configuration should not contain anything that would be specific to a local development environment. It should be general enough that it can be used for any local developer.
 
 ### Testing
 
