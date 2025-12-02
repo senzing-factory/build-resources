@@ -123,11 +123,19 @@ jobs:
 
             echo "Processing $NUM_CHUNKS chunks..."
 
-            # Split the diff into chunks
-            split -b $USABLE_BYTES pr_diff.txt chunk_
+            # Split the diff into chunks by lines to preserve UTF-8 and diff syntax
+            TOTAL_LINES=$(wc -l < pr_diff.txt)
+            LINES_PER_CHUNK=$(( (TOTAL_LINES + NUM_CHUNKS - 1) / NUM_CHUNKS ))
 
-            CHUNK_NUM=1
-            for chunk_file in chunk_*; do
+            echo "Total lines: $TOTAL_LINES, lines per chunk: $LINES_PER_CHUNK"
+
+            split -l "$LINES_PER_CHUNK" -d -a 3 pr_diff.txt chunk_
+
+            # Process chunks in sorted order to ensure deterministic output
+            for chunk_file in $(ls chunk_* | sort); do
+              CHUNK_NUM=$(echo "$chunk_file" | sed 's/chunk_0*//' | sed 's/^$/0/')
+              CHUNK_NUM=$((10#$CHUNK_NUM + 1))
+
               echo ""
               echo "=== Processing chunk $CHUNK_NUM of $NUM_CHUNKS ==="
 
@@ -154,11 +162,9 @@ jobs:
               fi
 
               echo "✅ Chunk $CHUNK_NUM reviewed ($(wc -l < review-chunk-${CHUNK_NUM}.txt) lines)"
-
-              CHUNK_NUM=$((CHUNK_NUM + 1))
             done
 
-            # Combine all reviews
+            # Combine all reviews in sorted order
             echo "Combining reviews..."
             {
               echo "# Combined Code Review"
