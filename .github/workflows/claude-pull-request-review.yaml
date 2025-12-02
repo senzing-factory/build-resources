@@ -132,7 +132,7 @@ jobs:
             split -l "$LINES_PER_CHUNK" -d -a 3 pr_diff.txt chunk_
 
             # Process chunks in sorted order to ensure deterministic output
-            for chunk_file in $(ls chunk_* | sort); do
+            for chunk_file in chunk_*; do
               CHUNK_NUM=$(echo "$chunk_file" | sed 's/chunk_0*//' | sed 's/^$/0/')
               CHUNK_NUM=$((10#$CHUNK_NUM + 1))
 
