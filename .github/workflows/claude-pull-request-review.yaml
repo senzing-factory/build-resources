@@ -94,15 +94,8 @@ jobs:
       - name: Create review prompt
         if: env.SKIP_REVIEW != 'true'
         run: |
-          cp build-resources/claude/pr-prompt.md prompt-temp.md
-          {
-            echo ""
-            echo "## Pull Request Diff"
-            echo '```diff'
-            cat pr_diff.txt
-            echo '```'
-          } >> prompt-temp.md
-          echo "✅ Review prompt created ($(wc -l < prompt-temp.md) lines)"
+          cp build-resources/claude/pr-prompt.md prompt-header.md
+          echo "✅ Prompt header created"
 
       - name: Run Claude Code Review
         env:
@@ -110,33 +103,126 @@ jobs:
         if: env.SKIP_REVIEW != 'true'
         run: |
           echo "Running Claude code review..."
-          echo "Prompt size: $(wc -l < prompt-temp.md) lines, $(wc -c < prompt-temp.md) bytes"
-
-          # Show first and last few lines of prompt to verify it's complete
-          echo "First 5 lines of prompt:"
-          head -5 prompt-temp.md
-          echo "Last 5 lines of prompt:"
-          tail -5 prompt-temp.md
-
-          # Pass prompt via stdin without any flags
-          echo "Calling Claude CLI..."
-          if ! cat prompt-temp.md | claude > review.txt 2>&1; then
-            echo "❌ ERROR: Claude code review failed"
-            echo "Review output:"
-            cat review.txt
-            exit 1
+          
+          MAX_BYTES=800000  # 800KB limit per chunk to stay well under limits
+          DIFF_BYTES=$(wc -c < pr_diff.txt)
+          HEADER_BYTES=$(wc -c < prompt-header.md)
+          
+          echo "Diff size: $DIFF_BYTES bytes"
+          echo "Header size: $HEADER_BYTES bytes"
+          
+          # Calculate if we need to chunk
+          TOTAL_ESTIMATED=$((HEADER_BYTES + DIFF_BYTES + 200))
+          
+          if [ "$TOTAL_ESTIMATED" -gt "$MAX_BYTES" ]; then
+            echo "⚠️ Large PR detected, will process in chunks..."
+            
+            # Calculate number of chunks needed
+            USABLE_BYTES=$((MAX_BYTES - HEADER_BYTES - 200))
+            NUM_CHUNKS=$(( (DIFF_BYTES + USABLE_BYTES - 1) / USABLE_BYTES ))
+            
+            echo "Processing $NUM_CHUNKS chunks..."
+            
+            # Split the diff into chunks
+            split -b $USABLE_BYTES pr_diff.txt chunk_
+            
+            CHUNK_NUM=1
+            for chunk_file in chunk_*; do
+              echo ""
+              echo "=== Processing chunk $CHUNK_NUM of $NUM_CHUNKS ==="
+              
+              # Create prompt for this chunk
+              cat prompt-header.md > prompt-chunk.md
+              {
+                echo ""
+                echo "## Pull Request Diff (Part $CHUNK_NUM of $NUM_CHUNKS)"
+                echo '```diff'
+                cat "$chunk_file"
+                echo '```'
+                echo ""
+                echo "**Note**: This is part $CHUNK_NUM of $NUM_CHUNKS. Focus on reviewing the code shown above."
+              } >> prompt-chunk.md
+              
+              echo "Chunk prompt size: $(wc -c < prompt-chunk.md) bytes"
+              
+              # Review this chunk
+              if ! cat prompt-chunk.md | claude > "review-chunk-${CHUNK_NUM}.txt" 2>&1; then
+                echo "❌ ERROR: Claude code review failed on chunk $CHUNK_NUM"
+                echo "Review output:"
+                cat "review-chunk-${CHUNK_NUM}.txt"
+                exit 1
+              fi
+              
+              echo "✅ Chunk $CHUNK_NUM reviewed ($(wc -l < review-chunk-${CHUNK_NUM}.txt) lines)"
+              
+              CHUNK_NUM=$((CHUNK_NUM + 1))
+            done
+            
+            # Combine all reviews
+            echo "Combining reviews..."
+            {
+              echo "# Combined Code Review"
+              echo ""
+              for i in $(seq 1 $NUM_CHUNKS); do
+                echo "## Review Part $i of $NUM_CHUNKS"
+                echo ""
+                cat "review-chunk-${i}.txt"
+                echo ""
+                echo "---"
+                echo ""
+              done
+            } > review.txt
+            
+            # Cleanup
+            rm chunk_* review-chunk-*.txt prompt-chunk.md
+            
+            echo "✅ All chunks reviewed and combined"
+            
+          else
+            echo "✅ PR size is manageable, processing as single review..."
+            
+            # Create single prompt
+            cat prompt-header.md > prompt-temp.md
+            {
+              echo ""
+              echo "## Pull Request Diff"
+              echo '```diff'
+              cat pr_diff.txt
+              echo '```'
+            } >> prompt-temp.md
+            
+            echo "Prompt size: $(wc -c < prompt-temp.md) bytes"
+            
+            # Show first and last few lines of prompt to verify it's complete
+            echo "First 5 lines of prompt:"
+            head -5 prompt-temp.md
+            echo "Last 5 lines of prompt:"
+            tail -5 prompt-temp.md
+            
+            # Pass prompt via stdin
+            echo "Calling Claude CLI..."
+            if ! cat prompt-temp.md | claude > review.txt 2>&1; then
+              echo "❌ ERROR: Claude code review failed"
+              echo "Review output:"
+              cat review.txt
+              exit 1
+            fi
+            
+            echo "✅ Review completed"
           fi
-
+          
           # Show the actual review output for debugging
-          echo "Review output:"
-          cat review.txt
-
+          echo ""
+          echo "Review output (first 50 lines):"
+          head -50 review.txt
+          
           if [ ! -s review.txt ]; then
             echo "❌ ERROR: Claude produced empty review"
             exit 1
           fi
-
-          echo "✅ Code review completed ($(wc -l < review.txt) lines)"
+          
+          echo ""
+          echo "✅ Code review completed ($(wc -l < review.txt) lines total)"
 
       - name: Post review comment
         env:
