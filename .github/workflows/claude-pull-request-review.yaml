@@ -104,7 +104,7 @@ jobs:
         run: |
           echo "Running Claude code review..."
 
-          MAX_BYTES=800000  # 800KB limit per chunk to stay well under limits
+          MAX_BYTES=200000  # 200KB limit per chunk to stay well under limits
           DIFF_BYTES=$(wc -c < pr_diff.txt)
           HEADER_BYTES=$(wc -c < prompt-header.md)
 
