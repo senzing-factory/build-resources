@@ -103,17 +103,17 @@ jobs:
         if: env.SKIP_REVIEW != 'true'
         run: |
           echo "Running Claude code review..."
-          
+
           MAX_BYTES=800000  # 800KB limit per chunk to stay well under limits
           DIFF_BYTES=$(wc -c < pr_diff.txt)
           HEADER_BYTES=$(wc -c < prompt-header.md)
-          
+
           echo "Diff size: $DIFF_BYTES bytes"
           echo "Header size: $HEADER_BYTES bytes"
-          
+
           # Calculate if we need to chunk
           TOTAL_ESTIMATED=$((HEADER_BYTES + DIFF_BYTES + 200))
-          
+
           if [ "$TOTAL_ESTIMATED" -gt "$MAX_BYTES" ]; then
             echo "⚠️ Large PR detected, will process in chunks..."
             
@@ -210,17 +210,17 @@ jobs:
             
             echo "✅ Review completed"
           fi
-          
+
           # Show the actual review output for debugging
           echo ""
           echo "Review output (first 50 lines):"
           head -50 review.txt
-          
+
           if [ ! -s review.txt ]; then
             echo "❌ ERROR: Claude produced empty review"
             exit 1
           fi
-          
+
           echo ""
           echo "✅ Code review completed ($(wc -l < review.txt) lines total)"
 
