@@ -116,21 +116,21 @@ jobs:
 
           if [ "$TOTAL_ESTIMATED" -gt "$MAX_BYTES" ]; then
             echo "⚠️ Large PR detected, will process in chunks..."
-            
+
             # Calculate number of chunks needed
             USABLE_BYTES=$((MAX_BYTES - HEADER_BYTES - 200))
             NUM_CHUNKS=$(( (DIFF_BYTES + USABLE_BYTES - 1) / USABLE_BYTES ))
-            
+
             echo "Processing $NUM_CHUNKS chunks..."
-            
+
             # Split the diff into chunks
             split -b $USABLE_BYTES pr_diff.txt chunk_
-            
+
             CHUNK_NUM=1
             for chunk_file in chunk_*; do
               echo ""
               echo "=== Processing chunk $CHUNK_NUM of $NUM_CHUNKS ==="
-              
+
               # Create prompt for this chunk
               cat prompt-header.md > prompt-chunk.md
               {
@@ -142,9 +142,9 @@ jobs:
                 echo ""
                 echo "**Note**: This is part $CHUNK_NUM of $NUM_CHUNKS. Focus on reviewing the code shown above."
               } >> prompt-chunk.md
-              
+
               echo "Chunk prompt size: $(wc -c < prompt-chunk.md) bytes"
-              
+
               # Review this chunk
               if ! cat prompt-chunk.md | claude > "review-chunk-${CHUNK_NUM}.txt" 2>&1; then
                 echo "❌ ERROR: Claude code review failed on chunk $CHUNK_NUM"
@@ -152,12 +152,12 @@ jobs:
                 cat "review-chunk-${CHUNK_NUM}.txt"
                 exit 1
               fi
-              
+
               echo "✅ Chunk $CHUNK_NUM reviewed ($(wc -l < review-chunk-${CHUNK_NUM}.txt) lines)"
-              
+
               CHUNK_NUM=$((CHUNK_NUM + 1))
             done
-            
+
             # Combine all reviews
             echo "Combining reviews..."
             {
@@ -172,15 +172,15 @@ jobs:
                 echo ""
               done
             } > review.txt
-            
+
             # Cleanup
             rm chunk_* review-chunk-*.txt prompt-chunk.md
-            
+
             echo "✅ All chunks reviewed and combined"
-            
+
           else
             echo "✅ PR size is manageable, processing as single review..."
-            
+
             # Create single prompt
             cat prompt-header.md > prompt-temp.md
             {
@@ -190,15 +190,15 @@ jobs:
               cat pr_diff.txt
               echo '```'
             } >> prompt-temp.md
-            
+
             echo "Prompt size: $(wc -c < prompt-temp.md) bytes"
-            
+
             # Show first and last few lines of prompt to verify it's complete
             echo "First 5 lines of prompt:"
             head -5 prompt-temp.md
             echo "Last 5 lines of prompt:"
             tail -5 prompt-temp.md
-            
+
             # Pass prompt via stdin
             echo "Calling Claude CLI..."
             if ! cat prompt-temp.md | claude > review.txt 2>&1; then
@@ -207,7 +207,7 @@ jobs:
               cat review.txt
               exit 1
             fi
-            
+
             echo "✅ Review completed"
           fi
 
