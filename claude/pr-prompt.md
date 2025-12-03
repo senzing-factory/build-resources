@@ -28,6 +28,7 @@ Evaluate each item and provide ✅/❌ with specific feedback including file pat
 - [ ] API docs updated
 - [ ] Inline comments for complex logic
 - [ ] CHANGELOG.md updated
+- [ ] Markdown files should follow the CommonMark specification: `https://commonmark.org/`. There should be no extra whitespaces and they should be formatted with prettier.
 
 ### Security
 
