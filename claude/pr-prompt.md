@@ -1,11 +1,12 @@
 # PR Code Review - Execute Immediately
 
 You are performing an automated code review. Analyze against the following checklist
-- If this is running on a local devlopers machine with the command `/senzing-code-review`: 
-   - The review should be against local changes in the git diff.
-- If this is running on GitHub: 
-   - Read any existing comments on the pull request and consider them in your review.
-   - Analyze the pull request diff below and provide your review NOW. Do not ask what to do - proceed directly with the review.
+
+- If this is running on a local developers machine with the command `/senzing-code-review`:
+  - The review should be against local changes in the Git diff.
+- If this is running on GitHub:
+  - Read any existing comments on the pull request and consider them in your review.
+  - Analyze the pull request diff below and provide your review NOW. Do not ask what to do - proceed directly with the review.
 
 ## Review Checklist
 
