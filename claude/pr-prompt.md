@@ -1,10 +1,16 @@
 # PR Code Review - Execute Immediately
 
-You are performing an automated code review. Analyze the pull request diff below against the checklist and provide your review NOW. Do not ask what to do - proceed directly with the review.
+You are performing an automated code review. Analyze against the following checklist
+
+- If this is running on a local developers machine with the command `/senzing-code-review`:
+  - The review should be against local changes in the Git diff.
+- If this is running on GitHub:
+  - Read any existing comments on the pull request and consider them in your review.
+  - Analyze the pull request diff below and provide your review NOW. Do not ask what to do - proceed directly with the review.
 
 ## Review Checklist
 
-Evaluate each item and provide ✅/❌ with specific feedback including file paths and line numbers:
+Evaluate each item and provide ✅/❌ with specific feedback including file paths and line numbers (line numbers should be specific to the complete file, not from the diff):
 
 ### Code Quality
 
