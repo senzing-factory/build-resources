@@ -1,0 +1,10 @@
+{
+    "rules": {
+        "terminology": {
+            "exclude": [
+                "bug fix",
+                "code-review"
+            ]
+        }
+    }
+}
