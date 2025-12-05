@@ -12,7 +12,6 @@
     "dockerfiles",
     "dockerhub",
     "dorny",
-    "dorny",
     "elif",
     "esac",
     "esbenp",
@@ -22,6 +21,7 @@
     "ICLA",
     "irongut",
     "ISORT",
+    "keepachangelog",
     "leonsteinhaeuser",
     "Lookaheads",
     "marocchino",
@@ -40,5 +40,7 @@
     "testcoverage",
     "vladopajic"
   ],
-  "ignorePaths": [".git/**"]
+  "ignorePaths": [
+    ".git/**"
+  ]
 }
