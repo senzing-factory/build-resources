@@ -16,5 +16,8 @@
    4. In "Fixed in {new-semantic-version}" section, report fixes since last versioned release in human terms.
    5. Do not include changes to any folders or files starting with a dot (".").
    6. Adhere to the following standards:
-      1. <https://keepachangelog.com/en/1.0.0/>
-      2. <https://semver.org/spec/v2.0.0.html>
+      1. [https://keepachangelog.com/en/1.0.0]
+      2. [https://semver.org/spec/v2.0.0.html]
+
+[https://keepachangelog.com/en/1.0.0]: https://keepachangelog.com/en/1.0.0/
+[https://semver.org/spec/v2.0.0.html]: https://semver.org/spec/v2.0.0.html
