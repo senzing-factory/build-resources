@@ -87,6 +87,7 @@ jobs:
           VALIDATE_GO_RELEASER: false
           VALIDATE_GOOGLE_JAVA_FORMAT: false
           VALIDATE_JAVA: false
+          VALIDATE_NATURAL_LANGUAGE: false
           VALIDATE_PYTHON: false
           VALIDATE_PYTHON_BLACK: false
           VALIDATE_PYTHON_FLAKE8: false
