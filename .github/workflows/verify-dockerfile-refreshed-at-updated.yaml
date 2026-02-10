@@ -258,8 +258,9 @@ jobs:
                 # REFRESHED_AT date is today — meaning the value is already
                 # current and there is nothing to bump.
                 TODAY=$(date +%Y-%m-%d)
-                if echo "$current_line" | grep -q "$TODAY"; then
+                if echo "$current_line" | grep -qE "${TODAY}($|[^0-9])"; then
                   echo "[INFO] REFRESHED_AT matches base but contains today's date ($TODAY) — OK"
+                  continue
                 else
                   ALL_MODIFIED=false
                   UNCHANGED_LINES+=("$current_line")
