@@ -254,8 +254,22 @@ jobs:
               # -x: match whole lines only
               # -q: quiet mode (exit status only)
               if echo "$OLD_LINES" | grep -Fxq "$current_line"; then
-                ALL_MODIFIED=false
-                UNCHANGED_LINES+=("$current_line")
+                # Value matches base branch. This is acceptable only if the
+                # REFRESHED_AT date is today — meaning the value is already
+                # current and there is nothing to bump.
+                TODAY=$(date +%Y-%m-%d)
+                YESTERDAY=$(date -d "yesterday" +%Y-%m-%d 2>/dev/null || date -v-1d +%Y-%m-%d 2>/dev/null || echo "")
+                DATE_PATTERN="${TODAY}"
+                if [ -n "$YESTERDAY" ]; then
+                  DATE_PATTERN="${TODAY}|${YESTERDAY}"
+                fi
+                if echo "$current_line" | grep -qE "(${DATE_PATTERN})($|[^0-9])"; then
+                  echo "[INFO] REFRESHED_AT matches base but is recent (${DATE_PATTERN}) — OK"
+                  continue
+                else
+                  ALL_MODIFIED=false
+                  UNCHANGED_LINES+=("$current_line")
+                fi
               fi
             done <<< "$CURRENT_LINES"
 
