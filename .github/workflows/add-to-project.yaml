@@ -9,12 +9,8 @@ on:
       project-number:
         required: true
         type: string
-    outputs:
-      job-status:
-        description: "job status"
-        value: ${{ jobs.add-to-project.outputs.job-status }}
     secrets:
-      SENZING_GITHUB_PROJECT_RW_TOKEN:
+      PROJECT_RW_TOKEN:
         required: false
 
 permissions: {}
@@ -22,8 +18,6 @@ permissions: {}
 jobs:
   add-to-project:
     name: add to project
-    outputs:
-      job-status: ${{ job.status }}
     permissions:
       repository-projects: write
     runs-on: ubuntu-latest
@@ -32,5 +26,5 @@ jobs:
       - name: add to project
         uses: actions/add-to-project@v1.0.2
         with:
-          github-token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+          github-token: ${{ secrets.PROJECT_RW_TOKEN }}
           project-url: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"

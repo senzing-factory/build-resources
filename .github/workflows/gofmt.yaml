@@ -2,17 +2,11 @@ name: gofmt
 
 on:
   workflow_call:
-    outputs:
-      job-status:
-        description: "job status"
-        value: ${{ jobs.gofmt.outputs.job-status }}
 
 permissions: {}
 
 jobs:
   gofmt:
-    outputs:
-      job-status: ${{ job.status }}
     permissions:
       contents: read
     runs-on: ubuntu-latest

@@ -2,17 +2,11 @@ name: python coverage comment
 
 on:
   workflow_call:
-    outputs:
-      job-status:
-        description: "job status"
-        value: ${{ jobs.coverage.outputs.job-status }}
 
 permissions: {}
 
 jobs:
   coverage:
-    outputs:
-      job-status: ${{ job.status }}
     permissions:
       contents: write
       pull-requests: write

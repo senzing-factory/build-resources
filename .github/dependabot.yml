@@ -1,9 +1,18 @@
-# Please see the documentation for all configuration options:
-# https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
+# Dependabot configuration for build-resources
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 
 version: 2
 updates:
+  # GitHub Actions
   - package-ecosystem: "github-actions"
+    assignees:
+      - "kernelsam"
+    cooldown:
+      default-days: 21
+      exclude-patterns:
+        - "senzing-factory/*"
     directory: "/"
     schedule:
       interval: "daily"
+    commit-message:
+      prefix: "deps(actions):"

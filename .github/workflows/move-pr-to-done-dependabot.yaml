@@ -7,12 +7,8 @@ on:
         description: Project ID (classic projects not supported).
         required: true
         type: string
-    outputs:
-      job-status:
-        description: "job status"
-        value: ${{ jobs.move-pr-to-done-column.outputs.job-status }}
     secrets:
-      SENZING_GITHUB_PROJECT_RW_TOKEN:
+      PROJECT_RW_TOKEN:
         required: true
 
 permissions: {}
@@ -20,8 +16,6 @@ permissions: {}
 jobs:
   move-pr-to-done-column:
     if: ${{ github.event.pull_request.merged == true || github.event.action  == 'closed' }}
-    outputs:
-      job-status: ${{ job.status }}
     permissions:
       repository-projects: write
     runs-on: ubuntu-latest
@@ -30,7 +24,7 @@ jobs:
       - name: move PR to Done
         uses: leonsteinhaeuser/project-beta-automations@v2.2.1
         with:
-          gh_token: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+          gh_token: ${{ secrets.PROJECT_RW_TOKEN }}
           organization: ${{ github.repository_owner }}
           project_id: ${{ inputs.project }}
           resource_node_id: ${{ github.event.pull_request.node_id }}

@@ -1,1 +1,1 @@
-# template-repository examples
+# build-resources examples

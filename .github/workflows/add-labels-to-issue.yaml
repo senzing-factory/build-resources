@@ -2,14 +2,10 @@ name: add labels to issue
 
 on:
   workflow_call:
-    outputs:
-      job-status:
-        description: "job status"
-        value: ${{ jobs.add-customer-submission-label.outputs.job-status && jobs.add-triage-label.outputs.job-status }}
     secrets:
       ORG_MEMBERSHIP_TOKEN:
         required: false
-      SENZING_MEMBERS:
+      MEMBERS:
         required: false
 
 permissions: {}
@@ -17,26 +13,22 @@ permissions: {}
 jobs:
   add-customer-submission-label:
     name: add customer-submission label
-    outputs:
-      job-status: ${{ job.status }}
     permissions:
       issues: write
     runs-on: ubuntu-latest
 
     steps:
       - name: Add customer-submission label
-        if: ${{ env.SENZING_MEMBER == 'false' }}
+        if: ${{ env.MEMBER == 'false' }}
         uses: andymckay/labeler@1.0.4
         with:
           add-labels: "customer-submission"
         env:
           GITHUB_TOKEN: ${{ secrets.ORG_MEMBERSHIP_TOKEN }}
-          SENZING_MEMBER: ${{ contains( secrets.SENZING_MEMBERS, github.actor ) }}
+          MEMBER: ${{ contains( secrets.MEMBERS, github.actor ) }}
 
   add-triage-label:
     name: add triage label
-    outputs:
-      job-status: ${{ job.status }}
     permissions:
       issues: write
     runs-on: ubuntu-latest
