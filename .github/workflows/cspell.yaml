@@ -1,6 +1,8 @@
 name: cspell
+
 on:
-  workflow_call: null
+  workflow_call:
+
 permissions: {}
 jobs:
   spellcheck:
