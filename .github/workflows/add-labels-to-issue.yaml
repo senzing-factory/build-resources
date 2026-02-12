@@ -24,7 +24,7 @@ jobs:
         with:
           add-labels: "customer-submission"
         env:
-          GITHUB_TOKEN: ${{ secrets.ORG_MEMBERSHIP_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ORG_MEMBERSHIP_TOKEN || github.token }}
           MEMBER: ${{ contains( secrets.MEMBERS, github.actor ) }}
 
   add-triage-label:

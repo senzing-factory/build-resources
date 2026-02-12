@@ -20,7 +20,7 @@ jobs:
       repository-projects: write
     secrets:
       PROJECT_RW_TOKEN: ${{ secrets.PROJECT_RW_TOKEN }}
-    uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@v3
+    uses: senzing-factory/build-resources/.github/workflows/add-to-project.yaml@v4
     with:
       org: ${{ github.repository_owner }}
       project-number: ${{ inputs.project }}
