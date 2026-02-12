@@ -49,7 +49,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-      pull-requests: read
+      pull-requests: write
       statuses: write
     runs-on: ubuntu-latest
 
