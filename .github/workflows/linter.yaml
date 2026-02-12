@@ -13,18 +13,12 @@ on:
         description: "Lint all files or only modified: true/false."
         required: false
         type: boolean
-    outputs:
-      job-status:
-        description: "job status"
-        value: ${{ jobs.lint-code-base.outputs.job-status }}
 
 permissions: {}
 
 jobs:
   lint-code-base:
     name: lint code base
-    outputs:
-      job-status: ${{ job.status }}
     permissions:
       contents: read
       packages: read

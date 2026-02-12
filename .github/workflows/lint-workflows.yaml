@@ -13,10 +13,6 @@ on:
         description: "Lint all files or only modified: true/false."
         required: false
         type: boolean
-    outputs:
-      job-status:
-        description: "job status"
-        value: ${{ jobs.changes.outputs.job-status && jobs.lint-workflows.outputs.job-status }}
 
 permissions: {}
 
@@ -28,7 +24,6 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      job-status: ${{ job.status }}
       workflows: ${{ steps.changes.outputs.workflows }}
     permissions:
       contents: read
@@ -51,8 +46,6 @@ jobs:
     if: ${{ needs.changes.outputs.workflows == 'true' }}
     name: lint workflows
     needs: changes
-    outputs:
-      job-status: ${{ job.status }}
     permissions:
       contents: read
       packages: read

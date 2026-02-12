@@ -8,12 +8,8 @@ on:
         default: "patch"
         required: false
         type: string
-    outputs:
-      job-status:
-        description: "job status"
-        value: ${{ jobs.dependabot-approve-and-merge.outputs.job-status }}
     secrets:
-      SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN:
+      CODEOWNER_PR_RW_TOKEN:
         required: true
 
 permissions: {}
@@ -21,8 +17,6 @@ permissions: {}
 jobs:
   dependabot-approve-and-merge:
     if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
-    outputs:
-      job-status: ${{ job.status }}
     permissions:
       contents: write
       pull-requests: write
@@ -51,7 +45,7 @@ jobs:
 
       - name: approve ${{ inputs.update-type }} version PRs
         env:
-          GH_TOKEN: ${{ secrets.SENZING_GITHUB_CODEOWNER_PR_RW_TOKEN }}
+          GH_TOKEN: ${{ secrets.CODEOWNER_PR_RW_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           UPDATE_TYPE: ${{ inputs.update-type }}
         if: contains( steps.dependabot-metadata.outputs.update-type, inputs.update-type )

@@ -13,18 +13,12 @@ on:
         description: Path to coverage profile file.
         required: false
         type: string
-    outputs:
-      job-status:
-        description: "job status"
-        value: ${{ jobs.go-coverage.outputs.job-status }}
 
 permissions: {}
 
 jobs:
   go-coverage:
     name: go coverage
-    outputs:
-      job-status: ${{ job.status }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
