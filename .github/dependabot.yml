@@ -12,6 +12,10 @@ updates:
       exclude-patterns:
         - "senzing-factory/*"
     directory: "/"
+    groups:
+      senzing-factory:
+        patterns:
+          - "senzing-factory/*"
     schedule:
       interval: "daily"
     commit-message:

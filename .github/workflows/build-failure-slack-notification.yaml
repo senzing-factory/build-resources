@@ -5,13 +5,11 @@ on:
     secrets:
       SLACK_BOT_TOKEN:
         required: true
+      SLACK_CHANNEL:
+        required: true
     inputs:
       job-status:
         required: true
-        type: string
-      slack-channel:
-        default: "devops-community"
-        required: false
         type: string
 
 permissions: {}
@@ -41,6 +39,6 @@ jobs:
                 text:
                   type: "mrkdwn"
                   text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>"
-            channel: "${{ inputs.slack-channel }}"
+            channel: "${{ secrets.SLACK_CHANNEL }}"
             text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>"
           token: ${{ secrets.SLACK_BOT_TOKEN }}
