@@ -35,6 +35,6 @@ jobs:
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: make github.go file
-        uses: senzing-factory/github-action-make-go-github-file@v1
+        uses: senzing-factory/github-action-make-go-github-file@v2
         with:
           actor: ${{ secrets.GIT_ACTOR }}
