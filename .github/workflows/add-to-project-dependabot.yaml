@@ -35,7 +35,12 @@ jobs:
       - name: Move PR to In progress
         env:
           GH_TOKEN: ${{ secrets.PROJECT_RW_TOKEN }}
+          ORG: ${{ github.repository_owner }}
+          PROJECT_NUMBER: ${{ inputs.project }}
+          PR_NODE_ID: ${{ github.event.pull_request.node_id }}
         run: |
+          # shellcheck disable=SC2016
+
           # Get the project node ID
           PROJECT_ID=$(gh api graphql -f query='
             query($org: String!, $number: Int!) {
@@ -44,11 +49,11 @@ jobs:
                   id
                 }
               }
-            }' -f org="${{ github.repository_owner }}" -F number=${{ inputs.project }} --jq '.data.organization.projectV2.id')
+            }' -f org="$ORG" -F number="$PROJECT_NUMBER" --jq '.data.organization.projectV2.id')
 
           # Get the item ID for this PR in the project
           ITEM_ID=$(gh api graphql -f query='
-            query($project: ID!, $nodeId: ID!) {
+            query($project: ID!) {
               node(id: $project) {
                 ... on ProjectV2 {
                   items(first: 100) {
@@ -61,8 +66,8 @@ jobs:
                   }
                 }
               }
-            }' -f project="$PROJECT_ID" -f nodeId="${{ github.event.pull_request.node_id }}" \
-            --jq ".data.node.items.nodes[] | select(.content.id == \"${{ github.event.pull_request.node_id }}\") | .id")
+            }' -f project="$PROJECT_ID" \
+            --jq ".data.node.items.nodes[] | select(.content.id == \"${PR_NODE_ID}\") | .id")
 
           if [ -z "$ITEM_ID" ]; then
             echo "PR not found in project, skipping status update"
@@ -70,7 +75,7 @@ jobs:
           fi
 
           # Get the Status field ID and "In progress" option ID
-          read FIELD_ID OPTION_ID < <(gh api graphql -f query='
+          IFS=' ' read -r FIELD_ID OPTION_ID < <(gh api graphql -f query='
             query($project: ID!) {
               node(id: $project) {
                 ... on ProjectV2 {
