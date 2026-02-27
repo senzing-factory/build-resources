@@ -1,0 +1,156 @@
+name: set project item status
+
+on:
+  workflow_call:
+    inputs:
+      org:
+        description: GitHub organization that owns the project.
+        required: true
+        type: string
+      project-number:
+        description: ProjectV2 number (classic projects not supported).
+        required: true
+        type: string
+      pr-node-id:
+        description: Node ID of the pull request.
+        required: true
+        type: string
+      status:
+        description: "Target status name (e.g., In progress, Done)."
+        required: true
+        type: string
+    secrets:
+      PROJECT_RW_TOKEN:
+        required: true
+
+permissions: {}
+
+jobs:
+  set-status:
+    permissions:
+      repository-projects: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update project item status
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_RW_TOKEN }}
+          ORG: ${{ inputs.org }}
+          PROJECT_NUMBER: ${{ inputs.project-number }}
+          PR_NODE_ID: ${{ inputs.pr-node-id }}
+          TARGET_STATUS: ${{ inputs.status }}
+        run: |
+          # shellcheck disable=SC2016
+
+          # Get the project node ID
+          PROJECT_ID=$(gh api graphql -f query='
+            query($org: String!, $number: Int!) {
+              organization(login: $org) {
+                projectV2(number: $number) {
+                  id
+                }
+              }
+            }' -f org="$ORG" -F number="$PROJECT_NUMBER" \
+            --jq '.data.organization.projectV2.id')
+
+          if [ -z "$PROJECT_ID" ]; then
+            echo "::error::Could not find project #${PROJECT_NUMBER} in org ${ORG}. Verify the project exists and the token has access."
+            exit 1
+          fi
+
+          # Find the PR item in the project (paginated to handle >100 items)
+          ITEM_ID=""
+          CURSOR_ARGS=()
+
+          while true; do
+            # shellcheck disable=SC2016
+            RESPONSE=$(gh api graphql -f query='
+              query($project: ID!, $cursor: String) {
+                node(id: $project) {
+                  ... on ProjectV2 {
+                    items(first: 100, after: $cursor) {
+                      pageInfo {
+                        hasNextPage
+                        endCursor
+                      }
+                      nodes {
+                        id
+                        content {
+                          ... on PullRequest { id }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' -f project="$PROJECT_ID" "${CURSOR_ARGS[@]}")
+
+            ITEM_ID=$(echo "$RESPONSE" | jq -r --arg pr_id "$PR_NODE_ID" \
+              '.data.node.items.nodes[] | select(.content.id == $pr_id) | .id')
+
+            if [ -n "$ITEM_ID" ]; then
+              break
+            fi
+
+            HAS_NEXT=$(echo "$RESPONSE" | jq -r '.data.node.items.pageInfo.hasNextPage')
+            if [ "$HAS_NEXT" != "true" ]; then
+              break
+            fi
+
+            END_CURSOR=$(echo "$RESPONSE" | jq -r '.data.node.items.pageInfo.endCursor')
+            CURSOR_ARGS=(-f cursor="$END_CURSOR")
+          done
+
+          if [ -z "$ITEM_ID" ]; then
+            echo "PR not found in project, skipping status update"
+            exit 0
+          fi
+
+          # Get the Status field ID and target option ID
+          # shellcheck disable=SC2016
+          FIELD_RESPONSE=$(gh api graphql -f query='
+            query($project: ID!) {
+              node(id: $project) {
+                ... on ProjectV2 {
+                  fields(first: 20) {
+                    nodes {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                        options { id name }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f project="$PROJECT_ID")
+
+          FIELD_ID=$(echo "$FIELD_RESPONSE" | jq -r \
+            '.data.node.fields.nodes[] | select(.name == "Status") | .id')
+
+          if [ -z "$FIELD_ID" ]; then
+            echo "::error::Could not find 'Status' field in project #${PROJECT_NUMBER}."
+            exit 1
+          fi
+
+          OPTION_ID=$(echo "$FIELD_RESPONSE" | jq -r --arg status "$TARGET_STATUS" \
+            '.data.node.fields.nodes[] | select(.name == "Status") | .options[] | select(.name == $status) | .id')
+
+          if [ -z "$OPTION_ID" ]; then
+            echo "::error::Could not find '${TARGET_STATUS}' option in Status field of project #${PROJECT_NUMBER}."
+            exit 1
+          fi
+
+          # Update the status
+          # shellcheck disable=SC2016
+          gh api graphql -f query='
+            mutation($project: ID!, $item: ID!, $field: ID!, $value: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $project
+                itemId: $item
+                fieldId: $field
+                value: { singleSelectOptionId: $value }
+              }) {
+                projectV2Item { id }
+              }
+            }' -f project="$PROJECT_ID" -f item="$ITEM_ID" -f field="$FIELD_ID" -f value="$OPTION_ID"
+
+          echo "Moved PR to '${TARGET_STATUS}'"
