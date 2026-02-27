@@ -19,13 +19,74 @@ jobs:
     permissions:
       repository-projects: write
     runs-on: ubuntu-latest
-
     steps:
-      - name: move PR to Done
-        uses: leonsteinhaeuser/project-beta-automations@v2.2.1
-        with:
-          gh_token: ${{ secrets.PROJECT_RW_TOKEN }}
-          organization: ${{ github.repository_owner }}
-          project_id: ${{ inputs.project }}
-          resource_node_id: ${{ github.event.pull_request.node_id }}
-          status_value: "Done"
+      - name: Move PR to Done
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_RW_TOKEN }}
+        run: |
+          # Get the project node ID
+          PROJECT_ID=$(gh api graphql -f query='
+            query($org: String!, $number: Int!) {
+              organization(login: $org) {
+                projectV2(number: $number) {
+                  id
+                }
+              }
+            }' -f org="${{ github.repository_owner }}" -F number=${{ inputs.project }} --jq '.data.organization.projectV2.id')
+
+          # Get the item ID for this PR in the project
+          ITEM_ID=$(gh api graphql -f query='
+            query($project: ID!) {
+              node(id: $project) {
+                ... on ProjectV2 {
+                  items(first: 100) {
+                    nodes {
+                      id
+                      content {
+                        ... on PullRequest { id }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f project="$PROJECT_ID" \
+            --jq ".data.node.items.nodes[] | select(.content.id == \"${{ github.event.pull_request.node_id }}\") | .id")
+
+          if [ -z "$ITEM_ID" ]; then
+            echo "PR not found in project, skipping status update"
+            exit 0
+          fi
+
+          # Get the Status field ID and "Done" option ID
+          read FIELD_ID OPTION_ID < <(gh api graphql -f query='
+            query($project: ID!) {
+              node(id: $project) {
+                ... on ProjectV2 {
+                  fields(first: 20) {
+                    nodes {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                        options { id name }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f project="$PROJECT_ID" \
+            --jq '.data.node.fields.nodes[] | select(.name == "Status") | .id + " " + (.options[] | select(.name == "Done") | .id)')
+
+          # Update the status
+          gh api graphql -f query='
+            mutation($project: ID!, $item: ID!, $field: ID!, $value: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $project
+                itemId: $item
+                fieldId: $field
+                value: { singleSelectOptionId: $value }
+              }) {
+                projectV2Item { id }
+              }
+            }' -f project="$PROJECT_ID" -f item="$ITEM_ID" -f field="$FIELD_ID" -f value="$OPTION_ID"
+
+          echo "Moved PR to 'Done'"
