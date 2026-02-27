@@ -26,16 +26,15 @@ jobs:
       project-number: ${{ inputs.project }}
 
   move-pr-to-in-progress-column:
+    needs: add-pr-to-project
     if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && ( github.event.action  == 'opened' || github.event.action  == 'reopened') }}
     permissions:
       repository-projects: write
-    runs-on: ubuntu-latest
-    steps:
-      - name: move PR to In progress
-        uses: leonsteinhaeuser/project-beta-automations@v2.2.1
-        with:
-          gh_token: ${{ secrets.PROJECT_RW_TOKEN }}
-          organization: ${{ github.repository_owner }}
-          project_id: ${{ inputs.project }}
-          resource_node_id: ${{ github.event.pull_request.node_id }}
-          status_value: "In progress"
+    secrets:
+      PROJECT_RW_TOKEN: ${{ secrets.PROJECT_RW_TOKEN }}
+    uses: senzing-factory/build-resources/.github/workflows/set-project-item-status.yaml@v4
+    with:
+      org: ${{ github.repository_owner }}
+      project-number: ${{ inputs.project }}
+      pr-node-id: ${{ github.event.pull_request.node_id }}
+      status: In progress

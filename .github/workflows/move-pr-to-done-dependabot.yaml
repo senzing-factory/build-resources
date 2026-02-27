@@ -18,14 +18,11 @@ jobs:
     if: ${{ github.event.pull_request.merged == true || github.event.action  == 'closed' }}
     permissions:
       repository-projects: write
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: move PR to Done
-        uses: leonsteinhaeuser/project-beta-automations@v2.2.1
-        with:
-          gh_token: ${{ secrets.PROJECT_RW_TOKEN }}
-          organization: ${{ github.repository_owner }}
-          project_id: ${{ inputs.project }}
-          resource_node_id: ${{ github.event.pull_request.node_id }}
-          status_value: "Done"
+    secrets:
+      PROJECT_RW_TOKEN: ${{ secrets.PROJECT_RW_TOKEN }}
+    uses: senzing-factory/build-resources/.github/workflows/set-project-item-status.yaml@v4
+    with:
+      org: ${{ github.repository_owner }}
+      project-number: ${{ inputs.project }}
+      pr-node-id: ${{ github.event.pull_request.node_id }}
+      status: Done
