@@ -40,4 +40,5 @@ jobs:
           BANDIT_TARGETS: ${{ inputs.targets }}
         run: |
           pip install bandit
-          bandit -r $BANDIT_TARGETS
+          IFS=' ' read -ra targets <<< "$BANDIT_TARGETS"
+          bandit -r "${targets[@]}"
