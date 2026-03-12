@@ -1,0 +1,41 @@
+name: Bandit
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        default: "3.13"
+        description: Python version to use for running Bandit
+        required: false
+        type: string
+      targets:
+        default: src
+        description: Space-separated list of directories to scan
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  bandit:
+    name: Bandit
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Run Bandit
+        run: |
+          pip install bandit
+          bandit -r ${{ inputs.targets }}
