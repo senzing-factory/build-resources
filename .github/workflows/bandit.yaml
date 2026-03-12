@@ -36,6 +36,8 @@ jobs:
           python-version: ${{ inputs.python-version }}
 
       - name: Run Bandit
+        env:
+          BANDIT_TARGETS: ${{ inputs.targets }}
         run: |
           pip install bandit
-          bandit -r ${{ inputs.targets }}
+          bandit -r $BANDIT_TARGETS
