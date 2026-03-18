@@ -151,7 +151,7 @@ jobs:
               echo "Chunk prompt size: $(wc -c < prompt-chunk.md) bytes"
 
               # Review this chunk
-              if ! cat prompt-chunk.md | claude > "review-chunk-${CHUNK_NUM}.txt" 2>&1; then
+              if ! cat prompt-chunk.md | claude -p --disallowedTools "WebFetch,WebSearch" > "review-chunk-${CHUNK_NUM}.txt" 2>&1; then
                 echo "❌ ERROR: Claude code review failed on chunk $CHUNK_NUM"
                 echo "Review output:"
                 cat "review-chunk-${CHUNK_NUM}.txt"
@@ -204,7 +204,7 @@ jobs:
 
             # Pass prompt via stdin
             echo "Calling Claude CLI..."
-            if ! cat prompt-temp.md | claude > review.txt 2>&1; then
+            if ! cat prompt-temp.md | claude -p --disallowedTools "WebFetch,WebSearch" > review.txt 2>&1; then
               echo "❌ ERROR: Claude code review failed"
               echo "Review output:"
               cat review.txt
