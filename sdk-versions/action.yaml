@@ -14,4 +14,4 @@ runs:
       id: versions
       shell: bash
       run: |
-        echo 'senzingsdk-versions=["production-v4","staging-v4","4.3.0","4.2.3"]' >> "$GITHUB_OUTPUT"
+        echo 'senzingsdk-versions=["production-v4","staging-v4","4.3.0"]' >> "$GITHUB_OUTPUT"
