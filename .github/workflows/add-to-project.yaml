@@ -26,7 +26,7 @@ jobs:
       repository-projects: write
     runs-on: ubuntu-latest
     env:
-      SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
     steps:
       - name: add to project
@@ -36,7 +36,7 @@ jobs:
           project-url: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
 
       - name: Notify Slack on failure
-        if: failure() && env.SLACK_TOKEN != ''
+        if: (failure() || cancelled()) && env.SLACK_BOT_TOKEN != ''
         uses: senzing-factory/build-resources/slack-failure-notification@v4
         with:
           job-status: ${{ job.status }}

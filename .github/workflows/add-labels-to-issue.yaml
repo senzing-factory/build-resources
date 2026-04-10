@@ -21,7 +21,7 @@ jobs:
       issues: write
     runs-on: ubuntu-latest
     env:
-      SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
     steps:
       - name: Add customer-submission label
@@ -34,7 +34,7 @@ jobs:
           MEMBER: ${{ contains( secrets.MEMBERS, github.actor ) }}
 
       - name: Notify Slack on failure
-        if: failure() && env.SLACK_TOKEN != ''
+        if: (failure() || cancelled()) && env.SLACK_BOT_TOKEN != ''
         uses: senzing-factory/build-resources/slack-failure-notification@v4
         with:
           job-status: ${{ job.status }}
@@ -47,7 +47,7 @@ jobs:
       issues: write
     runs-on: ubuntu-latest
     env:
-      SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
     steps:
       - name: add triage label
@@ -56,7 +56,7 @@ jobs:
           add-labels: "triage"
 
       - name: Notify Slack on failure
-        if: failure() && env.SLACK_TOKEN != ''
+        if: (failure() || cancelled()) && env.SLACK_BOT_TOKEN != ''
         uses: senzing-factory/build-resources/slack-failure-notification@v4
         with:
           job-status: ${{ job.status }}
