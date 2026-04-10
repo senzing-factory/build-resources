@@ -3,3 +3,8 @@ rules:
     config:
       policies:
         "*": ref-pin
+  secrets-outside-env:
+    ignore:
+      - .github/workflows/add-to-project.yaml
+      - .github/workflows/add-labels-to-issue.yaml
+      - .github/workflows/add-to-project-dependabot.yaml

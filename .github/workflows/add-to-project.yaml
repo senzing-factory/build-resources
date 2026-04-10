@@ -34,8 +34,10 @@ jobs:
           project-url: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
 
       - name: Notify Slack on failure
-        if: failure() && secrets.SLACK_BOT_TOKEN != ''
+        if: failure() && env.SLACK_TOKEN != ''
         uses: senzing-factory/build-resources/slack-failure-notification@v4
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         with:
           job-status: ${{ job.status }}
           slack-channel: ${{ secrets.SLACK_CHANNEL }}

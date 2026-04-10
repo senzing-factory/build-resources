@@ -32,8 +32,10 @@ jobs:
           MEMBER: ${{ contains( secrets.MEMBERS, github.actor ) }}
 
       - name: Notify Slack on failure
-        if: failure() && secrets.SLACK_BOT_TOKEN != ''
+        if: failure() && env.SLACK_TOKEN != ''
         uses: senzing-factory/build-resources/slack-failure-notification@v4
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         with:
           job-status: ${{ job.status }}
           slack-channel: ${{ secrets.SLACK_CHANNEL }}
@@ -52,8 +54,10 @@ jobs:
           add-labels: "triage"
 
       - name: Notify Slack on failure
-        if: failure() && secrets.SLACK_BOT_TOKEN != ''
+        if: failure() && env.SLACK_TOKEN != ''
         uses: senzing-factory/build-resources/slack-failure-notification@v4
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         with:
           job-status: ${{ job.status }}
           slack-channel: ${{ secrets.SLACK_CHANNEL }}
