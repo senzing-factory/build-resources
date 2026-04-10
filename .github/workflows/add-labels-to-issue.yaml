@@ -7,6 +7,10 @@ on:
         required: false
       MEMBERS:
         required: false
+      SLACK_BOT_TOKEN:
+        required: false
+      SLACK_CHANNEL:
+        required: false
 
 permissions: {}
 
@@ -27,6 +31,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.ORG_MEMBERSHIP_TOKEN || github.token }}
           MEMBER: ${{ contains( secrets.MEMBERS, github.actor ) }}
 
+      - name: Notify Slack on failure
+        if: failure() && secrets.SLACK_BOT_TOKEN != ''
+        uses: senzing-factory/build-resources/slack-failure-notification@v4
+        with:
+          job-status: ${{ job.status }}
+          slack-channel: ${{ secrets.SLACK_CHANNEL }}
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+
   add-triage-label:
     name: add triage label
     permissions:
@@ -38,3 +50,11 @@ jobs:
         uses: andymckay/labeler@1.0.4
         with:
           add-labels: "triage"
+
+      - name: Notify Slack on failure
+        if: failure() && secrets.SLACK_BOT_TOKEN != ''
+        uses: senzing-factory/build-resources/slack-failure-notification@v4
+        with:
+          job-status: ${{ job.status }}
+          slack-channel: ${{ secrets.SLACK_CHANNEL }}
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
