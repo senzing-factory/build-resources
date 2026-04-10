@@ -11,6 +11,10 @@ on:
       job-status:
         required: true
         type: string
+      additional-info:
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -38,8 +42,8 @@ jobs:
               - type: "section"
                 text:
                   type: "mrkdwn"
-                  text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>"
+                  text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>${{ inputs.additional-info != '' && format(' | {0}', inputs.additional-info) || '' }}"
             channel: "${{ secrets.SLACK_CHANNEL }}"
-            text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>"
+            text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>${{ inputs.additional-info != '' && format(' | {0}', inputs.additional-info) || '' }}"
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           errors: true
