@@ -5,6 +5,6 @@ rules:
         "*": ref-pin
   secrets-outside-env:
     ignore:
-      - .github/workflows/add-to-project.yaml
-      - .github/workflows/add-labels-to-issue.yaml
-      - .github/workflows/add-to-project-dependabot.yaml
+      - add-to-project.yaml
+      - add-labels-to-issue.yaml
+      - add-to-project-dependabot.yaml
