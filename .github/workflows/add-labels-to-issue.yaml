@@ -20,6 +20,8 @@ jobs:
     permissions:
       issues: write
     runs-on: ubuntu-latest
+    env:
+      SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
     steps:
       - name: Add customer-submission label
@@ -34,8 +36,6 @@ jobs:
       - name: Notify Slack on failure
         if: failure() && env.SLACK_TOKEN != ''
         uses: senzing-factory/build-resources/slack-failure-notification@v4
-        env:
-          SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         with:
           job-status: ${{ job.status }}
           slack-channel: ${{ secrets.SLACK_CHANNEL }}
@@ -46,6 +46,8 @@ jobs:
     permissions:
       issues: write
     runs-on: ubuntu-latest
+    env:
+      SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
     steps:
       - name: add triage label
@@ -56,8 +58,6 @@ jobs:
       - name: Notify Slack on failure
         if: failure() && env.SLACK_TOKEN != ''
         uses: senzing-factory/build-resources/slack-failure-notification@v4
-        env:
-          SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         with:
           job-status: ${{ job.status }}
           slack-channel: ${{ secrets.SLACK_CHANNEL }}

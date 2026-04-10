@@ -21,8 +21,8 @@ runs:
   using: composite
   steps:
     - name: Send Slack notification
-      if: ${{ always() }}
-      uses: slackapi/slack-github-action@v3
+      if: ${{ inputs.job-status == 'failure' || inputs.job-status == 'cancelled' }}
+      uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
       env:
         BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
       with:
