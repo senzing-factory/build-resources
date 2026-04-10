@@ -1,0 +1,48 @@
+name: Slack failure notification
+description: Sends a Slack notification when a job fails. Can be used as a step inside any job, including matrix jobs.
+author: support@senzing.com
+
+inputs:
+  job-status:
+    description: The status of the job (e.g., failure, cancelled)
+    required: true
+  slack-channel:
+    description: Slack channel ID to post to
+    required: true
+  slack-bot-token:
+    description: Slack bot token for authentication
+    required: true
+  additional-info:
+    description: Optional context to append to the message (e.g., SDK version)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Send Slack notification
+      if: ${{ always() }}
+      uses: slackapi/slack-github-action@v3
+      env:
+        BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+      with:
+        method: chat.postMessage
+        payload: |
+          attachments:
+            - color: "FF0000"
+              fields:
+                - title: "Status"
+                  short: true
+                  value: "${{ inputs.job-status }}"
+                - title: "Actor"
+                  short: true
+                  value: "${{ github.actor }}"
+          blocks:
+            - type: "section"
+              text:
+                type: "mrkdwn"
+                text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>${{ inputs.additional-info != '' && format(' | {0}', inputs.additional-info) || '' }}"
+          channel: "${{ inputs.slack-channel }}"
+          text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>${{ inputs.additional-info != '' && format(' | {0}', inputs.additional-info) || '' }}"
+        token: ${{ inputs.slack-bot-token }}
+        errors: true
