@@ -3,3 +3,8 @@ rules:
     config:
       policies:
         "*": ref-pin
+  secrets-outside-env:
+    ignore:
+      - add-to-project.yaml
+      - add-labels-to-issue.yaml
+      - add-to-project-dependabot.yaml

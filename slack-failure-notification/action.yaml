@@ -1,0 +1,50 @@
+name: Slack failure notification
+description: Sends a Slack notification when a job fails. Can be used as a step inside any job, including matrix jobs.
+author: support@senzing.com
+
+inputs:
+  job-status:
+    description: The status of the job (e.g., failure, cancelled)
+    required: true
+  slack-channel:
+    description: Slack channel ID to post to
+    required: true
+  slack-bot-token:
+    description: Slack bot token for authentication
+    required: true
+  additional-info:
+    description: Optional context to append to the message (e.g., SDK version)
+    required: false
+    default: ""
+  branch-name:
+    description: Branch name to display in the notification
+    required: false
+    default: ${{ github.head_ref || github.ref_name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Send Slack notification
+      if: ${{ inputs.job-status == 'failure' || inputs.job-status == 'cancelled' }}
+      uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
+      with:
+        method: chat.postMessage
+        payload: |
+          attachments:
+            - color: "FF0000"
+              fields:
+                - title: "Status"
+                  short: true
+                  value: "${{ inputs.job-status }}"
+                - title: "Actor"
+                  short: true
+                  value: "${{ github.actor }}"
+          blocks:
+            - type: "section"
+              text:
+                type: "mrkdwn"
+                text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ inputs.branch-name }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>${{ inputs.additional-info != '' && format(' | {0}', inputs.additional-info) || '' }}"
+          channel: "${{ inputs.slack-channel }}"
+          text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ inputs.branch-name }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>${{ inputs.additional-info != '' && format(' | {0}', inputs.additional-info) || '' }}"
+        token: ${{ inputs.slack-bot-token }}
+        errors: true

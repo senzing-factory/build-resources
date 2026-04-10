@@ -12,6 +12,10 @@ on:
     secrets:
       PROJECT_RW_TOKEN:
         required: false
+      SLACK_BOT_TOKEN:
+        required: false
+      SLACK_CHANNEL:
+        required: false
 
 permissions: {}
 
@@ -21,6 +25,8 @@ jobs:
     permissions:
       repository-projects: write
     runs-on: ubuntu-latest
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
     steps:
       - name: add to project
@@ -28,3 +34,11 @@ jobs:
         with:
           github-token: ${{ secrets.PROJECT_RW_TOKEN }}
           project-url: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
+
+      - name: Notify Slack on failure
+        if: (failure() || cancelled()) && env.SLACK_BOT_TOKEN != ''
+        uses: senzing-factory/build-resources/slack-failure-notification@v4
+        with:
+          job-status: ${{ job.status }}
+          slack-channel: ${{ secrets.SLACK_CHANNEL }}
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
