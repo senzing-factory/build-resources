@@ -18,6 +18,11 @@ permissions: {}
 
 jobs:
   link-issues:
+    # Skip for dependency bot PRs - their bodies contain upstream issue references
+    # (from changelogs/commits) that don't correspond to issues in this repo.
+    if: >-
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'renovate[bot]'
     runs-on: ubuntu-latest
 
     permissions:
