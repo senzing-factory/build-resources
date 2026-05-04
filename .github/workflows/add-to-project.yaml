@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - name: add to project
-        uses: actions/add-to-project@v1.0.2
+        uses: actions/add-to-project@v2.0.0
         with:
           github-token: ${{ secrets.PROJECT_RW_TOKEN }}
           project-url: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
