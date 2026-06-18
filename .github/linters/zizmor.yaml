@@ -8,3 +8,5 @@ rules:
       - add-to-project.yaml
       - add-labels-to-issue.yaml
       - add-to-project-dependabot.yaml
+      - claude-pull-request-review.yaml
+      - make-go-github-file.yaml
