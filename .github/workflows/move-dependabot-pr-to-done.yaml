@@ -18,6 +18,6 @@ jobs:
       PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
       APP_CLIENT_ID: ${{ secrets.SENZING_GH_PROJECT_APP_CLIENT_ID }}
       APP_PRIVATE_KEY: ${{ secrets.SENZING_GH_PROJECT_APP_PRIVATE_KEY }}
-    uses: senzing-factory/build-resources/.github/workflows/move-pr-to-done-dependabot.yaml@299-skern
+    uses: senzing-factory/build-resources/.github/workflows/move-pr-to-done-dependabot.yaml@v4
     with:
       project: ${{ vars.SENZING_PROJECT_FACTORY }}
