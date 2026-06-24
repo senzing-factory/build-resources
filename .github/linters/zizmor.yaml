@@ -17,3 +17,7 @@ rules:
       # pattern as add-to-project above (reusables can't use environments).
       - move-pr-to-done.yaml
       - set-project-item-status.yaml
+      # Slack-notify + dependabot approve/merge pass secrets to nested steps;
+      # reusables can't gate behind an environment.
+      - build-failure-slack-notification.yaml
+      - dependabot-approve-and-merge.yaml
