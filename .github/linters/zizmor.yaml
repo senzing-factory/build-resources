@@ -13,3 +13,7 @@ rules:
       - add-to-project-dependabot.yaml
       - claude-pull-request-review.yaml
       - make-go-github-file.yaml
+      # Project reusables that pass the App/PAT secrets to nested actions; same
+      # pattern as add-to-project above (reusables can't use environments).
+      - move-pr-to-done.yaml
+      - set-project-item-status.yaml
