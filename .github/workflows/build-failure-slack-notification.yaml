@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: slackapi/slack-github-action@v3
+      - uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         env:
           BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
         with:

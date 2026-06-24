@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       update-type:
-        description: "Semantic version update type: major, minor, patch"
+        description: "Semantic version update type: minor or patch. 'major' is disabled by policy — major bumps are never auto-approved/merged."
         default: "patch"
         required: false
         type: string
@@ -28,18 +28,22 @@ jobs:
           UPDATE_TYPE: ${{ inputs.update-type }}
         run: |
           case "${UPDATE_TYPE}" in
-            "major"|"minor"|"patch")
+            "minor"|"patch")
               echo "[INFO] Update type found."
               ;;
+            "major")
+              echo "[ERROR] Automated approval/merge of 'major' updates is disabled by policy; handle major version bumps manually."
+              exit 1
+              ;;
             *)
-              echo "[ERROR] Update type provided is not one of: major, minor, patch."
+              echo "[ERROR] Update type provided is not one of: minor, patch."
               exit 1
               ;;
           esac
 
       - name: dependabot metadata
         id: dependabot-metadata
-        uses: dependabot/fetch-metadata@v3
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
@@ -48,7 +52,7 @@ jobs:
           GH_TOKEN: ${{ secrets.CODEOWNER_PR_RW_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           UPDATE_TYPE: ${{ inputs.update-type }}
-        if: contains( steps.dependabot-metadata.outputs.update-type, inputs.update-type )
+        if: ${{ contains(steps.dependabot-metadata.outputs.update-type, inputs.update-type) && steps.dependabot-metadata.outputs.update-type != 'version-update:semver-major' }}
         run: |
           gh pr review --approve "$PR_URL" -b "Automated: **approving** this pull request because **it includes a ${UPDATE_TYPE} update**"
 
@@ -56,5 +60,5 @@ jobs:
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        if: contains( steps.dependabot-metadata.outputs.update-type, inputs.update-type )
+        if: ${{ contains(steps.dependabot-metadata.outputs.update-type, inputs.update-type) && steps.dependabot-metadata.outputs.update-type != 'version-update:semver-major' }}
         run: gh pr merge --auto --squash "$PR_URL"

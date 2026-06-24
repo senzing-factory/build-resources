@@ -20,8 +20,15 @@ on:
         required: true
         type: string
     secrets:
+      # Legacy PAT path — DEPRECATED, removed in v5. Provide EITHER this OR the
+      # GitHub App pair below (App takes precedence when present).
       PROJECT_RW_TOKEN:
-        required: true
+        required: false
+      # GitHub App path (preferred). Org-installed App with Projects: read & write.
+      APP_CLIENT_ID:
+        required: false
+      APP_PRIVATE_KEY:
+        required: false
 
 permissions: {}
 
@@ -31,9 +38,37 @@ jobs:
       repository-projects: write
     runs-on: ubuntu-latest
     steps:
+      # Transitional dual auth (v4): prefer the GitHub App; fall back to the PAT.
+      # The PAT path is removed in v5.
+      - name: Select auth mode
+        id: auth
+        env:
+          APP_CLIENT_ID: ${{ secrets.APP_CLIENT_ID }}
+          PAT: ${{ secrets.PROJECT_RW_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$APP_CLIENT_ID" ]; then
+            echo "mode=app" >> "$GITHUB_OUTPUT"
+          elif [ -n "$PAT" ]; then
+            echo "::warning::Using the deprecated PROJECT_RW_TOKEN PAT; migrate to the GitHub App (APP_CLIENT_ID/APP_PRIVATE_KEY) before v5."
+            echo "mode=pat" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Provide either APP_CLIENT_ID + APP_PRIVATE_KEY (preferred) or PROJECT_RW_TOKEN."
+            exit 1
+          fi
+
+      - name: Generate GitHub App token
+        id: app-token
+        if: steps.auth.outputs.mode == 'app'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ inputs.org }}
+
       - name: Update project item status
         env:
-          GH_TOKEN: ${{ secrets.PROJECT_RW_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.PROJECT_RW_TOKEN }}
           ORG: ${{ inputs.org }}
           PROJECT_NUMBER: ${{ inputs.project-number }}
           PR_NODE_ID: ${{ inputs.pr-node-id }}
