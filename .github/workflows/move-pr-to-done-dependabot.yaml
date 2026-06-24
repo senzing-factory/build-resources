@@ -27,7 +27,7 @@ jobs:
       PROJECT_RW_TOKEN: ${{ secrets.PROJECT_RW_TOKEN }}
       APP_CLIENT_ID: ${{ secrets.APP_CLIENT_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
-    uses: senzing-factory/build-resources/.github/workflows/set-project-item-status.yaml@v4
+    uses: senzing-factory/build-resources/.github/workflows/set-project-item-status.yaml@299-skern
     with:
       org: ${{ github.repository_owner }}
       project-number: ${{ inputs.project }}
