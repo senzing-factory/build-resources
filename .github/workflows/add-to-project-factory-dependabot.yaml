@@ -11,7 +11,12 @@ jobs:
     permissions:
       repository-projects: write
     secrets:
+      # Transition: forward both. The reusable prefers the App when its secrets
+      # exist, else falls back to the PAT (removed in v5).
+      # TODO: confirm the org-level App secret names.
       PROJECT_RW_TOKEN: ${{ secrets.SENZING_GITHUB_PROJECT_RW_TOKEN }}
+      APP_CLIENT_ID: ${{ secrets.SENZING_GH_PROJECT_APP_CLIENT_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.SENZING_GH_PROJECT_APP_PRIVATE_KEY }}
     uses: senzing-factory/build-resources/.github/workflows/add-to-project-dependabot.yaml@v4
     with:
       project: ${{ vars.SENZING_PROJECT_FACTORY }}

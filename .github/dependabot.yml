@@ -9,7 +9,10 @@ updates:
       - "kernelsam"
     cooldown:
       default-days: 21
-      exclude-patterns:
+      # `exclude` is the correct cooldown key (NOT `exclude-patterns`, which is
+      # groups-only). The old key voided the whole cooldown block, so Dependabot
+      # applied no cooldown — that's how checkout v7.0.0 was merged release-day.
+      exclude:
         - "senzing-factory/*"
     directory: "/"
     groups:
