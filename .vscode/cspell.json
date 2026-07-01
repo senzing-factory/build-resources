@@ -40,7 +40,7 @@
     "stackoverflow",
     "subshell",
     "testcoverage",
-    "vladopajic",
+    "vladopajic"
   ],
   "ignorePaths": [".git/**"]
 }
