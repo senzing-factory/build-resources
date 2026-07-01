@@ -24,8 +24,6 @@
     "ISORT",
     "keepachangelog",
     "kernelsam",
-    "leonsteinhaeuser",
-    "Lookaheads",
     "marocchino",
     "MYPY",
     "pipefail",
@@ -42,7 +40,7 @@
     "stackoverflow",
     "subshell",
     "testcoverage",
-    "vladopajic"
+    "vladopajic",
   ],
   "ignorePaths": [".git/**"]
 }
