@@ -8,13 +8,15 @@ You are performing an automated code review. Analyze against the following check
   - Read any existing comments on the pull request and consider them in your review.
   - Analyze the pull request diff below and provide your review NOW. Do not ask what to do - proceed directly with the review.
 
+**IMPORTANT — no network access:** WebFetch and WebSearch are disabled for this run. Do NOT attempt to fetch any URL, and do NOT ask for approval to fetch anything. Every link in the checklist below (style guide, CommonMark, etc.) is a reference pointer only — evaluate each item using the diff and your existing knowledge of the referenced standard. Never block or defer the review on retrieving a URL.
+
 ## Review Checklist
 
 Evaluate each item and provide ✅/❌ with specific feedback including file paths and line numbers (line numbers should be specific to the complete file, not from the diff):
 
 ### Code Quality
 
-- [ ] Code follows our style guide: `https://raw.githubusercontent.com/senzing-garage/knowledge-base/refs/heads/main/WHATIS/code-style.md`
+- [ ] Code follows standard style conventions for the language (consistent formatting, naming, and idioms)
 - [ ] No commented-out code
 - [ ] Meaningful variable names
 - [ ] DRY principle followed
