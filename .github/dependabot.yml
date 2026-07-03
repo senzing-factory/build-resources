@@ -14,7 +14,10 @@ updates:
       # applied no cooldown — that's how checkout v7.0.0 was merged release-day.
       exclude:
         - "senzing-factory/*"
-    directory: "/"
+    directories:
+      - "/"
+      - "/sdk-versions"
+      - "/slack-failure-notification"
     groups:
       senzing-factory:
         patterns:
