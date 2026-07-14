@@ -3,6 +3,13 @@ version: 0.2
 
 env:
   shell: bash
+  variables:
+    # Tag for every image built/pushed here, and for the base-image refs the
+    # tools/leaf images build FROM (a versioned run stays self-consistent).
+    # Default "staging" overwrites the rolling tag; override per-run with a
+    # version like 3.12.6-25004 (Start build -> Environment variables, or on
+    # the project) to keep a versioned copy.
+    IMAGE_TAG: staging
 
 phases:
   install:
@@ -35,19 +42,19 @@ phases:
                     "--build-arg SENZING_APT_INSTALL_PACKAGE=senzingapi-runtime=${SENZING_VERSION}"
                     )
         echo "[INFO] $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-                              -t "senzing/senzingapi-runtime:staging""
+                              -t "senzing/senzingapi-runtime:${IMAGE_TAG}""
         $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-                              -t "senzing/senzingapi-runtime:staging"
+                              -t "senzing/senzingapi-runtime:${IMAGE_TAG}"
 
       # Build senzingapi-tools base image
       - |
         cd $CODEBUILD_SRC_DIR_senzingapi_tools  || { echo "Failed to change directory"; exit 1; }
         build_args=(
-                    "--build-arg BASE_IMAGE=public.ecr.aws/senzing/senzingapi-runtime:staging "
+                    "--build-arg BASE_IMAGE=public.ecr.aws/senzing/senzingapi-runtime:${IMAGE_TAG} "
                     "--build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION} "
                     )
         $CODEBUILD_SRC_DIR/aws/docker-build.sh -a "$(printf '%s\n' "${build_args[*]}")" \
-                              -t "senzing/senzingapi-tools:staging"
+                              -t "senzing/senzingapi-tools:${IMAGE_TAG}"
 
       - |
         declare -A repos
@@ -65,14 +72,14 @@ phases:
           git submodule update --init --recursive
 
           if [[ $repo =~ "xterm" || $repo =~ "sshd" ]]; then
-            BASE="public.ecr.aws/senzing/senzingapi-tools:staging"
+            BASE="public.ecr.aws/senzing/senzingapi-tools:${IMAGE_TAG}"
           else
-            BASE="public.ecr.aws/senzing/senzingapi-runtime:staging"
+            BASE="public.ecr.aws/senzing/senzingapi-runtime:${IMAGE_TAG}"
           fi
 
           $CODEBUILD_SRC_DIR/aws/docker-build.sh \
                               -a "--build-arg BASE_IMAGE=${BASE} --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
-                              -t "senzing/${repos[$repo]}:staging"
+                              -t "senzing/${repos[$repo]}:${IMAGE_TAG}"
           test $? -eq 0 || { echo "[ERROR] docker build failed"; exit 1; }
 
         done
