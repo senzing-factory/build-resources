@@ -62,12 +62,20 @@ phases:
         ["senzing-poc-server"]="senzing-poc-server" ["docker-sshd"]=sshd ["stream-loader"]="stream-loader" \
         ["docker-xterm"]="xterm" ["sz_sqs_consumer"]="sz_sqs_consumer" ["sz_simple_redoer"]="sz_simple_redoer")
 
+        # Build every leaf, collecting failures instead of aborting on the
+        # first, so one run surfaces ALL broken images; exit non-zero at the
+        # end if any failed.
+        failed=""
         for repo in "${!repos[@]}"; do
 
           # Codebuild doesn't support "-" in source identifier names
           SRC_DIR=CODEBUILD_SRC_DIR_$(echo $repo | tr '-' '_')
           echo "[INFO] cd ${!SRC_DIR}"
-          cd ${!SRC_DIR} || { echo "[ERROR] Failed to change directory"; exit 1; }
+          if ! cd "${!SRC_DIR}"; then
+            echo "[ERROR] ${repo}: failed to change directory"
+            failed="${failed} ${repo}"
+            continue
+          fi
           echo "[INFO] git submodule update --init --recursive"
           git submodule update --init --recursive
 
@@ -77,9 +85,19 @@ phases:
             BASE="public.ecr.aws/senzing/senzingapi-runtime:${IMAGE_TAG}"
           fi
 
-          $CODEBUILD_SRC_DIR/aws/docker-build.sh \
+          if "$CODEBUILD_SRC_DIR/aws/docker-build.sh" \
                               -a "--build-arg BASE_IMAGE=${BASE} --build-arg SENZING_APT_INSTALL_TOOLS_PACKAGE=senzingapi-tools=${SENZING_VERSION}" \
-                              -t "senzing/${repos[$repo]}:${IMAGE_TAG}"
-          test $? -eq 0 || { echo "[ERROR] docker build failed"; exit 1; }
+                              -t "senzing/${repos[$repo]}:${IMAGE_TAG}"; then
+            echo "[INFO] ${repo}: build OK"
+          else
+            echo "[ERROR] ${repo}: docker build failed"
+            failed="${failed} ${repo}"
+          fi
 
         done
+
+        if [ -n "$failed" ]; then
+          echo "[ERROR] leaf builds failed for:${failed}"
+          exit 1
+        fi
+        echo "[INFO] all leaf images built and pushed for tag ${IMAGE_TAG}"
