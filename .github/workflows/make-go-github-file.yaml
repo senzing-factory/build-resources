@@ -9,6 +9,10 @@ on:
         required: true
       GPG_PRIVATE_KEY:
         required: true
+      SLACK_BOT_TOKEN:
+        required: false
+      SLACK_CHANNEL:
+        required: false
 
 permissions: {}
 
@@ -19,6 +23,8 @@ jobs:
       contents: write
       pull-requests: write
     runs-on: ubuntu-latest
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
     steps:
       - name: checkout repository
@@ -38,3 +44,11 @@ jobs:
         uses: senzing-factory/github-action-make-go-github-file@v2
         with:
           actor: ${{ secrets.GIT_ACTOR }}
+
+      - name: Notify Slack on failure
+        if: (failure() || cancelled()) && env.SLACK_BOT_TOKEN != ''
+        uses: senzing-factory/build-resources/slack-failure-notification@v4
+        with:
+          job-status: ${{ job.status }}
+          slack-channel: ${{ secrets.SLACK_CHANNEL }}
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
