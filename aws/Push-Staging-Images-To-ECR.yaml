@@ -85,7 +85,7 @@ phases:
           # into this leaf's build context so its Dockerfile can COPY it — no token in the image.
           if [[ "$repo" == "sz_sqs_consumer" || "$repo" == "sz_simple_redoer" ]]; then
             echo "[INFO] vendoring senzing_governor.py into ${repo} build context"
-            cp "${CODEBUILD_SRC_DIR_governor_postgresql_transaction_id}/senzing_governor.py" ./senzing_governor.py
+            cp "${CODEBUILD_SRC_DIR_governor_postgresql_transaction_id}/src/senzing_governor.py" ./senzing_governor.py
           fi
 
           if [[ $repo =~ "xterm" || $repo =~ "sshd" ]]; then
