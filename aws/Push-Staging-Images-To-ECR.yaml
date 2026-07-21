@@ -79,6 +79,15 @@ phases:
           echo "[INFO] git submodule update --init --recursive"
           git submodule update --init --recursive
 
+          # Leaves that vendor the Senzing PostgreSQL governor pull it from the
+          # governor-postgresql-transaction-id repo, which is now PRIVATE. It is cloned as a
+          # CodeBuild secondary source (identifier: governor_postgresql_transaction_id) and copied
+          # into this leaf's build context so its Dockerfile can COPY it — no token in the image.
+          if [[ "$repo" == "sz_sqs_consumer" || "$repo" == "sz_simple_redoer" ]]; then
+            echo "[INFO] vendoring senzing_governor.py into ${repo} build context"
+            cp "${CODEBUILD_SRC_DIR_governor_postgresql_transaction_id}/senzing_governor.py" ./senzing_governor.py
+          fi
+
           if [[ $repo =~ "xterm" || $repo =~ "sshd" ]]; then
             BASE="public.ecr.aws/senzing/senzingapi-tools:${IMAGE_TAG}"
           else
