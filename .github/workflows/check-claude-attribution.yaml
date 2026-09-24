@@ -1,0 +1,73 @@
+name: check claude attribution
+
+# Fails a pull request whose commits or description carry a Claude attribution
+# trailer. `.claude/settings.json` sets `attribution: {commit: null, pr: null}`
+# as the default, but `.claude/settings.local.json` OUTRANKS it, so any
+# developer can override locally -- which is how 152 trailers reached 34 repos
+# while four of five templates already carried the setting. The committed
+# setting is the default; this is the enforcement.
+#
+# Scope is the commits the PR introduces, not repository history, so existing
+# trailers do not fail unrelated work.
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  check-claude-attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The PR description is attacker-controlled, so it reaches the script
+      # through env: and never through ${{ }} interpolation into `run:`.
+      - name: check commits and description
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -uo pipefail
+          # Both observed forms, plus the PR-body line. Case-insensitive: the
+          # fleet carries `Co-Authored-By: Claude` and
+          # `Co-authored-by: Claude Opus 4.6`.
+          pattern='co-authored-by:[[:space:]]*claude|generated with[[:space:]]*\[?claude'
+          rc=0
+
+          echo "[INFO] commits ${BASE_SHA}..${HEAD_SHA}"
+          if git log --format='%H%n%B' "${BASE_SHA}..${HEAD_SHA}" \
+               | grep -inE "${pattern}"; then
+            echo "::error::A commit in this pull request carries a Claude attribution trailer."
+            rc=1
+          fi
+
+          if printf '%s' "${PR_BODY}" | grep -inE "${pattern}"; then
+            echo "::error::The pull request description carries a Claude attribution trailer."
+            rc=1
+          fi
+
+          if [ "${rc}" -ne 0 ]; then
+            cat <<'MSG'
+
+          Claude never authors a commit. A trailer is a claim about who verified
+          the change, and it must name the human who did.
+
+          To fix: rewrite the offending commits (git rebase -i, or
+          `git commit --amend` for the tip) and remove the trailer, then
+          force-push. Set `attribution: {commit: null, pr: null}` in
+          `.claude/settings.json` -- and check `.claude/settings.local.json`,
+          which overrides it.
+          MSG
+            exit 1
+          fi
+
+          echo "[INFO] No Claude attribution found."
