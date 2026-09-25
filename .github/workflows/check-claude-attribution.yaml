@@ -78,9 +78,9 @@ jobs:
           # unactionable.
           # Fail closed HERE TOO. `git log -1 ... | grep` has exactly the same
           # defect as the bulk call above: git fails, grep exits 1 on the empty
-          # stream, pipefail reports 1, and an unscannable commit reads as
-          # clean. Redirected from a file rather than piped, so the loop runs in
-          # this shell and rc survives it.
+          # stream, pipefail reports 1, and a commit that cannot be read
+          # reads as clean. Redirected from a file rather than piped, so
+          # the loop runs in this shell and rc survives it.
           while read -r sha; do
             [ -n "${sha}" ] || continue
             if ! git log -1 --format='%B' "${sha}" > msg.txt; then
