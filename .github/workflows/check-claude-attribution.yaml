@@ -76,9 +76,19 @@ jobs:
           # concatenated stream reports a line number into that stream, which
           # identifies nothing and leaves "rewrite the offending commits"
           # unactionable.
+          # Fail closed HERE TOO. `git log -1 ... | grep` has exactly the same
+          # defect as the bulk call above: git fails, grep exits 1 on the empty
+          # stream, pipefail reports 1, and an unscannable commit reads as
+          # clean. Redirected from a file rather than piped, so the loop runs in
+          # this shell and rc survives it.
           while read -r sha; do
             [ -n "${sha}" ] || continue
-            if git log -1 --format='%B' "${sha}" | grep -qiE "${pattern}"; then
+            if ! git log -1 --format='%B' "${sha}" > msg.txt; then
+              echo "::error::cannot read commit ${sha} -- it was never scanned."
+              rc=1
+              continue
+            fi
+            if grep -qiE "${pattern}" msg.txt; then
               echo "::error::commit ${sha} carries a Claude attribution trailer."
               rc=1
             fi
