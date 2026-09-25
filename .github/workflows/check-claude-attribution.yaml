@@ -1,0 +1,117 @@
+name: check claude attribution
+
+# Fails a pull request whose commits or description carry a Claude attribution
+# trailer. `.claude/settings.json` sets `attribution: {commit: null, pr: null}`
+# as the default, but `.claude/settings.local.json` OUTRANKS it, so any
+# developer can override locally -- which is how 152 trailers reached 34 repos
+# while four of five templates already carried the setting. The committed
+# setting is the default; this is the enforcement.
+#
+# Scope is the commits the PR introduces, not repository history, so existing
+# trailers do not fail unrelated work.
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  check-claude-attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The PR description is attacker-controlled, so it reaches the script
+      # through env: and never through ${{ }} interpolation into `run:`.
+      - name: check commits and description
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -uo pipefail
+          # Both observed forms, plus the PR-body line. Case-insensitive: the
+          # fleet carries `Co-Authored-By: Claude` and
+          # `Co-authored-by: Claude Opus 4.6`.
+          # ANCHORED to start-of-line. A real trailer always begins a line;
+          # prose that DOCUMENTS the rule quotes it mid-sentence. Unanchored,
+          # this check failed the pull request that introduced it, and would
+          # fail any PR editing a CLAUDE.md, a README describing the policy, or
+          # an incident write-up -- unfixable except by not describing the rule.
+          #
+          # `claude-session:` is a third form: cloud and Remote Control sessions
+          # add it independently of the commit/pr attribution text, so
+          # attribution.commit="" does not suppress it. Only
+          # attribution.sessionUrl=false does, and it would otherwise pass both
+          # layers.
+          #
+          # The [^[:alpha:]]{0,4} allows the emoji that precedes the PR line.
+          pattern='^[[:space:]]*(co-authored-by:[[:space:]]*claude|claude-session:)|^[[:space:]]*[^[:alpha:]]{0,4}[[:space:]]*generated with[[:space:]]*\[?claude'
+          rc=0
+
+          # FAIL CLOSED. A security gate must not pass because it failed to
+          # look. `git log ... | grep` hides a git failure: git exits 128, grep
+          # still exits 1 on the empty stream, the pipeline reports 1, and "git
+          # broke" becomes indistinguishable from "nothing found". So the shas
+          # are validated first and git's own status is checked on its own.
+          if [ -z "${BASE_SHA}" ] || [ -z "${HEAD_SHA}" ]; then
+            echo "::error::base or head sha is empty -- this workflow must be called from a pull_request event."
+            exit 1
+          fi
+
+          echo "[INFO] commits ${BASE_SHA}..${HEAD_SHA}"
+          if ! git log --format='%H' "${BASE_SHA}..${HEAD_SHA}" > shas.txt; then
+            echo "::error::git log failed for range ${BASE_SHA}..${HEAD_SHA} -- the commits were never scanned."
+            exit 1
+          fi
+
+          # Per commit, so the error NAMES the offending sha. Grepping a
+          # concatenated stream reports a line number into that stream, which
+          # identifies nothing and leaves "rewrite the offending commits"
+          # unactionable.
+          # Fail closed HERE TOO. `git log -1 ... | grep` has exactly the same
+          # defect as the bulk call above: git fails, grep exits 1 on the empty
+          # stream, pipefail reports 1, and a commit that cannot be read
+          # reads as clean. Redirected from a file rather than piped, so
+          # the loop runs in this shell and rc survives it.
+          while read -r sha; do
+            [ -n "${sha}" ] || continue
+            if ! git log -1 --format='%B' "${sha}" > msg.txt; then
+              echo "::error::cannot read commit ${sha} -- it was never scanned."
+              rc=1
+              continue
+            fi
+            if grep -qiE "${pattern}" msg.txt; then
+              echo "::error::commit ${sha} carries a Claude attribution trailer."
+              rc=1
+            fi
+          done < shas.txt
+
+          if printf '%s' "${PR_BODY}" | grep -qiE "${pattern}"; then
+            echo "::error::The pull request description carries a Claude attribution trailer."
+            rc=1
+          fi
+
+          if [ "${rc}" -ne 0 ]; then
+            cat <<'MSG'
+
+          Claude never authors a commit. A trailer is a claim about who verified
+          the change, and it must name the human who did.
+
+          To fix: rewrite the offending commits (git rebase -i, or
+          `git commit --amend` for the tip) and remove the trailer, then
+          force-push. Set `attribution: {commit: null, pr: null}` in
+          `.claude/settings.json` -- and check `.claude/settings.local.json`,
+          which overrides it.
+          MSG
+            exit 1
+          fi
+
+          echo "[INFO] No Claude attribution found."
