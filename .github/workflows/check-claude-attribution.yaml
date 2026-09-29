@@ -1,11 +1,12 @@
 name: check claude attribution
 
 # Fails a pull request whose commits or description carry a Claude attribution
-# trailer. `.claude/settings.json` sets `attribution: {commit: null, pr: null}`
-# as the default, but `.claude/settings.local.json` OUTRANKS it, so any
-# developer can override locally -- which is how 152 trailers reached 34 repos
-# while four of five templates already carried the setting. The committed
-# setting is the default; this is the enforcement.
+# trailer. `.claude/settings.json` sets
+# `attribution: {commit: "", pr: "", sessionUrl: false}` as the default, but
+# `.claude/settings.local.json` OUTRANKS it, so any developer can override
+# locally -- which is how 152 trailers reached 34 repos while four of five
+# templates already carried the setting. The committed setting is the default;
+# this is the enforcement.
 #
 # Scope is the commits the PR introduces, not repository history, so existing
 # trailers do not fail unrelated work.
@@ -52,8 +53,14 @@ jobs:
           # attribution.sessionUrl=false does, and it would otherwise pass both
           # layers.
           #
-          # The [^[:alpha:]]{0,4} allows the emoji that precedes the PR line.
-          pattern='^[[:space:]]*(co-authored-by:[[:space:]]*claude|claude-session:)|^[[:space:]]*[^[:alpha:]]{0,4}[[:space:]]*generated with[[:space:]]*\[?claude'
+          # The [^[:alpha:]]* allows whatever precedes the PR line -- an emoji, a
+          # list bullet, a quote marker. It was {0,4} and that was too tight: the
+          # runner's `run:` steps start with LANG unset, so in the C locale the
+          # bound counts BYTES, and U+1F916 is exactly four of them. A bulleted
+          # `* <emoji> Generated with [Claude Code]` therefore did NOT match, while
+          # the same line under a UTF-8 locale did. `*` cannot match a letter, so
+          # widening it does not admit prose.
+          pattern='^[[:space:]]*(co-authored-by:[[:space:]]*claude|claude-session:)|^[[:space:]]*[^[:alpha:]]*[[:space:]]*generated with[[:space:]]*\[?claude'
           rc=0
 
           # FAIL CLOSED. A security gate must not pass because it failed to
@@ -88,13 +95,26 @@ jobs:
               rc=1
               continue
             fi
-            if grep -qiE "${pattern}" msg.txt; then
+            # FAIL CLOSED. `if grep` cannot tell exit 1 (no match) from exit 2
+            # (grep itself failed -- an invalid pattern, an unreadable file), and
+            # treats both as clean. A pattern edited into invalid ERE would make
+            # every scan in every consuming repo silently pass.
+            grep -qiE "${pattern}" msg.txt; g=$?
+            if [ "${g}" -eq 0 ]; then
               echo "::error::commit ${sha} carries a Claude attribution trailer."
+              rc=1
+            elif [ "${g}" -gt 1 ]; then
+              echo "::error::grep failed on ${sha} -- it was never scanned."
               rc=1
             fi
           done < shas.txt
 
-          if printf '%s' "${PR_BODY}" | grep -qiE "${pattern}"; then
+          # Same fail-closed treatment, and not through a pipe: with `set -o
+          # pipefail` but no `-e`, a pipeline's status here would still be read
+          # as grep's alone by `if`.
+          printf '%s' "${PR_BODY}" > body.txt
+          grep -qiE "${pattern}" body.txt; g=$?
+          if [ "${g}" -eq 0 ]; then
             echo "::error::The pull request description carries a Claude attribution trailer."
             rc=1
           fi
@@ -107,9 +127,11 @@ jobs:
 
           To fix: rewrite the offending commits (git rebase -i, or
           `git commit --amend` for the tip) and remove the trailer, then
-          force-push. Set `attribution: {commit: null, pr: null}` in
-          `.claude/settings.json` -- and check `.claude/settings.local.json`,
-          which overrides it.
+          force-push. Set
+          `attribution: {commit: "", pr: "", sessionUrl: false}` in
+          `.claude/settings.json` -- the values are STRINGS and the empty
+          string is what disables them, so do not use null. Check
+          `.claude/settings.local.json` too, which overrides it.
           MSG
             exit 1
           fi
