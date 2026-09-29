@@ -99,7 +99,13 @@ jobs:
             # (grep itself failed -- an invalid pattern, an unreadable file), and
             # treats both as clean. A pattern edited into invalid ERE would make
             # every scan in every consuming repo silently pass.
-            grep -qiE "${pattern}" msg.txt; g=$?
+            # `|| g=$?` and NOT a bare `grep; g=$?`. GitHub runs `run:` steps as
+            # `bash -e {0}`, which overrides this script's deliberate `set -uo
+            # pipefail` (no -e). Under -e a bare command exiting non-zero kills
+            # the script -- and grep exits 1 when it finds NOTHING, which is the
+            # success case. A command on the left of `||` is exempt from -e.
+            g=0
+            grep -qiE "${pattern}" msg.txt || g=$?
             if [ "${g}" -eq 0 ]; then
               echo "::error::commit ${sha} carries a Claude attribution trailer."
               rc=1
@@ -113,7 +119,8 @@ jobs:
           # pipefail` but no `-e`, a pipeline's status here would still be read
           # as grep's alone by `if`.
           printf '%s' "${PR_BODY}" > body.txt
-          grep -qiE "${pattern}" body.txt; g=$?
+          g=0
+          grep -qiE "${pattern}" body.txt || g=$?
           if [ "${g}" -eq 0 ]; then
             echo "::error::The pull request description carries a Claude attribution trailer."
             rc=1
