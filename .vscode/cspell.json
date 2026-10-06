@@ -51,11 +51,10 @@
     "subshell",
     "testcoverage",
     "trunc",
+    "unforgeable",
     "unparseable",
     "unvalidated",
     "vladopajic"
   ],
-  "ignorePaths": [
-    ".git/**"
-  ]
+  "ignorePaths": [".git/**"]
 }

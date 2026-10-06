@@ -1,0 +1,26 @@
+# super-linter reads this from LINTER_RULES_PATH, which defaults to .github/linters.
+#
+# Adding a file here REPLACES super-linter's built-in default rather than
+# extending it, so this reproduces TEMPLATES/.ruff.toml from super-linter
+# v8.7.0 -- the tag linter.yaml pins -- and changes exactly one setting.
+# Do not delete it to "pick up the defaults": the defaults are below.
+#
+# Reproduced verbatim from the template: cache-dir, and the E203 lint ignore.
+#
+# CHANGED: line-length 120 -> 88, because super-linter's own defaults are
+# mutually unsatisfiable without it. Its TEMPLATES/.python-black is an EMPTY
+# file, so PYTHON_BLACK runs at black's own default of 88 columns, while
+# TEMPLATES/.ruff.toml sets 120. Both validators run in linter.yaml@v4, so
+# any line black wraps at 88 is a line ruff-format rejoins at 120 and the two
+# checks cannot both pass. 88 is the number black's ecosystem assumes and the
+# one .github/linters/.flake8 already uses, so ruff-format moves to it rather
+# than black being argued out of its default.
+#
+# Store the cache in a temporary location
+cache-dir = "/tmp/.ruff_cache"
+
+# Same as .github/linters/.flake8, and the same as black's default.
+line-length = 88
+
+[lint]
+ignore = ["E203"]

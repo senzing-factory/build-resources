@@ -55,10 +55,21 @@ on:
           *.woff
           *.woff2
           *.snap
+      review_bot_authors:
+        description: |
+          Review pull requests opened by a bot. Default false: dependency
+          bumps are 73.2% of fleet PR volume (2,327 of 3,178 in the PR
+          survey) and essentially all of the model's false blockers, and
+          nobody reads those reviews. Skipped PRs still get a comment, and
+          still get the deterministic stale-version check that was the only
+          part of a bot review that ever found anything. Set true to restore
+          the model review for this repository.
+        required: false
+        type: boolean
+        default: false
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
-
 
 permissions: {}
 
@@ -70,10 +81,14 @@ jobs:
       pull-requests: write
     env:
       # Every step after the first is gated on this. 'reviewed' is the happy
-      # path; 'empty' means nothing survived the exclude globs; 'error' means
-      # a step the review depends on failed. All three post a comment, and
+      # path; 'empty' means nothing survived the exclude globs; 'bot' means
+      # the author is a bot and review_bot_authors is false; 'error' means
+      # a step the review depends on failed. All four post a comment, and
       # none of them fails the job -- a red job posts nothing, and a repo
       # that has made this a required check would then be unable to merge.
+      #
+      # 'bot' is set before anything expensive runs, so a skipped PR costs
+      # one checkout and a grep rather than a model call.
       REVIEW_OUTCOME: reviewed
       REVIEW_ERROR: ""
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -84,7 +99,93 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Classify the pull request's author
+        env:
+          # github.event.pull_request.user.type is GitHub's OWN classification,
+          # so it covers dependabot[bot], renovate[bot], github-actions[bot]
+          # and any bot an org installs later, without this file carrying a
+          # list of logins to drift out of date. Matching logins also fails
+          # open in the dangerous direction: an unrecognized bot gets
+          # reviewed, which is merely wasteful, but a renamed one silently
+          # stops being recognized and nothing says so.
+          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          REVIEW_BOT_AUTHORS: ${{ inputs.review_bot_authors }}
+        run: |
+          echo "Author: ${AUTHOR_LOGIN} (type: ${AUTHOR_TYPE})"
+          if [ "$AUTHOR_TYPE" = "Bot" ] && [ "$REVIEW_BOT_AUTHORS" != "true" ]; then
+            echo "Bot-authored and review_bot_authors is false: no model review."
+            echo "REVIEW_OUTCOME=bot" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check a skipped bump for stale version references
+        if: env.REVIEW_OUTCOME == 'bot'
+        env:
+          # Author-controlled, so it is read through the environment and never
+          # interpolated into the script body.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # The one class of finding a bot review ever reliably earned was a
+          # STALE VERSION REFERENCE: an old version left behind in a
+          # .claude/CLAUDE.md table, a README badge, a Dockerfile REFRESHED_AT.
+          # It is deterministic, so it survives the skip at no model cost.
+          #
+          # Measured over the 2,327 bot PRs in the fleet survey: 87.9% of
+          # titles carry "from X to Y" and 66.9% carry an old version of at
+          # least major.minor. The rest are grouped bumps, image digest
+          # updates, and bare-major bumps ("from 6 to 6.0.2") whose needle
+          # would match most of the repository. Those get NO check rather than
+          # a useless one, and fall through to the plain skip comment.
+          STALE_NEEDLE=$(printf '%s' "$PR_TITLE" \
+            | sed -n 's/.*from \([^ ][^ ]*\) to [^ ][^ ]*.*/\1/p')
+          case "$STALE_NEEDLE" in
+            v[0-9]*.[0-9]*|[0-9]*.[0-9]*) ;;
+            *) STALE_NEEDLE="" ;;
+          esac
+
+          # Both results go to files, never to GITHUB_ENV: the hit list is
+          # built from the pull request's own tree, so a file containing the
+          # heredoc delimiter would let an author append arbitrary variables
+          # to the job environment.
+          : > "$RUNNER_TEMP/stale_refs.txt"
+          printf '%s' "$STALE_NEEDLE" > "$RUNNER_TEMP/stale_needle.txt"
+
+          if [ -z "$STALE_NEEDLE" ]; then
+            echo "No single old version in the title; no stale-reference check."
+            exit 0
+          fi
+
+          echo "Searching the tree for the old version: ${STALE_NEEDLE}"
+          # CHANGELOG and lock files name old versions legitimately, and
+          # pr-files/ is the reviewer's own copy of the patches, so a hit there
+          # is the tool finding itself.
+          #
+          # Every option precedes the pattern and the pattern goes behind -e:
+          # "--" ENDS option parsing, which silently turned each --exclude into
+          # a filename and let CHANGELOG and lock-file hits through. Caught by
+          # running it, not by reading it.
+          grep -r -F -n --binary-files=without-match \
+            --exclude-dir=.git \
+            --exclude-dir=pr-files \
+            --exclude-dir=build-resources \
+            --exclude-dir=node_modules \
+            --exclude-dir=vendor \
+            --exclude='CHANGELOG*' \
+            --exclude='*.lock' \
+            --exclude='*-lock.json' \
+            --exclude='*.sum' \
+            -e "$STALE_NEEDLE" . \
+            | head -20 > "$RUNNER_TEMP/stale_refs.txt" || true
+
+          if [ -s "$RUNNER_TEMP/stale_refs.txt" ]; then
+            echo "::warning::possible stale references to ${STALE_NEEDLE}"
+            cat "$RUNNER_TEMP/stale_refs.txt"
+          else
+            echo "No surviving reference to ${STALE_NEEDLE}."
+          fi
+
       - name: Checkout build resources
+        if: env.REVIEW_OUTCOME == 'reviewed'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # A failure here is the reviewer's own infrastructure, not the pull
         # request's problem: the next step turns it into a comment rather
@@ -114,7 +215,32 @@ jobs:
           repository: senzing-factory/build-resources
 
       - name: Verify build resources checkout
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        env:
+          # The same expression the checkout above used. Empty when this file
+          # runs directly rather than as a reusable workflow, which is the
+          # one case where the default branch is the right answer.
+          EXPECTED_SHA: ${{ fromJSON(toJSON(github)).job_workflow_sha }}
         run: |
+          # The file check alone cannot catch the failure that matters. If
+          # job_workflow_sha ever evaluates empty, actions/checkout takes the
+          # DEFAULT BRANCH -- exactly the risk the pin was added to remove --
+          # and once this merges both files exist on main too, so a
+          # file-existence test passes while the reviewer runs code from an
+          # unpinned ref. Compare the resolved commit instead, and echo it so
+          # the value is visible in the job log.
+          ACTUAL_SHA=$(git -C build-resources rev-parse HEAD 2>/dev/null || echo "")
+          echo "build-resources expected: ${EXPECTED_SHA:-<empty: running directly>}"
+          echo "build-resources actual:   ${ACTUAL_SHA:-<no checkout>}"
+          if [ -n "$EXPECTED_SHA" ] && [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::warning::build-resources is not at the pinned commit"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the reviewer's own resources are not at the pinned commit (expected ${EXPECTED_SHA}, got ${ACTUAL_SHA:-nothing})"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
           MISSING=""
           for f in claude/pr-prompt-v2.md claude/filter_diff.py; do
             if [ ! -f "build-resources/$f" ]; then
@@ -278,9 +404,9 @@ jobs:
           # the pull request" and the old workflow fetched none, so that line
           # has been dead text in every review the fleet has produced. The
           # measured cost is a reviewer that re-raises points the author has
-          # already answered -- two reviews 36 minutes apart on
-          # two reviews 36 minutes apart both demanded a CHANGELOG in a repo that has
-          # never had one, the second after the first had been answered.
+          # already answered -- two reviews 36 minutes apart both demanded a
+          # CHANGELOG in a repository that has never had one, the second
+          # after the first had been answered.
           #
           # This bot posts its own reviews as ISSUE comments, not as GitHub
           # reviews, so `gh pr view --json reviews` returns empty and the
@@ -613,6 +739,44 @@ jobs:
           $EXCLUDED_SUMMARY
           \`\`\`}"
           echo "✅ Skip message posted to PR #${PR_NUMBER}"
+
+      - name: Post bot-skip message
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        if: env.REVIEW_OUTCOME == 'bot'
+        run: |
+          # A silently absent review is indistinguishable from a broken
+          # workflow, so the skip says so on the PR and carries the marker,
+          # exactly like the three other outcomes. lane=S is reserved for this
+          # comment: the model is never running when it is posted, so nothing
+          # else can emit it and a parser can tell a skip from a clean review.
+          echo "Posting bot-skip message to PR..."
+          STALE_NEEDLE=$(cat "$RUNNER_TEMP/stale_needle.txt" 2>/dev/null || true)
+          if [ -s "$RUNNER_TEMP/stale_refs.txt" ]; then
+            FINDINGS=1
+            DETAIL="
+          **1 finding** — 0 blockers, 1 risk.
+
+          - **RISK** \`${STALE_NEEDLE}\` — the previous version string still appears in the working tree. Confirm each is meant to stay; a dependency table, a badge or a \`REFRESHED_AT\` left behind is the usual cause.
+
+          \`\`\`text
+          $(cat "$RUNNER_TEMP/stale_refs.txt")
+          \`\`\`"
+          else
+            FINDINGS=0
+            DETAIL=""
+          fi
+          gh pr comment "$PR_NUMBER" --body "## 🤖 Claude Code Review
+
+          ⏭️ **Skipped** — this pull request was opened by a bot, and \`review_bot_authors\` is false.
+          $DETAIL
+
+          <!-- claude-review v2 lane=S findings=${FINDINGS} blockers=0 head=${HEAD_SHA} -->
+          ---
+          *Automated code review analyzing defects and coding standards*"
+          echo "✅ Bot-skip message posted to PR #${PR_NUMBER}"
 
       - name: Post review-unavailable message
         env:
