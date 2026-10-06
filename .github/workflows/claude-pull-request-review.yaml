@@ -108,7 +108,7 @@ jobs:
           # -- the version super-linter v8.7.0 runs -- does not yet know
           # `job_workflow_sha` and rejects the direct form as an undefined
           # property. The indirection types as `any`, so it lints clean; the
-          # serialised context is consumed inside the expression and only the
+          # serialized context is consumed inside the expression and only the
           # extracted SHA reaches the action's input.
           ref: ${{ fromJSON(toJSON(github)).job_workflow_sha }}
           repository: senzing-factory/build-resources
@@ -279,7 +279,7 @@ jobs:
           # has been dead text in every review the fleet has produced. The
           # measured cost is a reviewer that re-raises points the author has
           # already answered -- two reviews 36 minutes apart on
-          # Placekey/deploy#285 both demanded a CHANGELOG in a repo that has
+          # two reviews 36 minutes apart both demanded a CHANGELOG in a repo that has
           # never had one, the second after the first had been answered.
           #
           # This bot posts its own reviews as ISSUE comments, not as GitHub

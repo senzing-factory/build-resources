@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# cspell:ignore POSTAMBLE  -- test fixture / local constant names, not vocabulary
 """Assemble the reviewable part of a pull request, dropping excluded paths.
 
 Two modes, one exclude-glob implementation:

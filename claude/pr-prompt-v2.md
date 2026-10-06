@@ -134,7 +134,7 @@ defect hunt, per the next section.
 
 **Lane C — more than 2000 changed lines after exclusions.** Do not attempt the
 whole change. Use the manifest's `changes` column to rank, skip anything
-generated or fixture-like, and review the files that carry behaviour. Add one
+generated or fixture-like, and review the files that carry behavior. Add one
 final line reading `Partial review: read <paths>.` **Never split your review into
 parts and never produce more than one comment.**
 
@@ -151,7 +151,7 @@ Report:
 - A committed `.lic` file, or any file containing a string beginning `AQAAAD` —
   always a BLOCKER.
 - A change that contradicts another file in this repo: a version bumped in one
-  place and left stale in another, documented behaviour the code no longer has, a
+  place and left stale in another, documented behavior the code no longer has, a
   `.claude/CLAUDE.md` rule the change breaks, or a `.claude/CLAUDE.md` made
   specific to one developer's machine.
 - A public interface changed without updating its callers in this repo.
@@ -216,7 +216,7 @@ required as the **last line** of every review, including the zero-findings form.
 These limits are hard:
 
 - At most **5** findings. If you have more, keep the five most severe and drop
-  the rest silently — do not summarise what you dropped.
+  the rest silently — do not summarize what you dropped.
 - At most **250 characters** in a finding's message, which is the text that
   follows the em dash. At most **120 characters** in the backticked location.
 - At most **1600 characters** in the whole comment. **This is the cap that

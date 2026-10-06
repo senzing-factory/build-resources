@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# cspell:ignore BIGBODY drun mrun newpkg oldpkg  -- test fixture / local constant names, not vocabulary
 # Fixture tests for filter_diff.py. No framework: builds the two input shapes
 # the program accepts, runs it, and checks what survived.
 #
