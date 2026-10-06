@@ -11,6 +11,8 @@
     "CCLA",
     "CLIPPY",
     "CODEOWNER",
+    "codespell",
+    "codespellrc",
     "commenters",
     "cooldown",
     "dockerfiles",
