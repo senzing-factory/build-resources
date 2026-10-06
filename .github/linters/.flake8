@@ -1,0 +1,15 @@
+# super-linter reads this from LINTER_RULES_PATH, which defaults to .github/linters.
+#
+# This repository's first Python file arrived with claude/filter_diff.py. flake8's
+# default max-line-length is 79 and black's is 88, so without this the two tools
+# contradict each other and every black-formatted line between 80 and 88 columns
+# fails E501. Both validators run in linter.yaml@v4, so disabling either is not an
+# option and would be the wrong answer regardless -- blanket rule-disabling is not
+# how this estate handles a linter conflict.
+#
+# E203 is the other known black/flake8 disagreement: black puts a space before the
+# colon in a slice, flake8 calls it whitespace-before-punctuation. PEP 8 agrees with
+# black here and flake8 has declined to change the default.
+[flake8]
+max-line-length = 88
+extend-ignore = E203
