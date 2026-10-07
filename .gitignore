@@ -4,3 +4,6 @@
 !.vscode/settings.json
 *.code-workspace
 .history
+
+# Python bytecode, e.g. from running claude/test_filter_diff.sh locally.
+__pycache__/

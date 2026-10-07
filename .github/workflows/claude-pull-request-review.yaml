@@ -2,6 +2,71 @@ name: Claude Pull Request Review
 
 on:
   workflow_call:
+    inputs:
+      model:
+        description: "Claude model for the review (e.g. claude-sonnet-4-6). Empty = Claude Code CLI default. The reviewer makes one call per PR and pages patches in from disk, so pick a large-context model rather than a cheap one."
+        required: false
+        type: string
+        default: ""
+      max_review_bytes:
+        description: "Backstop on the total patch bytes handed to the reviewer. Over budget, whole patches are dropped largest-first; those files keep their manifest row and are named in the PR comment. 0 means no backstop. The default sits above the largest post-exclusion patch set measured across a 300-PR sample (640,442 bytes)."
+        required: false
+        type: number
+        default: 1048576
+      exclude_globs:
+        description: |
+          Newline- or comma-separated path globs dropped from the review,
+          matched fnmatch-style against the repo-relative path (so * spans /).
+          Defaults to the set below: measured across 150 human-authored PRs it
+          strips 2.4% of files and 0.9% of churn, with no hand-written source
+          among them. Set to "" to review everything. Globs are anchored so
+          they cannot match a directory that merely ends in the name
+          (vendor/* not *vendor/*).
+        required: false
+        type: string
+        default: |
+          *.lock
+          package-lock.json
+          */package-lock.json
+          pnpm-lock.yaml
+          */pnpm-lock.yaml
+          yarn.lock
+          */yarn.lock
+          go.sum
+          */go.sum
+          .terraform.lock.hcl
+          */.terraform.lock.hcl
+          vendor/*
+          */vendor/*
+          node_modules/*
+          */node_modules/*
+          target/debug/*
+          target/release/*
+          */generated/*
+          *.min.js
+          *.map
+          *.svg
+          *.png
+          *.jpg
+          *.jpeg
+          *.gif
+          *.ico
+          *.pdf
+          *.woff
+          *.woff2
+          *.snap
+      review_bot_authors:
+        description: |
+          Review pull requests opened by a bot. Default false: dependency
+          bumps are 73.2% of fleet PR volume (2,327 of 3,178 in the PR
+          survey) and essentially all of the model's false blockers, and
+          nobody reads those reviews. Skipped PRs still get a comment, and
+          still get the deterministic stale-version check that was the only
+          part of a bot review that ever found anything. Set true to restore
+          the model review for this repository.
+        required: false
+        type: boolean
+        default: false
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -14,6 +79,19 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    env:
+      # Every step after the first is gated on this. 'reviewed' is the happy
+      # path; 'empty' means nothing survived the exclude globs; 'bot' means
+      # the author is a bot and review_bot_authors is false; 'error' means
+      # a step the review depends on failed. All four post a comment, and
+      # none of them fails the job -- a red job posts nothing, and a repo
+      # that has made this a required check would then be unable to merge.
+      #
+      # 'bot' is set before anything expensive runs, so a skipped PR costs
+      # one checkout and a grep rather than a model call.
+      REVIEW_OUTCOME: reviewed
+      REVIEW_ERROR: ""
+      PR_NUMBER: ${{ github.event.pull_request.number }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -21,12 +99,378 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Classify the pull request's author
+        env:
+          # github.event.pull_request.user.type is GitHub's OWN classification,
+          # so it covers dependabot[bot], renovate[bot], github-actions[bot]
+          # and any bot an org installs later, without this file carrying a
+          # list of logins to drift out of date. Matching logins also fails
+          # open in the dangerous direction: an unrecognized bot gets
+          # reviewed, which is merely wasteful, but a renamed one silently
+          # stops being recognized and nothing says so.
+          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          REVIEW_BOT_AUTHORS: ${{ inputs.review_bot_authors }}
+        run: |
+          echo "Author: ${AUTHOR_LOGIN} (type: ${AUTHOR_TYPE})"
+          if [ "$AUTHOR_TYPE" = "Bot" ] && [ "$REVIEW_BOT_AUTHORS" != "true" ]; then
+            echo "Bot-authored and review_bot_authors is false: no model review."
+            echo "REVIEW_OUTCOME=bot" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check a skipped bump for stale version references
+        if: env.REVIEW_OUTCOME == 'bot'
+        env:
+          # Author-controlled, so it is read through the environment and never
+          # interpolated into the script body.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # The one class of finding a bot review ever reliably earned was a
+          # STALE VERSION REFERENCE: an old version left behind in a
+          # .claude/CLAUDE.md table, a README badge, a Dockerfile REFRESHED_AT.
+          # It is deterministic, so it survives the skip at no model cost.
+          #
+          # Measured over the 2,327 bot PRs in the fleet survey: 87.9% of
+          # titles carry "from X to Y" and 66.9% carry an old version of at
+          # least major.minor. The rest are grouped bumps, image digest
+          # updates, and bare-major bumps ("from 6 to 6.0.2") whose needle
+          # would match most of the repository. Those get NO check rather than
+          # a useless one, and fall through to the plain skip comment.
+          STALE_NEEDLE=$(printf '%s' "$PR_TITLE" \
+            | sed -n 's/.*from \([^ ][^ ]*\) to [^ ][^ ]*.*/\1/p')
+          case "$STALE_NEEDLE" in
+            v[0-9]*.[0-9]*|[0-9]*.[0-9]*) ;;
+            *) STALE_NEEDLE="" ;;
+          esac
+
+          # Both results go to files, never to GITHUB_ENV: the hit list is
+          # built from the pull request's own tree, so a file containing the
+          # heredoc delimiter would let an author append arbitrary variables
+          # to the job environment.
+          : > "$RUNNER_TEMP/stale_refs.txt"
+          printf '%s' "$STALE_NEEDLE" > "$RUNNER_TEMP/stale_needle.txt"
+
+          if [ -z "$STALE_NEEDLE" ]; then
+            echo "No single old version in the title; no stale-reference check."
+            exit 0
+          fi
+
+          echo "Searching the tree for the old version: ${STALE_NEEDLE}"
+          # CHANGELOG and lock files name old versions legitimately, and
+          # pr-files/ is the reviewer's own copy of the patches, so a hit there
+          # is the tool finding itself.
+          #
+          # Every option precedes the pattern and the pattern goes behind -e:
+          # "--" ENDS option parsing, which silently turned each --exclude into
+          # a filename and let CHANGELOG and lock-file hits through. Caught by
+          # running it, not by reading it.
+          grep -r -F -n --binary-files=without-match \
+            --exclude-dir=.git \
+            --exclude-dir=pr-files \
+            --exclude-dir=build-resources \
+            --exclude-dir=node_modules \
+            --exclude-dir=vendor \
+            --exclude='CHANGELOG*' \
+            --exclude='*.lock' \
+            --exclude='*-lock.json' \
+            --exclude='*.sum' \
+            -e "$STALE_NEEDLE" . \
+            | head -20 > "$RUNNER_TEMP/stale_refs.txt" || true
+
+          if [ -s "$RUNNER_TEMP/stale_refs.txt" ]; then
+            echo "::warning::possible stale references to ${STALE_NEEDLE}"
+            cat "$RUNNER_TEMP/stale_refs.txt"
+          else
+            echo "No surviving reference to ${STALE_NEEDLE}."
+          fi
+
+      - name: Checkout build resources
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # A failure here is the reviewer's own infrastructure, not the pull
+        # request's problem: the next step turns it into a comment rather
+        # than a red job that posts nothing.
+        continue-on-error: true
+        with:
+          path: build-resources
+          persist-credentials: false
+          # The commit SHA of the reusable workflow that is actually running.
+          # A caller pinned at @v4 therefore gets v4's prompt and scripts, and
+          # a caller pinned at a branch gets that branch's -- so this change
+          # can be exercised end to end before the v4 tag moves, and a push to
+          # main cannot alter the program running in a job that holds
+          # CLAUDE_CODE_OAUTH_TOKEN with pull-requests: write.
+          #
+          # Empty outside a reusable-workflow call (running this file
+          # directly), where it degrades to the default branch, which is the
+          # right answer there.
+          #
+          # Reached through fromJSON(toJSON(github)) because actionlint 1.7.12
+          # -- the version super-linter v8.7.0 runs -- does not yet know
+          # `job_workflow_sha` and rejects the direct form as an undefined
+          # property. The indirection types as `any`, so it lints clean; the
+          # serialized context is consumed inside the expression and only the
+          # extracted SHA reaches the action's input.
+          ref: ${{ fromJSON(toJSON(github)).job_workflow_sha }}
+          repository: senzing-factory/build-resources
+
+      - name: Verify build resources checkout
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        env:
+          # The same expression the checkout above used. Empty when this file
+          # runs directly rather than as a reusable workflow, which is the
+          # one case where the default branch is the right answer.
+          EXPECTED_SHA: ${{ fromJSON(toJSON(github)).job_workflow_sha }}
+        run: |
+          # The file check alone cannot catch the failure that matters. If
+          # job_workflow_sha ever evaluates empty, actions/checkout takes the
+          # DEFAULT BRANCH -- exactly the risk the pin was added to remove --
+          # and once this merges both files exist on main too, so a
+          # file-existence test passes while the reviewer runs code from an
+          # unpinned ref. Compare the resolved commit instead, and echo it so
+          # the value is visible in the job log.
+          ACTUAL_SHA=$(git -C build-resources rev-parse HEAD 2>/dev/null || echo "")
+          echo "build-resources expected: ${EXPECTED_SHA:-<empty: running directly>}"
+          echo "build-resources actual:   ${ACTUAL_SHA:-<no checkout>}"
+          if [ -n "$EXPECTED_SHA" ] && [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::warning::build-resources is not at the pinned commit"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the reviewer's own resources are not at the pinned commit (expected ${EXPECTED_SHA}, got ${ACTUAL_SHA:-nothing})"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          MISSING=""
+          for f in claude/pr-prompt-v2.md claude/filter_diff.py; do
+            if [ ! -f "build-resources/$f" ]; then
+              MISSING="${MISSING} ${f}"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::warning::build-resources is missing:${MISSING}"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the reviewer's own resources could not be checked out (missing:${MISSING})"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+      - name: Collect reviewable files
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        env:
+          EXCLUDE_GLOBS: ${{ inputs.exclude_globs }}
+          GH_TOKEN: ${{ github.token }}
+          MAX_REVIEW_BYTES: ${{ inputs.max_review_bytes }}
+        run: |
+          # type: number permits a float, and `[ "$x" -gt "$y" ]` with a float
+          # exits 2 with "integer expression expected" inside an `if` that does
+          # not trip bash -e, so a mistyped budget would silently not apply.
+          case "$MAX_REVIEW_BYTES" in
+            ''|*[!0-9]*)
+              echo "::error::max_review_bytes must be a non-negative integer (got '$MAX_REVIEW_BYTES')"
+              exit 1
+              ;;
+          esac
+
+          # The workspace IS the reviewed checkout, and Lane A's first check
+          # greps that whole tree for the OLD version string. The reviewer's
+          # own scratch directories sit in it and would match, reading as a
+          # surviving stale reference -- a false blocker on every dependency
+          # bump. Listing them in .git/info/exclude is untracked, alters
+          # nothing under review, and makes ripgrep (which is what the
+          # reviewer's Grep tool is) skip them with no instruction for the
+          # model to follow and no flag for it to get wrong.
+          if [ -d .git ]; then
+            mkdir -p .git/info
+            printf '%s\n' '/pr-files/' '/build-resources/' >> .git/info/exclude
+          fi
+
+          # filter_diff.py refuses to write into an existing directory, on
+          # purpose: writing into one the repo already owns would alter the
+          # tree under review. Catch it here so the refusal degrades to a
+          # comment rather than a red job with no comment at all.
+          if [ -e pr-files ]; then
+            echo "::warning::the repository already contains a pr-files entry"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=this repository already contains a \`pr-files\` entry, which is where the reviewer writes the per-file patches"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # Intermediate files go to RUNNER_TEMP for the same reason.
+          #
+          # -F per_page=100: the endpoint defaults to 30 per page, and caps at
+          # 3,000 files overall, after which the count is silently short.
+          echo "Fetching the PR's changed files..."
+          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
+            -F per_page=100 --paginate > "$RUNNER_TEMP/pr_files.json"; then
+            echo "::warning::could not fetch the PR's changed files"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the GitHub API call for the pull request's changed files failed"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # Per-file patches on disk, not a diff pasted into the prompt: the
+          # reviewer reads pr-files/manifest.tsv and opens only what it needs,
+          # so prompt size stops being a function of PR size.
+          #
+          # Not piped through `tee`: GitHub runs this with `bash -e` and no
+          # `pipefail`, so the pipeline status would be tee's (always 0) and
+          # a crashed filter would leave the manifest unwritten, read as "no
+          # reviewable changes", and pass the job with a green check.
+          if ! python3 build-resources/claude/filter_diff.py \
+            --manifest "$RUNNER_TEMP/pr_files.json" pr-files \
+            > "$RUNNER_TEMP/filter.log"; then
+            cat "$RUNNER_TEMP/filter.log"
+            echo "::warning::filter_diff.py failed"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=assembling the reviewable file set failed"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+          cat "$RUNNER_TEMP/filter.log"
+
+          # Carry the exclusions into the PR comment. Without this the only
+          # record is the job log, and a reviewer cannot tell an empty diff
+          # from a diff the globs removed entirely.
+          #
+          # Both counts are validated rather than trusted: an unparseable
+          # count is the exact shape of a suppressed disclosure, so it fails
+          # closed to a comment instead of quietly reporting nothing.
+          EXCLUDED_COUNT=$(sed -n 's/^Excluded \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
+          OMITTED_COUNT=$(sed -n 's/^Omitted \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
+          for n in "$EXCLUDED_COUNT" "$OMITTED_COUNT"; do
+            case "$n" in
+              ''|*[!0-9]*)
+                echo "::warning::unparseable exclusion report"
+                {
+                  echo "REVIEW_OUTCOME=error"
+                  echo "REVIEW_ERROR=the exclusion report could not be parsed, so the review would not have been able to say what it left out"
+                } >> "$GITHUB_ENV"
+                exit 0
+                ;;
+            esac
+          done
+
+          if [ "$EXCLUDED_COUNT" -gt 0 ]; then
+            EXCLUDED_LIST=$(sed -n 's/^  - //p' "$RUNNER_TEMP/filter.log" | head -20 | paste -sd, -)
+            if [ "$EXCLUDED_COUNT" -gt 20 ]; then
+              EXCLUDED_LIST="${EXCLUDED_LIST} (+$((EXCLUDED_COUNT - 20)) more)"
+            fi
+            echo "EXCLUDED_SUMMARY=${EXCLUDED_COUNT} file(s) excluded by exclude_globs: ${EXCLUDED_LIST}" >> "$GITHUB_ENV"
+          else
+            echo "EXCLUDED_SUMMARY=" >> "$GITHUB_ENV"
+          fi
+
+          # Same, for files whose patch was dropped to fit max_review_bytes.
+          # A partial review that names what it could not read is honest; one
+          # that splits itself into parts that cannot see each other is not.
+          if [ "$OMITTED_COUNT" -gt 0 ]; then
+            OMITTED_LIST=$(sed -n 's/^  \* //p' "$RUNNER_TEMP/filter.log" | head -20 | paste -sd, -)
+            if [ "$OMITTED_COUNT" -gt 20 ]; then
+              OMITTED_LIST="${OMITTED_LIST} (+$((OMITTED_COUNT - 20)) more)"
+            fi
+            echo "OMITTED_SUMMARY=${OMITTED_COUNT} file(s) over max_review_bytes (${MAX_REVIEW_BYTES}); path and change count supplied, patch not: ${OMITTED_LIST}" >> "$GITHUB_ENV"
+          else
+            echo "OMITTED_SUMMARY=" >> "$GITHUB_ENV"
+          fi
+
+          {
+            echo "REVIEW_FILES=$(sed -n 's/^Files: //p' "$RUNNER_TEMP/filter.log")"
+            echo "REVIEW_ADDITIONS=$(sed -n 's/^Additions: //p' "$RUNNER_TEMP/filter.log")"
+            echo "REVIEW_DELETIONS=$(sed -n 's/^Deletions: //p' "$RUNNER_TEMP/filter.log")"
+          } >> "$GITHUB_ENV"
+
+          if [ ! -s pr-files/manifest.tsv ]; then
+            echo "⚠️  Nothing left to review after applying exclude_globs."
+            echo "REVIEW_OUTCOME=empty" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "✅ Review set: $(wc -l < pr-files/manifest.tsv) file(s)"
+
+      - name: Collect the pull request's own discussion
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_REVIEW_BYTES: ${{ inputs.max_review_bytes }}
+        run: |
+          # The old prompt told the reviewer to "read any existing comments on
+          # the pull request" and the old workflow fetched none, so that line
+          # has been dead text in every review the fleet has produced. The
+          # measured cost is a reviewer that re-raises points the author has
+          # already answered -- two reviews 36 minutes apart both demanded a
+          # CHANGELOG in a repository that has never had one, the second
+          # after the first had been answered.
+          #
+          # This bot posts its own reviews as ISSUE comments, not as GitHub
+          # reviews, so `gh pr view --json reviews` returns empty and the
+          # issue-comments endpoint is the one that carries them.
+          #
+          # Best effort throughout: a thread that cannot be fetched degrades
+          # to a review without it, never to a review that does not happen.
+          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            > "$RUNNER_TEMP/discussion_pull.json"; then
+            echo "::warning::could not fetch the PR description"
+            echo '{}' > "$RUNNER_TEMP/discussion_pull.json"
+          fi
+          if ! gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -F per_page=100 --paginate > "$RUNNER_TEMP/discussion_issue.json"; then
+            echo "::warning::could not fetch the PR's issue comments"
+            echo '[]' > "$RUNNER_TEMP/discussion_issue.json"
+          fi
+          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments" \
+            -F per_page=100 --paginate > "$RUNNER_TEMP/discussion_review.json"; then
+            echo "::warning::could not fetch the PR's review comments"
+            echo '[]' > "$RUNNER_TEMP/discussion_review.json"
+          fi
+
+          # The thread is budgeted against max_review_bytes like everything
+          # else: it gets what the patches did not spend. Exhausted means
+          # "drop the thread", which is 1 rather than 0, because 0 is this
+          # program's "no backstop".
+          PATCH_BYTES=$(sed -n 's/^Patch bytes: //p' "$RUNNER_TEMP/filter.log")
+          case "$PATCH_BYTES" in
+            ''|*[!0-9]*) PATCH_BYTES=0 ;;
+          esac
+          if [ "$MAX_REVIEW_BYTES" -eq 0 ]; then
+            DISCUSSION_BUDGET=0
+          elif [ "$MAX_REVIEW_BYTES" -gt "$PATCH_BYTES" ]; then
+            DISCUSSION_BUDGET=$((MAX_REVIEW_BYTES - PATCH_BYTES))
+          else
+            DISCUSSION_BUDGET=1
+          fi
+          echo "Discussion budget: ${DISCUSSION_BUDGET} byte(s)"
+
+          if ! MAX_DISCUSSION_BYTES="$DISCUSSION_BUDGET" \
+            python3 build-resources/claude/filter_diff.py --discussion \
+              "$RUNNER_TEMP/discussion.md" \
+              "$RUNNER_TEMP/discussion_pull.json" \
+              "$RUNNER_TEMP/discussion_issue.json" \
+              "$RUNNER_TEMP/discussion_review.json"; then
+            echo "::warning::could not render the PR discussion; continuing without it"
+            rm -f "$RUNNER_TEMP/discussion.md"
+          fi
+
       - name: Install Claude Code CLI
+        if: env.REVIEW_OUTCOME == 'reviewed'
         run: |
           echo "Installing Claude Code CLI..."
 
           # Download install script
-          curl -fsSL https://claude.ai/install.sh -o install.sh
+          if ! curl -fsSL https://claude.ai/install.sh -o install.sh; then
+            echo "::warning::could not download the Claude Code installer"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the Claude Code CLI installer could not be downloaded"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
 
           # Calculate checksum of downloaded script
           SCRIPT_CHECKSUM=$(sha256sum install.sh | awk '{print $1}')
@@ -40,7 +484,15 @@ jobs:
           # fi
 
           # Execute install script
-          bash install.sh
+          if ! bash install.sh; then
+            echo "::warning::the Claude Code CLI installer failed"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the Claude Code CLI could not be installed"
+            } >> "$GITHUB_ENV"
+            rm -f install.sh
+            exit 0
+          fi
 
           # Add to PATH
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -49,205 +501,307 @@ jobs:
           rm install.sh
 
       - name: Verify Claude CLI installation
+        if: env.REVIEW_OUTCOME == 'reviewed'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           # Verify installation succeeded
-          if ! command -v claude &> /dev/null; then
-            echo "❌ ERROR: Claude CLI installation failed"
-            exit 1
-          fi
-          claude --version
-          echo "✅ Claude CLI installed successfully"
-
-      - name: Get PR diff
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "Fetching PR diff..."
-          gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt || true
-
-          if [ ! -s pr_diff.txt ]; then
-            echo "⚠️  PR diff is empty (no file changes detected)"
-            echo "This PR may only contain metadata changes (labels, title, etc.)"
-            echo "Skipping code review..."
-            echo "SKIP_REVIEW=true" >> "$GITHUB_ENV"
+          if ! command -v claude > /dev/null 2>&1; then
+            echo "::warning::claude is not on PATH after installation"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the Claude Code CLI is not on PATH after installation"
+            } >> "$GITHUB_ENV"
             exit 0
           fi
 
-          echo "✅ PR diff retrieved ($(wc -l < pr_diff.txt) lines)"
-
-      - name: Checkout build resources
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: build-resources
-          persist-credentials: false
-          repository: senzing-factory/build-resources
-
-      - name: Verify build resources checkout
-        run: |
-          if [ ! -f build-resources/claude/pr-prompt.md ]; then
-            echo "❌ ERROR: Failed to checkout build-resources or pr-prompt.md not found"
-            exit 1
+          if ! claude --version; then
+            echo "::warning::claude is on PATH but will not run"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the Claude Code CLI is installed but does not run"
+            } >> "$GITHUB_ENV"
+            exit 0
           fi
+          echo "✅ Claude CLI installed successfully"
 
       - name: Create review prompt
-        if: env.SKIP_REVIEW != 'true'
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          cp build-resources/claude/pr-prompt.md prompt-header.md
-          echo "✅ Prompt header created"
+          # The prompt's last line is "Begin.", and the run context has to come
+          # before it rather than after an instruction to start. Dropping that
+          # line and re-adding it keeps this correct whichever line is last.
+          sed '$ {/^Begin\.$/ d}' build-resources/claude/pr-prompt-v2.md \
+            > "$RUNNER_TEMP/prompt.md"
+
+          # The no-findings line is given to the model literally, agreeing in
+          # number, rather than described: the contract's regex accepts
+          # `file` or `files` and a count of 1 is the common case on this
+          # fleet, so leaving the model to inflect it is a contract break
+          # waiting to happen.
+          : "${REVIEW_FILES:=0}"
+          : "${REVIEW_ADDITIONS:=0}"
+          : "${REVIEW_DELETIONS:=0}"
+          if [ "$REVIEW_FILES" = "1" ]; then
+            FILE_WORD="file"
+          else
+            FILE_WORD="files"
+          fi
+
+          # The prompt is written against a checkout, so the facts it cannot
+          # discover for itself are appended here rather than inlined patches.
+          {
+            echo ""
+            echo "## Run context"
+            echo ""
+            echo "- Reviewed PR head: \`${HEAD_SHA:0:7}\`. Use exactly that in the marker's \`head=\`."
+            echo "- The working tree is this PR merged into its base branch, so it is what would land. \`git rev-parse HEAD\` is that merge commit, not the head above, and \`HEAD^\` is the base."
+            echo "- After exclusions this PR changes ${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS}/-${REVIEW_DELETIONS}. If you have no findings, your first line is exactly:"
+            echo "  \`**No blocking findings.** ${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS}/-${REVIEW_DELETIONS}.\`"
+            echo "- \`pr-files/\` (the patches) and \`build-resources/\` (this reviewer's own prompt and scripts) sit in the workspace but are NOT part of the repository under review. They are listed in \`.git/info/exclude\`, so \`Grep\` already skips both and you need no exclusion flags; a plain tree-wide \`Grep\` is correct."
+          } >> "$RUNNER_TEMP/prompt.md"
+
+          if [ -n "${EXCLUDED_SUMMARY:-}" ]; then
+            echo "- Already dropped before you saw the manifest, so absent by design and never a finding — but it does answer \"did the lockfile move with the manifest?\": ${EXCLUDED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+          fi
+          if [ -n "${OMITTED_SUMMARY:-}" ]; then
+            echo "- Too large to supply a patch for; these carry \`omitted\` in the manifest's fourth column. Open them in the working tree if the lane needs them: ${OMITTED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+          fi
+
+          # The thread goes last, immediately before "Begin.", so the rules
+          # that govern it are already established when it arrives. Its own
+          # framing -- delimiters plus a "| " prefix on every data line -- is
+          # written by filter_diff.py, not by any pull request author.
+          if [ -s "$RUNNER_TEMP/discussion.md" ]; then
+            printf '\n' >> "$RUNNER_TEMP/prompt.md"
+            cat "$RUNNER_TEMP/discussion.md" >> "$RUNNER_TEMP/prompt.md"
+          fi
+
+          printf '\nBegin.\n' >> "$RUNNER_TEMP/prompt.md"
+          echo "✅ Prompt created ($(wc -c < "$RUNNER_TEMP/prompt.md") bytes)"
 
       - name: Run Claude Code Review
+        if: env.REVIEW_OUTCOME == 'reviewed'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        if: env.SKIP_REVIEW != 'true'
+          MODEL: ${{ inputs.model }}
         run: |
           echo "Running Claude code review..."
 
-          MAX_BYTES=200000  # 200KB limit per chunk to stay well under limits
-          DIFF_BYTES=$(wc -c < pr_diff.txt)
-          HEADER_BYTES=$(wc -c < prompt-header.md)
-
-          echo "Diff size: $DIFF_BYTES bytes"
-          echo "Header size: $HEADER_BYTES bytes"
-
-          # Calculate if we need to chunk
-          TOTAL_ESTIMATED=$((HEADER_BYTES + DIFF_BYTES + 200))
-
-          if [ "$TOTAL_ESTIMATED" -gt "$MAX_BYTES" ]; then
-            echo "⚠️ Large PR detected, will process in chunks..."
-
-            # Calculate number of chunks needed
-            USABLE_BYTES=$((MAX_BYTES - HEADER_BYTES - 200))
-            NUM_CHUNKS=$(( (DIFF_BYTES + USABLE_BYTES - 1) / USABLE_BYTES ))
-
-            echo "Processing $NUM_CHUNKS chunks..."
-
-            # Split the diff by bytes while respecting line boundaries
-            echo "Splitting into chunks of ~$USABLE_BYTES bytes each"
-
-            split -C "$USABLE_BYTES" -d -a 3 pr_diff.txt chunk_
-
-            # Process chunks in sorted order to ensure deterministic output
-            for chunk_file in chunk_*; do
-              CHUNK_NUM=$(echo "$chunk_file" | sed 's/chunk_0*//' | sed 's/^$/0/')
-              CHUNK_NUM=$((10#$CHUNK_NUM + 1))
-
-              echo ""
-              echo "=== Processing chunk $CHUNK_NUM of $NUM_CHUNKS ==="
-
-              # Create prompt for this chunk
-              cat prompt-header.md > prompt-chunk.md
-              {
-                echo ""
-                echo "## Pull Request Diff (Part $CHUNK_NUM of $NUM_CHUNKS)"
-                echo '```diff'
-                cat "$chunk_file"
-                echo '```'
-                echo ""
-                echo "**Note**: This is part $CHUNK_NUM of $NUM_CHUNKS. Focus on reviewing the code shown above."
-              } >> prompt-chunk.md
-
-              echo "Chunk prompt size: $(wc -c < prompt-chunk.md) bytes"
-
-              # Review this chunk
-              if ! cat prompt-chunk.md | claude -p --disallowedTools "WebFetch,WebSearch" > "review-chunk-${CHUNK_NUM}.txt" 2>&1; then
-                echo "❌ ERROR: Claude code review failed on chunk $CHUNK_NUM"
-                echo "Review output:"
-                cat "review-chunk-${CHUNK_NUM}.txt"
+          # Model reaches claude's argv, so it is validated and passed as a
+          # quoted array element. An unquoted "--model $X" would let a caller
+          # append arbitrary flags (e.g. --allowedTools) to a claude process
+          # holding CLAUDE_CODE_OAUTH_TOKEN in a job with pull-requests: write.
+          MODEL_ARGS=()
+          if [ -n "$MODEL" ]; then
+            case "$MODEL" in
+              *[!A-Za-z0-9._-]*)
+                echo "::error::model must match [A-Za-z0-9._-]+ (got '$MODEL')"
                 exit 1
-              fi
-
-              echo "✅ Chunk $CHUNK_NUM reviewed ($(wc -l < review-chunk-${CHUNK_NUM}.txt) lines)"
-            done
-
-            # Combine all reviews in sorted order
-            echo "Combining reviews..."
-            {
-              echo "# Combined Code Review"
-              echo ""
-              for i in $(seq 1 $NUM_CHUNKS); do
-                echo "## Review Part $i of $NUM_CHUNKS"
-                echo ""
-                cat "review-chunk-${i}.txt"
-                echo ""
-                echo "---"
-                echo ""
-              done
-            } > review.txt
-
-            # Cleanup
-            rm chunk_* review-chunk-*.txt prompt-chunk.md
-
-            echo "✅ All chunks reviewed and combined"
-
-          else
-            echo "✅ PR size is manageable, processing as single review..."
-
-            # Create single prompt
-            cat prompt-header.md > prompt-temp.md
-            {
-              echo ""
-              echo "## Pull Request Diff"
-              echo '```diff'
-              cat pr_diff.txt
-              echo '```'
-            } >> prompt-temp.md
-
-            echo "Prompt size: $(wc -c < prompt-temp.md) bytes"
-
-            # Show first and last few lines of prompt to verify it's complete
-            echo "First 5 lines of prompt:"
-            head -5 prompt-temp.md
-            echo "Last 5 lines of prompt:"
-            tail -5 prompt-temp.md
-
-            # Pass prompt via stdin
-            echo "Calling Claude CLI..."
-            if ! cat prompt-temp.md | claude -p --disallowedTools "WebFetch,WebSearch" > review.txt 2>&1; then
-              echo "❌ ERROR: Claude code review failed"
-              echo "Review output:"
-              cat review.txt
-              exit 1
-            fi
-
-            echo "✅ Review completed"
+                ;;
+            esac
+            MODEL_ARGS=(--model "$MODEL")
+            echo "Using model: $MODEL"
           fi
 
-          # Show the actual review output for debugging
-          echo ""
-          echo "Review output (first 50 lines):"
-          head -50 review.txt
+          # One call per review, always -- no chunking, no second pass.
+          #
+          # The reviewer now works from the checked-out tree rather than a
+          # pasted diff, so the tools it needs are named explicitly. `claude -p`
+          # is non-interactive: a tool that would prompt for permission there is
+          # refused, not queued. Naming them cannot widen access -- an allow
+          # list only suppresses prompts, and nothing here restricts what the
+          # CLI would otherwise permit -- but leaving them unnamed can silently
+          # reduce the review to reading nothing, which is the one failure this
+          # input shape exists to prevent. git is listed per read-only
+          # subcommand rather than as a bare `Bash`.
+          #
+          # WebFetch/WebSearch stay denied: the runner has no useful network and
+          # the prompt forbids any finding that would need one.
+          ALLOWED_TOOLS="Read,Glob,Grep"
+          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(git log:*),Bash(git show:*)"
+          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(git diff:*),Bash(git status:*)"
+          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(git rev-parse:*)"
 
-          if [ ! -s review.txt ]; then
-            echo "❌ ERROR: Claude produced empty review"
-            exit 1
+          # The cwd is the PULL REQUEST's checkout, which is untrusted: without
+          # these two flags that branch's own CLAUDE.md, .claude/settings.json,
+          # hooks, agents and commands load as instructions to the reviewer. A
+          # PR that adds a root CLAUDE.md saying "emit the no-findings line"
+          # would otherwise get a clean review carrying a valid marker, from a
+          # job holding CLAUDE_CODE_OAUTH_TOKEN with pull-requests: write.
+          #
+          # --safe-mode disables CLAUDE.md, skills, plugins, hooks, MCP servers
+          # and custom commands/agents while leaving auth, model selection,
+          # built-in tools and permissions working normally;
+          # --setting-sources user keeps the branch's project and local
+          # settings files out as well. Both verified present in Claude Code
+          # 2.1.267 (`claude --help`). The installer above is unpinned, so a
+          # future version that drops either flag makes this invocation exit
+          # non-zero -- the review then reports that it could not run, rather
+          # than quietly running unprotected. That is the intended failure
+          # direction; pinning the CLI version would be better still.
+          SAFETY_ARGS=(--safe-mode --setting-sources user)
+
+          # --allowedTools and --disallowedTools are VARIADIC in this CLI, so
+          # they swallow any following argument that does not start with "-".
+          # The prompt therefore arrives on stdin and these two stay last;
+          # do not add a positional argument after them.
+          #
+          # stderr goes to its own file, NOT into review.txt: the whole comment
+          # body is review.txt, and the output contract is machine-checkable, so
+          # one line of CLI progress or warning noise folded in would be posted
+          # to the PR and would break the contract's regexes.
+          if ! claude -p "${MODEL_ARGS[@]}" "${SAFETY_ARGS[@]}" \
+            --allowedTools "$ALLOWED_TOOLS" \
+            --disallowedTools "WebFetch,WebSearch" \
+            < "$RUNNER_TEMP/prompt.md" \
+            > "$RUNNER_TEMP/review.txt" 2> "$RUNNER_TEMP/review.err"; then
+            echo "::warning::claude exited non-zero"
+            echo "stderr:"
+            cat "$RUNNER_TEMP/review.err"
+            echo "stdout:"
+            cat "$RUNNER_TEMP/review.txt"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the review command failed; see the job log for the CLI's output"
+            } >> "$GITHUB_ENV"
+            exit 0
           fi
 
+          if [ -s "$RUNNER_TEMP/review.err" ]; then
+            echo "::notice::claude wrote to stderr; kept out of the comment body"
+            cat "$RUNNER_TEMP/review.err"
+          fi
+
+          if [ ! -s "$RUNNER_TEMP/review.txt" ]; then
+            echo "::warning::claude produced an empty review"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the review command produced no output"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # The output contract caps the whole review at 1600 characters, so
+          # the log can hold all of it.
           echo ""
-          echo "✅ Code review completed ($(wc -l < review.txt) lines total)"
+          echo "Review output:"
+          cat "$RUNNER_TEMP/review.txt"
+          echo ""
+          echo "✅ Code review completed ($(wc -c < "$RUNNER_TEMP/review.txt") characters)"
 
       - name: Post review comment
         env:
+          # gh otherwise resolves the repository from the checkout's git
+          # remote, and the error comment can run when that checkout is the
+          # thing that failed.
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-        if: env.SKIP_REVIEW != 'true'
+        if: env.REVIEW_OUTCOME == 'reviewed'
         run: |
           echo "Posting review to PR..."
-          gh pr comment ${{ github.event.pull_request.number }} --body "## 🤖 Claude Code Review
-          $(cat review.txt)
+          gh pr comment "$PR_NUMBER" --body "## 🤖 Claude Code Review
+          $(cat "$RUNNER_TEMP/review.txt")
+          ${EXCLUDED_SUMMARY:+
+          **Not reviewed** (dropped by \`exclude_globs\`):
+          \`\`\`text
+          $EXCLUDED_SUMMARY
+          \`\`\`}
+          ${OMITTED_SUMMARY:+
+          **Patch not supplied** (over \`max_review_bytes\`):
+          \`\`\`text
+          $OMITTED_SUMMARY
+          \`\`\`}
           ---
           *Automated code review analyzing defects and coding standards*"
-          echo "✅ Review posted to PR #${{ github.event.pull_request.number }}"
+          echo "✅ Review posted to PR #${PR_NUMBER}"
 
       - name: Post skip message
         env:
+          # gh otherwise resolves the repository from the checkout's git
+          # remote, and the error comment can run when that checkout is the
+          # thing that failed.
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-        if: env.SKIP_REVIEW == 'true'
+        if: env.REVIEW_OUTCOME == 'empty'
         run: |
           echo "Posting skip message to PR..."
-          gh pr comment ${{ github.event.pull_request.number }} --body "## 🤖 Claude Code Review
+          gh pr comment "$PR_NUMBER" --body "## 🤖 Claude Code Review
 
-          ⚠️ **No file changes detected** - skipping code review.
+          ⚠️ **No reviewable changes detected** — skipping code review.
 
-          This PR appears to contain only metadata changes (labels, description, etc.)."
-          echo "✅ Skip message posted to PR #${{ github.event.pull_request.number }}"
+          This PR has no source changes left after applying \`exclude_globs\`, or contains only metadata changes (labels, description, etc.).
+
+          ${EXCLUDED_SUMMARY:+**Excluded:**
+          \`\`\`text
+          $EXCLUDED_SUMMARY
+          \`\`\`}"
+          echo "✅ Skip message posted to PR #${PR_NUMBER}"
+
+      - name: Post bot-skip message
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        if: env.REVIEW_OUTCOME == 'bot'
+        run: |
+          # A silently absent review is indistinguishable from a broken
+          # workflow, so the skip says so on the PR and carries the marker,
+          # exactly like the three other outcomes. lane=S is reserved for this
+          # comment: the model is never running when it is posted, so nothing
+          # else can emit it and a parser can tell a skip from a clean review.
+          echo "Posting bot-skip message to PR..."
+          STALE_NEEDLE=$(cat "$RUNNER_TEMP/stale_needle.txt" 2>/dev/null || true)
+          if [ -s "$RUNNER_TEMP/stale_refs.txt" ]; then
+            FINDINGS=1
+            DETAIL="
+          **1 finding** — 0 blockers, 1 risk.
+
+          - **RISK** \`${STALE_NEEDLE}\` — the previous version string still appears in the working tree. Confirm each is meant to stay; a dependency table, a badge or a \`REFRESHED_AT\` left behind is the usual cause.
+
+          \`\`\`text
+          $(cat "$RUNNER_TEMP/stale_refs.txt")
+          \`\`\`"
+          else
+            FINDINGS=0
+            DETAIL=""
+          fi
+          gh pr comment "$PR_NUMBER" --body "## 🤖 Claude Code Review
+
+          ⏭️ **Skipped** — this pull request was opened by a bot, and \`review_bot_authors\` is false.
+          $DETAIL
+
+          <!-- claude-review v2 lane=S findings=${FINDINGS} blockers=0 head=${HEAD_SHA} -->
+          ---
+          *Automated code review analyzing defects and coding standards*"
+          echo "✅ Bot-skip message posted to PR #${PR_NUMBER}"
+
+      - name: Post review-unavailable message
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        # `|| failure()` covers the paths that cannot degrade gracefully --
+        # a checkout that dies, a caller passing a malformed input. Those
+        # still end the job red, which is right, but they now say so on the
+        # pull request instead of only in a job log nobody opens.
+        if: env.REVIEW_OUTCOME == 'error' || failure()
+        run: |
+          # A comment always appears. Before this existed, a failed fetch, a
+          # crashed filter or a repo that already owned a pr-files directory
+          # turned the job red and posted nothing, which is indistinguishable
+          # from the workflow being broken and blocks merges anywhere this is
+          # a required check.
+          echo "Posting review-unavailable message to PR..."
+          gh pr comment "$PR_NUMBER" --body "## 🤖 Claude Code Review
+
+          ⚠️ **The code review could not run.**
+
+          Reason: ${REVIEW_ERROR:-a step of the review workflow failed; see the job log}
+
+          Nothing about this pull request has been reviewed or approved by this check. See the job log for detail.
+
+          ---
+          *Automated code review analyzing defects and coding standards*"
+          echo "✅ Review-unavailable message posted to PR #${PR_NUMBER}"

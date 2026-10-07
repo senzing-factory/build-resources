@@ -1,0 +1,27 @@
+# super-linter reads this from LINTER_RULES_PATH, which defaults to .github/linters.
+#
+# Adding a file here REPLACES super-linter's built-in default rather than
+# extending it, so this reproduces TEMPLATES/.codespellrc from super-linter
+# v8.7.0 -- the tag linter.yaml pins -- and then adds one key.
+# Do not delete it to "pick up the defaults": the defaults are below.
+#
+# Reproduced verbatim from the template: check-hidden, and the skip list.
+#
+# ADDED: ignore-words-list. codespell carries its own dictionary and flags
+# real words cspell accepts, so these two are named individually rather than
+# a rule being switched off:
+#
+#   caf  -- not a misspelling of "calf". claude/test_filter_diff.sh builds a
+#           "cafe.png" fixture out of raw bytes, "caf\303\251" (UTF-8) and
+#           "caf\351" (latin-1), to prove the filter passes a non-UTF-8 diff
+#           through unaltered. The byte sequence IS the test; renaming it
+#           deletes the coverage.
+#
+#   unparseable -- an accepted variant spelling of "unparsable", already in
+#           .vscode/cspell.json's word list, used in
+#           .github/workflows/claude-pull-request-review.yaml for a count
+#           that failed to parse.
+[codespell]
+check-hidden =
+skip = */package-lock.json,*/go.mod,*/go.sum,*.log,.git
+ignore-words-list = caf,unparseable
