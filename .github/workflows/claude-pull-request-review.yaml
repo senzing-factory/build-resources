@@ -301,11 +301,16 @@ jobs:
 
           # Intermediate files go to RUNNER_TEMP for the same reason.
           #
-          # -F per_page=100: the endpoint defaults to 30 per page, and caps at
-          # 3,000 files overall, after which the count is silently short.
+          # per_page goes in the URL, never as -F: `gh api` switches from GET
+          # to POST as soon as any -f/-F field is present, which in 4.6.0 POSTed
+          # this read-only route, 404d, and left the job green with no review.
+          # A query parameter has no such failure mode.
+          #
+          # Independently of paging, the endpoint caps at 3,000 files, after
+          # which the count is silently short.
           echo "Fetching the PR's changed files..."
-          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
-            -F per_page=100 --paginate > "$RUNNER_TEMP/pr_files.json"; then
+          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            --paginate > "$RUNNER_TEMP/pr_files.json"; then
             echo "::warning::could not fetch the PR's changed files"
             {
               echo "REVIEW_OUTCOME=error"
@@ -419,13 +424,16 @@ jobs:
             echo "::warning::could not fetch the PR description"
             echo '{}' > "$RUNNER_TEMP/discussion_pull.json"
           fi
-          if ! gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            -F per_page=100 --paginate > "$RUNNER_TEMP/discussion_issue.json"; then
+          # In the URL here too, and for a sharper reason: POST on
+          # issues/N/comments and pulls/N/comments CREATES a comment, so an
+          # inferred method on these two is a write route, not a failed read.
+          if ! gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --paginate > "$RUNNER_TEMP/discussion_issue.json"; then
             echo "::warning::could not fetch the PR's issue comments"
             echo '[]' > "$RUNNER_TEMP/discussion_issue.json"
           fi
-          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments" \
-            -F per_page=100 --paginate > "$RUNNER_TEMP/discussion_review.json"; then
+          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100" \
+            --paginate > "$RUNNER_TEMP/discussion_review.json"; then
             echo "::warning::could not fetch the PR's review comments"
             echo '[]' > "$RUNNER_TEMP/discussion_review.json"
           fi
