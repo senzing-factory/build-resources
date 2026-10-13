@@ -49,6 +49,7 @@
     "shellcheck",
     "SHFMT",
     "signingkey",
+    "skern",
     "stackoverflow",
     "subshell",
     "testcoverage",
