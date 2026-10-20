@@ -46,6 +46,10 @@ jobs:
     if: ${{ needs.changes.outputs.workflows == 'true' }}
     name: lint workflows
     needs: changes
+    # super-linter's own default, pinned here so the step below and
+    # super-linter cannot disagree about where checkov's config is read from.
+    env:
+      LINTER_RULES_PATH: .github/linters
     permissions:
       contents: read
       packages: read
@@ -59,6 +63,31 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # super-linter invokes checkov as a tree scanner, not per file, so
+      # FILTER_REGEX_INCLUDE below never reaches it and a workflow named
+      # "lint workflows" fails on findings the pull request never touched.
+      # checkov reads its config from inside the caller's checkout, so the
+      # runner workspace is the only place a reusable workflow can set it.
+      # The allowlist keeps the CI-configuration frameworks and drops the
+      # ones that walk the whole repository.
+      - name: scope checkov to ci configuration frameworks
+        run: |
+          checkov_config="${LINTER_RULES_PATH}/.checkov.yaml"
+          if [ -e "${checkov_config}" ]; then
+            echo "${checkov_config} exists here; leaving it alone"
+            exit 0
+          fi
+          mkdir -p "$(dirname "${checkov_config}")"
+          {
+            echo "---"
+            echo "quiet: true"
+            echo "framework:"
+            echo "  - github_actions"
+            echo "  - dockerfile"
+            echo "  - gitlab_ci"
+          } > "${checkov_config}"
+          cat "${checkov_config}"
 
       - name: lint code base
         uses: super-linter/super-linter@4ce20838b8ab83717e78138c5b3a1407148e0918 # v8.7.0
