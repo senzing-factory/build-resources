@@ -20,11 +20,15 @@ jobs:
   # In order to require linting as a status check we need to
   # run the overall workflow on every pr.
   # This is used to skip at the job level if there are no
-  # changes to the workflow files.
+  # changes to the files the linter is scoped to.
+  # The filter below must stay in step with FILTER_REGEX_INCLUDE
+  # in the lint-workflows job: a gate narrower than that scope
+  # silently hides files super-linter is configured to lint --
+  # composite actions under .github/actions/ were never linted this way.
   changes:
     runs-on: ubuntu-latest
     outputs:
-      workflows: ${{ steps.changes.outputs.workflows }}
+      dot-github: ${{ steps.changes.outputs.dot-github }}
     permissions:
       contents: read
       pull-requests: read
@@ -39,11 +43,11 @@ jobs:
         id: changes
         with:
           filters: |
-            workflows:
-              - '.github/workflows/**'
+            dot-github:
+              - '.github/**'
 
   lint-workflows:
-    if: ${{ needs.changes.outputs.workflows == 'true' }}
+    if: ${{ needs.changes.outputs.dot-github == 'true' }}
     name: lint workflows
     needs: changes
     # super-linter's own default, pinned here so the step below and
