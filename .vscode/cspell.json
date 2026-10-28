@@ -114,6 +114,7 @@
     "outp",
     "patchless",
     "pathspec",
+    "PCRE",
     "pipefail",
     "pipx",
     "Popen",
