@@ -118,11 +118,11 @@ def is_null_sha(sha: str) -> bool:
     and was named as an attribute conflict: the alarm this program raises for
     a pull request suppressing its own patch, fired by `git rm logo.png`.
 
-    `--no-abbrev` on the `--raw` call would have fixed the measured case and
-    is not what is wanted, because the width is not the only thing that
-    varies: in a sha256 repository the null name is sixty-four zeros and a
-    forty-zero constant is wrong there too. A shape test is independent of
-    both the abbreviation length and the object format.
+    `git_raw_records` now passes `--no-abbrev`, for a different reason, and
+    this test still earns its place: the width is not the only thing that
+    varies, because in a sha256 repository the null name is sixty-four zeros
+    and a forty-zero constant is wrong there too. A shape test is independent
+    of both the abbreviation length and the object format.
     """
     return bool(sha) and set(sha) == {"0"}
 
@@ -296,15 +296,14 @@ def split_sections(data: bytes) -> list:
     return sections
 
 
-def local_patches(diff_path: str, globs: list) -> tuple:
-    """(path -> patch bytes, set of binary paths) from a local `git diff`.
+def local_patches_from_bytes(data: bytes, globs: list) -> tuple:
+    """(path -> patch bytes, set of paths git rendered as binary) from a diff.
 
-    The whole diff is read into memory and split into sections BEFORE any
-    glob is applied -- split_sections() returns a list -- so the globs bound
-    what is retained as patch bytes, not peak memory. `git diff` has no size
-    cap, which is the point of using it, so a change touching a large
-    generated tree produces a large diff and that diff is held whole for the
-    length of this call.
+    The whole diff is split into sections BEFORE any glob is applied --
+    split_sections() returns a list -- so the globs bound what is retained as
+    patch bytes, not peak memory. `git diff` has no size cap, which is the
+    point of using it, so a change touching a large generated tree produces a
+    large diff and that diff is held whole for the length of this call.
 
     EVERY section git rendered is kept whole except a binary one, and that
     includes a section with no `@@ ` hunk. A mode change and a pure rename
@@ -326,27 +325,12 @@ def local_patches(diff_path: str, globs: list) -> tuple:
     checkout, which is the pull request's OWN `.gitattributes`. See the
     `* !diff` line in the workflow's "Collect reviewable files" step.
 
-    A path ABSENT from this diff falls back to the API record, and so does a
-    path whose only answer here is the empty bytes of a binary section when
-    the API has a real patch for it; see `_patch_for`.
-    """
-    with open(diff_path, "rb") as fh:
-        return local_patches_from_bytes(fh.read(), globs)
-
-
-def local_patches_from_bytes(data: bytes, globs: list) -> tuple:
-    """(path -> patch bytes, set of paths git rendered as binary) from a diff.
-
-    Split out from `local_patches` because the manifest mode now runs
-    `git diff` itself and holds the result in memory rather than handing a
-    file path around; the file-reading form stays for the standalone
-    filtering mode, which is given a diff on disk.
-
-    The returned binary set is git's OWN verdict and is no longer what the
-    manifest's `binary` token is built from -- `sniff_binary` decides that
-    from the blob, because git resolves binary-ness through
-    `.gitattributes`, which the pull request under review owns. The set is
-    still returned so the two can be compared.
+    The binary set falls out of the same pass and the manifest path discards
+    it. `git_records` compares git's verdict against the blob's own content
+    using `--numstat`'s `-` instead, and that is the better witness of the
+    two: it is a field, keyed by a NUL-delimited path, where this set is the
+    English string "Binary files " matched against patch text and keyed by a
+    path parsed back out of a `diff --git` header.
     """
     patches: dict = {}
     binary = set()
@@ -499,6 +483,14 @@ def git_raw_records(base: str, head: str, cwd: str = ".") -> list:
     matching each other precisely when a change contains the kind of path
     somebody chose deliberately. With `-z` every path is a raw NUL-
     terminated byte string and there is nothing to unquote.
+
+    `--no-abbrev` so those names are object ids rather than prefixes.
+    `sniff_binary` resolves each one in a SEPARATE `cat-file` process, and a
+    prefix that `git diff` found unique can stop being unique between the two
+    -- `cat-file` then answers `ambiguous`, which that function reads as "no
+    verdict", which lands as a false attribute conflict and a `-` row the
+    reviewer cannot open. Only the field WIDTHS change; the record is still
+    five space-separated fields and then the NUL-separated paths.
     """
     out = _git(
         [
@@ -506,6 +498,7 @@ def git_raw_records(base: str, head: str, cwd: str = ".") -> list:
             "diff",
             "--raw",
             "-z",
+            "--no-abbrev",
             *GIT_DIFF_FLAGS,
             base,
             head,

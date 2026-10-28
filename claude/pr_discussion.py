@@ -49,6 +49,7 @@ enormous comment cannot evict the rest of the thread.
 import os
 import re
 import sys
+import unicodedata
 
 import review_io
 
@@ -124,22 +125,49 @@ DISCUSSION_POSTAMBLE = (
     " is unchanged."
 )
 
-# Characters with no legitimate place in a comment body that is about to
-# be read as evidence, and every one of them a way to carry text a human
-# reviewing the same thread would never see. Named here in escaped form
-# on purpose: a source file that contains the characters it is trying to
-# strip cannot be grepped, diffs as binary, and hides the next one.
+# Text a human reading the same thread would never see, removed by an
+# ALLOW-LIST. The deny-list this replaced enumerated the zero-width set,
+# the soft hyphen, the bidi overrides and isolates and the C0/C1 controls,
+# and still missed U+200E/200F, U+2060-2064, U+061C, U+2028/2029 and the
+# whole TAG BLOCK U+E0000-E007F, which spells arbitrary ASCII that renders
+# as nothing and reads perfectly to a model. A list of invisible characters
+# goes stale every Unicode revision; the property does not. `_path()` below
+# already reduces by the same test.
 #
-#   U+200B to U+200D, U+FEFF  zero-width space, non-joiner, joiner, BOM
-#   U+00AD                    soft hyphen
-#   U+202A to U+202E          bidi embedding and override
-#   U+2066 to U+2069          bidi isolates
-#   C0 and C1 controls        everything but TAB, LF and CR, which are
-#                             structure rather than payload
-INVISIBLE = re.compile(
-    r"[\u200b-\u200d\ufeff\u00ad\u202a-\u202e\u2066-\u2069"
-    r"\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\u009f]"
+# KEPT: whatever `str.isprintable()` allows, plus TAB, LF and CR, which are
+# structure rather than payload, plus the Zs spaces -- the non-breaking
+# space, the en and em spaces, U+3000 -- which occupy width and are in pasted
+# prose, so stripping them would put a notice on half the thread and tell
+# the reviewer nothing.
+#
+# REMOVED: the C0 and C1 controls, every format character (Cf: zero-width,
+# bidi, tag block), the line and paragraph separators, unassigned and
+# private-use code points, and lone surrogates. Plus INVISIBLE_PRINTABLE
+# below, which is the residue the category test lets through: the variation
+# selectors are marks, so `isprintable()` allows them, and they are the
+# carrier the published tag-block smuggling trick rides on.
+INVISIBLE_PRINTABLE = frozenset(
+    chr(point)
+    for first, last in ((0xFE00, 0xFE0F), (0xE0100, 0xE01EF))
+    for point in range(first, last + 1)
 )
+STRUCTURE = frozenset("\t\n\r")
+
+
+def _visible(char: str) -> bool:
+    """False for a character a human reading the rendered thread cannot see."""
+    if char in STRUCTURE:
+        return True
+    if char in INVISIBLE_PRINTABLE:
+        return False
+    return char.isprintable() or unicodedata.category(char) == "Zs"
+
+
+def strip_invisible(text: str) -> tuple:
+    """(text, characters removed) with every invisible code point dropped."""
+    kept = "".join(char for char in text if _visible(char))
+    return kept, len(text) - len(kept)
+
 
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # An UNTERMINATED `<!--` hides everything after it in GitHub's render while
@@ -220,15 +248,19 @@ def sanitise(text: str) -> tuple:
     """
     counts: dict = {}
 
-    def _count(key: str, pattern, replacement, value: str) -> str:
-        cleaned, hits = pattern.subn(replacement, value)
+    def _tally(key: str, hits: int) -> None:
         if hits:
             counts[key] = counts.get(key, 0) + hits
+
+    def _count(key: str, pattern, replacement, value: str) -> str:
+        cleaned, hits = pattern.subn(replacement, value)
+        _tally(key, hits)
         return cleaned
 
     text = _count("html_comment", HTML_COMMENT, "", text)
     text = _count("html_comment", HTML_COMMENT_OPEN, "", text)
-    text = _count("invisible", INVISIBLE, "", text)
+    text, hidden = strip_invisible(text)
+    _tally("invisible", hidden)
     text = _count("image_alt", IMAGE_ALT_INLINE, "![](", text)
     text = _count("image_alt", IMAGE_ALT_REF, r"![]\1", text)
     text = _count("link_title", LINK_TITLE, r"\1", text)

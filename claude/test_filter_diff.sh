@@ -215,6 +215,30 @@ check "and that file gets a real patch instead" \
 check "nothing is left unpatched once the attributes are neutralised" \
   '0' "$(printf '%s\n' "$LOG" | sed -n 's/^Unpatched \([0-9][0-9]*\) file(s).*/\1/p')"
 
+# THE OBJECT NAMES THOSE VERDICTS ARE ASKED FOR. `git diff --raw` abbreviates
+# to whatever is unique when the diff runs, and `sniff_binary` resolves each
+# name in a SEPARATE `cat-file` process: a prefix that stops being unique
+# between the two answers `ambiguous`, which that function reads as "no
+# verdict", which comes out as a false attribute conflict and a `-` row the
+# reviewer cannot open. `--no-abbrev` removes the class, and changes only the
+# field widths -- the record is still five fields and then the paths.
+RAW_WIDTHS=$(cd "$HERE" && BASE="$BASE" HEAD="$HEAD" REPO="$REPO" python3 - <<'PYEOF'
+import os
+import sys
+
+sys.path.insert(0, ".")
+import filter_diff  # noqa: E402  -- after the path is set
+
+records = filter_diff.git_raw_records(
+    os.environ["BASE"], os.environ["HEAD"], os.environ["REPO"]
+)
+widths = {len(r[k]) for r in records for k in ("old_sha", "new_sha")}
+print(",".join(str(w) for w in sorted(widths)))
+PYEOF
+)
+check "every raw record carries a full object name, not a prefix" \
+  '40' "$RAW_WIDTHS"
+
 # A mode change and a pure rename have no "@@" hunk at all. Those lines ARE
 # the whole change, and discarding them reported a 644 -> 755 file as
 # undiffable and sent the reviewer to a working tree where the executable
