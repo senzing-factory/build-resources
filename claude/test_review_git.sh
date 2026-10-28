@@ -47,7 +47,13 @@ printf 'hello\n' > "$REPO/a.txt"
 git -C "$REPO" add a.txt
 git -C "$REPO" commit -qm "first"
 printf 'world\n' >> "$REPO/a.txt"
-git -C "$REPO" add a.txt
+# A tracked file whose NAME contains `=`, and a subdirectory, both for the
+# `--name=value` split: the split must not reach a pathspec, and `--relative`
+# must keep working with a value that stays inside the tree.
+printf 'equals\n' > "$REPO/a=b.txt"
+mkdir -p "$REPO/sub"
+printf 'nested\n' > "$REPO/sub/c.txt"
+git -C "$REPO" add -A
 git -C "$REPO" commit -qm "second"
 
 rgit() { # rgit <args...> -> exit status; stdout to $WORK/out, stderr to $WORK/err
@@ -136,6 +142,35 @@ refused "one path inside and one outside is refused" diff a.txt /etc/hostname
 refused "a directory pair that would dump a tree is refused" diff empty "$WORK/elsewhere"
 refused "a .. segment inside a longer path is refused" log -1 -- a/../../outside.txt
 refused "a bare .. is refused" diff .. /dev/null
+
+# THE VALUE OF A `--name=value`, which the scan above does not reach. Both
+# of these are a path argument wearing an option's clothes: the `..` follows
+# `=` rather than `/`, so the segment test never saw it, and the absolute
+# path begins at `=` rather than at the first character, so the `/*` test
+# never saw it either. `--relative` is the live one -- git resolves it
+# against the work tree and will walk out of it.
+refused "a .. segment in a --name=value is refused" diff --relative=../x HEAD^ HEAD
+refused "an absolute path in a --name=value is refused" diff --relative=/etc HEAD^ HEAD
+# `-O` names a diff orderfile, which git READS, and a short option with its
+# value attached is invisible to every other test here: it starts with `-`,
+# so the absolute-path test skips it, and it carries no `--`, so the
+# long-option scan skips it too.
+refused "-O with an attached value is refused" diff -O/etc/passwd HEAD^ HEAD
+# The separated spelling needs no rule of its own -- the value is its own
+# argument and the absolute-path test already has it. Asserted so that a
+# later narrowing of that test cannot open this without a failure.
+refused "-O with a separated value outside the tree is refused" \
+  diff -O /etc/passwd HEAD^ HEAD
+
+# The controls for that split, so it cannot be over-refusing in silence. A
+# PATHSPEC may legitimately contain `=`, and a `--name=value` whose value
+# stays inside the tree is the ordinary use of the option that prompted the
+# refusals above.
+allowed "a pathspec containing = is still accepted" log -1 --oneline -- a=b.txt
+allowed "a --name=value inside the tree is still accepted" \
+  diff --relative=sub HEAD^ HEAD
+allowed "a --name=value that is not a path at all is still accepted" \
+  log -1 --format=%s
 
 # The test is a `..` PATH SEGMENT, not the two characters, or every revision
 # range the reviewer is told to use would be refused along with it.

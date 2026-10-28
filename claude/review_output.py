@@ -118,6 +118,11 @@ SEVERITIES = ("BLOCKER", "RISK")
 # What the reviewer says it could not do.
 BLIND_VERBS = r"(?:see|confirm|verify|determine|assess|review|read|open|tell)"
 
+# What the reviewer was GIVEN, as opposed to anything the code touches. Every
+# one of these nouns names the review's own window on the repository, which
+# is what makes it the second signal the subject-less clause below needs.
+VIEW = r"(?:diff|patch|excerpt|chunk|section|context|snippet|review|manifest)"
+
 # A finding that is really a coverage status. Each of these is the reviewer
 # describing its own view rather than the code, which is a fact about the
 # run and belongs in the coverage report with a reason code.
@@ -130,13 +135,26 @@ BLIND_VERBS = r"(?:see|confirm|verify|determine|assess|review|read|open|tell)"
 # steers the model into exactly that vocabulary, so the narrowing is
 # load-bearing rather than tidy. First person, or the start of a clause
 # where the reviewer is the implied subject, is the discriminator.
+#
+# AND A SUBJECT-LESS CLAUSE IS NOT ENOUGH ON ITS OWN. "Cannot read the
+# manifest when XDG_CONFIG_HOME is unset" is a defect in the loader reported
+# symptom-first, and the clause-start alternative was the hole the first
+# person narrowing above left: it matched that sentence and dropped it.
+# So the clause needs a second signal -- it names the reviewer's VIEW, or it
+# ends right there, because "cannot confirm." with no object is a statement
+# about the review and nobody's symptom. What that costs is the middle case,
+# "cannot confirm the signature is checked" with no first person and no view
+# noun: it now posts as a finding instead of being recorded as coverage.
+# Deliberate. This branch DROPS, so a wrong match deletes a real finding
+# silently while a missed one is merely filler on the pull request.
 BLINDNESS = re.compile(
     r"(?:"
     rf"(?:^|[.;:,] )(?:cannot|can ?not|could not|unable to) {BLIND_VERBS}"
+    rf"(?:[^.;:!?]{{0,60}}?\b(?:from|in|within|without|outside) "
+    rf"(?:the |this |my |any )?{VIEW}\b|[\s.!?]*$)"
     r"|\b(?:i|we) (?:cannot|can ?not|could not|could ?n.t|ca ?n.t"
     rf"|(?:am|are|was|were) unable to) {BLIND_VERBS}"
-    r"|not visible in (?:the |this |my )?"
-    r"(?:diff|patch|excerpt|chunk|section|context|snippet|review|manifest)"
+    rf"|not visible in (?:the |this |my )?{VIEW}"
     r"|no patch (?:was )?(?:supplied|available|provided)"
     r"|in this (?:part|chunk|section) (?:of|only)"
     r"|not (?:included|supplied) in (?:the|this) (?:diff|patch|review)"
@@ -171,7 +189,17 @@ CONVENTION = re.compile(
     r"(?:"
     rf"\bmissing (?:an? |the )?{ARTEFACT}\b"
     rf"|\b{ARTEFACT} (?:is |was )?(?:missing|absent)\b"
-    r"|\bundocumented\b"
+    # PREDICATIVE ONLY. "undocumented" is a claim about absent documentation
+    # when it is what something IS -- "the `--lane` flag is undocumented" --
+    # and a claim about a dependency when it MODIFIES a noun: "relies on an
+    # undocumented ordering guarantee" is a risk about the thing depended on,
+    # and the bare word dropped it outright. The artefact scoping the rest of
+    # this pattern uses cannot be applied here, because the artefact this
+    # alternative is about is the word itself; the copula is the discriminator
+    # instead. "an undocumented flag" now survives, which is filler getting
+    # through rather than a finding being deleted.
+    r"|\b(?:is|are|was|were|remains?|stays?|left) "
+    r"(?:still |currently )?undocumented\b"
     r"|\bnot documented\b"
     rf"|\bno {ARTEFACT}\b"
     rf"|\bhas no {ARTEFACT}\b"
@@ -182,7 +210,15 @@ CONVENTION = re.compile(
     rf" (?:an? |the )?{ARTEFACT}\b"
     rf"|\b{ARTEFACT} should (?:be )?(?:add|added|update|updated"
     r"|document|documented|include|included)\b"
-    r"|\bshould (?:be )?document(?:ed)?\b"
+    # Same treatment, by the lookahead SELF_DISCLAIM already uses for the
+    # same reason: the whole finding is dropped, so one documentation clause
+    # riding along with substance deletes the substance too. "The workflow
+    # grants `contents: write`; the reason should be documented and the scope
+    # narrowed" is a security finding that this alternative ate. It counts
+    # where the sentence ends there, or where it names the artefact it wants
+    # the line added to.
+    rf"|\bshould (?:be )?document(?:ed)?"
+    rf"(?= (?:in|on|under|within) (?:an? |the )?{ARTEFACT}\b|[\s.!]*$)"
     rf"|\bneeds? (?:an? )?{ARTEFACT}"
     rf"|\bwithout (?:an? )?{ARTEFACT}"
     rf"|\b{ARTEFACT} (?:was |is |has )?not (?:updated|bumped|added)\b"

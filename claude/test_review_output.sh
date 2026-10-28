@@ -320,6 +320,59 @@ orun blind2.json blind2.md m_blind2.env > /dev/null
 check "the reviewer's own blindness is still rerouted" \
   '2' "$(metric_of "$REPO/m_blind2.env" REVIEW_BLIND_REROUTED)"
 
+# The hole the first-person narrowing left. A clause with no subject at all
+# opens a defect report as readily as a blindness claim -- a reviewer stating
+# the symptom before the cause writes exactly this -- so the clause-start
+# alternative needs a second signal before it may drop anything.
+jf symptom.json '{"findings":[
+{"severity":"BLOCKER","path":"src/auth.go","line":12,"message":"Cannot read the config when XDG_CONFIG_HOME is unset, because the loader hardcodes the path. Fix the lookup."},
+{"severity":"BLOCKER","path":"src/auth.go","line":13,"message":"Unable to open the socket once the path exceeds 108 bytes, so the daemon aborts. Shorten it."}
+]}'
+: > "$REPO/m_symptom.env"
+orun symptom.json symptom.md m_symptom.env > /dev/null
+check "a subject-less defect report is not blindness" \
+  '2' "$(grep -c '^- \*\*BLOCKER\*\*' "$REPO/symptom.md")"
+check "and neither is rerouted to coverage" \
+  '0' "$(metric_of "$REPO/m_symptom.env" REVIEW_BLIND_REROUTED)"
+
+# The two shapes that keep the alternative worth having: the clause names the
+# reviewer's view, or it ends there with no object, which no symptom does.
+jf noself.json '{"findings":[
+{"severity":"RISK","path":"logo.png","line":0,"message":"Cannot confirm the byte order from the diff."},
+{"severity":"RISK","path":"logo.png","line":0,"message":"The row carries no patch; cannot confirm."}
+]}'
+: > "$REPO/m_noself.env"
+orun noself.json noself.md m_noself.env > /dev/null
+check "a subject-less blindness claim is still rerouted" \
+  '2' "$(metric_of "$REPO/m_noself.env" REVIEW_BLIND_REROUTED)"
+
+# ---------------------------------------------------------------------------
+# Mechanism 2, the two alternatives that were not scoped to the nouns
+# ---------------------------------------------------------------------------
+#
+# `undocumented` and `should be documented` dropped outright, at a path that
+# resolves nowhere, while every other alternative in the pattern had to name
+# a CHANGELOG, a README, documentation or a test first. Both of these ate a
+# finding that was not about documentation at all.
+jf docword.json '{"findings":[
+{"severity":"BLOCKER","path":"src/missing.go","line":5,"message":"The loader relies on an undocumented ordering guarantee in the C library. Pin the version."},
+{"severity":"BLOCKER","path":"src/missing.go","line":6,"message":"The workflow grants contents write; the reason should be documented and the scope narrowed to read."},
+{"severity":"BLOCKER","path":"src/missing.go","line":7,"message":"The new lane flag is undocumented."},
+{"severity":"BLOCKER","path":"src/missing.go","line":8,"message":"The retry semantics should be documented."}
+]}'
+: > "$REPO/m_docword.env"
+orun docword.json docword.md m_docword.env > /dev/null
+check "a dependency on an undocumented guarantee survives" \
+  '1' "$(grep -c 'ordering guarantee' "$REPO/docword.md")"
+check "substance riding with a documentation clause survives" \
+  '1' "$(grep -c 'scope narrowed to read' "$REPO/docword.md")"
+check "the predicative form is still padding" \
+  '0' "$(grep -c 'lane flag' "$REPO/docword.md" || true)"
+check "and so is the claim that ends at the verb" \
+  '0' "$(grep -c 'retry semantics' "$REPO/docword.md" || true)"
+check "exactly the two documentation claims are counted as padding" \
+  '2' "$(metric_of "$REPO/m_docword.env" REVIEW_PADDING_REJECTED)"
+
 # ---------------------------------------------------------------------------
 # Mechanism 2 drops where mechanism 4 only downgrades, so they must not race
 # ---------------------------------------------------------------------------

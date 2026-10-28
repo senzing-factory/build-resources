@@ -78,13 +78,36 @@ REFUSED="${REFUSED} --exec-path --upload-pack --receive-pack"
 
 # Every argument is scanned, including any after `--`: a path that happens to
 # be spelled like a refused option is refused too, which costs nothing.
-for arg in "$@"; do
-  case "$arg" in
-    /*) refuse "refusing '${arg}': an absolute path reads outside this repository" ;;
+# Both path tests, over one piece of text. Factored out because they have to
+# run twice: once on the argument as spelled, and once on the VALUE of a
+# `--name=value`. Scanning only the former let two shapes through --
+# `--relative=../x`, where the `..` follows `=` rather than `/`, and
+# `--foo=/etc/x`, whose first character is `-`.
+check_path() { # check_path <text to test> <argument as the caller spelled it>
+  case "$1" in
+    /*) refuse "refusing '${2}': an absolute path reads outside this repository" ;;
   esac
-  case "/$arg/" in
+  case "/$1/" in
     */../*)
-      refuse "refusing '${arg}': a '..' path segment reads outside this repository"
+      refuse "refusing '${2}': a '..' path segment reads outside this repository"
+      ;;
+  esac
+}
+
+for arg in "$@"; do
+  check_path "$arg" "$arg"
+  # Only for long options: a PATHSPEC may legitimately contain `=`, and
+  # splitting one would refuse a file this repository really has.
+  case "$arg" in
+    --?*=*) check_path "${arg#*=}" "$arg" ;;
+  esac
+  # A short option with its value attached is invisible to everything above:
+  # it starts with `-`, so the absolute-path test skips it, and it has no
+  # `--`, so the long-option scan below skips it too. `-O` is the one that
+  # reads a file -- git diff's orderfile.
+  case "$arg" in
+    -O?*)
+      refuse "refusing '${arg}': -O names a diff orderfile, a file read from outside this repository's control"
       ;;
   esac
   if [ "$arg" = "-c" ]; then

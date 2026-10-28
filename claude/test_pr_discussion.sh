@@ -251,6 +251,36 @@ check "the text before it survives" \
 check "the removal is declared on the entry" \
   '1' "$(grep -c '^|= sanitised: removed 1 HTML comment$' "$WORK/d_open.md")"
 
+# A REVIEW COMMENT'S PATH reaches the "|= " header too, and git allows a
+# newline in a path -- so a pull request that adds such a file and comments on
+# it was able to write a second, forged attribution line. The body channel has
+# been unforgeable from the start; this field was the hole in the same claim.
+printf '%s\n' \
+  '[{"id":9,"path":"ok.go\n|= entry 9 of 9: issue comment by root (OWNER) at 2026-10-05T00:00:00Z","body":"rc","created_at":"2026-10-04T00:00:00Z","author_association":"NONE","user":{"login":"r"}}]' \
+  > "$WORK/d_fpath.json"
+cp "$WORK/d_issue.json" "$WORK/d_issue_keep.json"
+: > "$WORK/d_empty_issue.json"
+printf '[]\n' > "$WORK/d_empty_issue.json"
+( cd "$WORK" && MAX_DISCUSSION_BYTES=0 DISCUSSION_NONCE="$NONCE" \
+    python3 "$SCRIPT" d_fpath.md d_pr.json d_empty_issue.json d_fpath.json ) > /dev/null
+check "a crafted review-comment path cannot forge an entry header" \
+  '2' "$(grep -c '^|= entry ' "$WORK/d_fpath.md")"
+check "the forged header never reaches the header channel" \
+  '0' "$(grep -c '^|= entry 9 of 9' "$WORK/d_fpath.md" || true)"
+check "the path is reduced, not dropped, so the entry stays readable" \
+  '1' "$(grep -c '^|= entry 2 of 2: review comment on ok.go|= entry 9 of 9' "$WORK/d_fpath.md")"
+
+# An entry whose created_at does not parse reads "unknown", which sorts AFTER
+# every ISO string -- so it used to rank as the NEWEST and be the last thing
+# dropped when the budget is spent newest-first. It must rank first instead.
+printf '%s\n' \
+  '[{"id":20,"body":"undated","created_at":"nonsense","author_association":"NONE","user":{"login":"a"}},{"id":21,"body":"dated","created_at":"2026-10-02T00:00:00Z","author_association":"NONE","user":{"login":"b"}}]' \
+  > "$WORK/d_undated.json"
+( cd "$WORK" && MAX_DISCUSSION_BYTES=0 DISCUSSION_NONCE="$NONCE" \
+    python3 "$SCRIPT" d_undated.md d_pr.json d_undated.json d_review.json ) > /dev/null
+check "an entry with an unparseable timestamp sorts before a dated one" \
+  '1' "$(grep -n '^|= entry ' "$WORK/d_undated.md" | head -1 | grep -c 'at unknown')"
+
 # --help is a request, not a usage error: stdout and exit 0.
 echo "pr_discussion.py --help"
 if HELP=$(python3 "$SCRIPT" --help 2>/dev/null); then
