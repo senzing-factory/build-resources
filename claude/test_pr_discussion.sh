@@ -229,6 +229,15 @@ else
   # SC2016: the pattern is the workflow's literal shell, not an expansion.
   # shellcheck disable=SC2016
   LOOKUP_LINE=$(grep -n 'REVIEW_COMMENT_JQ}) | .id' "$WORKFLOW" | cut -d: -f1)
+  # Guarded because the window below is `$((LOOKUP_LINE - 8))`: an empty
+  # LOOKUP_LINE makes that `-8`, and sed errors out instead of the check
+  # failing with something a reader can act on. The -8 is tied to the
+  # workflow's current layout, so a comment added above the guard breaks it.
+  if [ -z "$LOOKUP_LINE" ]; then
+    echo "  FAIL  the lookup step's grep anchor is gone from $WORKFLOW" >&2
+    FAILED=1
+    LOOKUP_LINE=9
+  fi
   # shellcheck disable=SC2016  # the workflow's literal shell, not an expansion
   check "the lookup step is reached only with a resolved identity" '1' \
     "$(sed -n "$((LOOKUP_LINE - 8)),${LOOKUP_LINE}p" "$WORKFLOW" \
@@ -267,7 +276,7 @@ check "the removal is declared on the entry" \
 # STAY, because it occupies width on screen and stripping it would put a
 # `sanitised` notice on half the comments anyone pastes from a browser.
 printf '%s\n' \
-  '[{"id":6,"body":"tag󠁁󠁂ged\nmark‎‏؜s\njoin⁠⁡⁢⁣⁤er\npara  graph\nvariation️󠄁\nold​­‮er\nnon breaking","created_at":"2026-10-02T00:00:00Z","author_association":"OWNER","user":{"login":"s"}}]' \
+  '[{"id": 6, "body": "tag\udb40\udc41\udb40\udc42ged\nmark\u200e\u200f\u061cs\njoin\u2060\u2061\u2062\u2063\u2064er\npara\u2028\u2029graph\nvariation\ufe0f\udb40\udd01\nold\u200b\u00ad\u202eer\nnon\u00a0breaking", "created_at": "2026-10-02T00:00:00Z", "author_association": "OWNER", "user": {"login": "s"}}]' \
   > "$WORK/d_inv.json"
 drun 0 d_inv.md d_inv.json > /dev/null
 check "a Unicode tag-block payload does not reach the fence" \
