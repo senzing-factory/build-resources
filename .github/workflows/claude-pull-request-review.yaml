@@ -981,10 +981,10 @@ jobs:
             # containing `*` would otherwise be read back as a glob.
             printf '%s\0' "${NESTED[@]}" > "$RUNNER_TEMP/nested_ignore.z"
             # -rf, not -f: a pull request may replace one of these names with a
-          # DIRECTORY, and `rm -f` on a directory fails, which under `bash -e`
-          # kills the step before the error branch below can annotate it.
-          # None of these three names can legitimately be a directory.
-          xargs -0 -r rm -rf -- < "$RUNNER_TEMP/nested_ignore.z"
+            # DIRECTORY, and `rm -f` on a directory fails, which under `bash -e`
+            # kills the step before the error branch below can annotate it.
+            # None of these three names can legitimately be a directory.
+            xargs -0 -r rm -rf -- < "$RUNNER_TEMP/nested_ignore.z"
             if [ "${#NESTED_AT_BASE[@]}" -gt 0 ]; then
               printf ':(literal)%s\0' "${NESTED_AT_BASE[@]}" > "$RUNNER_TEMP/nested_base.z"
               if ! git checkout "$MERGE_BASE" --pathspec-file-nul \

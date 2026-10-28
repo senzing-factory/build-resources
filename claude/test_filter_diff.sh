@@ -238,8 +238,14 @@ check "a deletion gets a real patch" \
 # of the review set silently, which is the whole failure this file guards.
 check "a path containing a space gets its own patch" \
   '1' "$(manifest_of out | grep -c '^modified	2	src/with space\.go	out/[0-9]*\.patch$')"
+# The path is written literally, not as `grep -P '\xc3\xa9'`. Under C.UTF-8
+# -- which is what ubuntu-latest runs -- PCRE2 reads `\xc3` as the CHARACTER
+# U+00C3 rather than the raw byte, so it matches nothing and silently scores
+# 0; it passed with LANG unset, which is why it survived local runs until
+# this suite reached CI. Literal bytes match in every locale, and `-P` is
+# GNU-only besides.
 check "a path containing non-ASCII bytes gets its own patch" \
-  '1' "$(manifest_of out | grep -cP '^modified\t2\tsrc/caf\xc3\xa9 note\.go\tout/[0-9]*\.patch$')"
+  '1' "$(manifest_of out | grep -c '^modified	2	src/café note\.go	out/[0-9]*\.patch$')"
 check "a newline in a path is escaped onto one manifest row" \
   '1' "$(manifest_of out | grep -c '^added	1	odd\\nname\.txt	out/[0-9]*\.patch$')"
 check "a newline in a path cannot inject a second Files count" \

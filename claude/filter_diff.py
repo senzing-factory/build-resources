@@ -652,18 +652,24 @@ def sniff_binary(shas: list, cwd: str = ".") -> dict:
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     ) as proc:
+        # Narrowed once rather than asserted at each use: Popen with PIPE on
+        # both always sets these, but the annotation is Optional and mypy is
+        # right that nothing here proves it.
+        stdin, stdout = proc.stdin, proc.stdout
+        if stdin is None or stdout is None:
+            raise GitError("cat-file was started without the pipes it needs")
         try:
             for sha in wanted:
                 try:
-                    proc.stdin.write(f"{sha}\n".encode("ascii"))
-                    proc.stdin.flush()
+                    stdin.write(f"{sha}\n".encode("ascii"))
+                    stdin.flush()
                 except OSError as exc:
                     # A process that has already died shows up here first,
                     # as a broken pipe, rather than at the read below.
                     raise GitError(
                         f"cat-file stopped accepting requests at {sha}: {exc}"
                     ) from exc
-                header = proc.stdout.readline()
+                header = stdout.readline()
                 if not header:
                     # END OF STREAM, AND IT IS NOT THE ANSWER BELOW. An
                     # exited `cat-file` returns b"", which splits into no
@@ -697,13 +703,13 @@ def sniff_binary(shas: list, cwd: str = ".") -> dict:
                     # genuinely binary file as an attribute conflict and gave
                     # it a `-` row the reviewer is told to open and cannot.
                     # Same verdict as `missing` -- not binary -- once drained.
-                    _drain_object(proc.stdout, int(parts[2]), sha, 0)
+                    _drain_object(stdout, int(parts[2]), sha, 0)
                     continue
                 verdicts[sha] = b"\x00" in _drain_object(
-                    proc.stdout, int(parts[2]), sha, BINARY_SNIFF_BYTES
+                    stdout, int(parts[2]), sha, BINARY_SNIFF_BYTES
                 )
         finally:
-            proc.stdin.close()
+            stdin.close()
     if proc.returncode:
         # Closing stdin ends a healthy `cat-file` with 0, so anything else
         # means the answers above came from a process that was failing --

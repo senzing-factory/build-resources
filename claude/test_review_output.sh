@@ -1312,6 +1312,24 @@ check "a real finding built on a negation is not eaten with it" \
 check "so exactly one of the pair survives" \
   '1' "$(metric_of "$REPO/m_disclaim.env" REVIEW_FINDINGS)"
 
+# The generic verbs describe CODE as readily as they describe a review, and
+# the unscoped pattern ate a real finding built on one. Scoped now: the
+# sentence has to end there or say it is about the review.
+jf disclaim2.json '{"findings":[
+{"severity":"BLOCKER","path":"src/auth.go","line":12,"message":"The retry loop has nothing to change between attempts, so it spins forever."},
+{"severity":"BLOCKER","path":"src/auth.go","line":12,"message":"I read the whole file and there is nothing to fix."}
+]}'
+: > "$REPO/m_disclaim2.env"
+orun disclaim2.json disclaim2.md m_disclaim2.env > /dev/null
+check "a finding whose subject is the code keeps its generic verb" \
+  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/auth.go:12` — The retry loop has nothing to change' "$REPO/disclaim2.md")"
+check "the same verb about the review is still dropped" \
+  '0' "$(grep -c 'I read the whole file' "$REPO/disclaim2.md" || true)"
+check "exactly one of that pair survives too" \
+  '1' "$(metric_of "$REPO/m_disclaim2.env" REVIEW_FINDINGS)"
+check "and exactly one is counted self-disclaiming" \
+  '1' "$(metric_of "$REPO/m_disclaim2.env" REVIEW_SELF_DISCLAIMED)"
+
 # ---------------------------------------------------------------------------
 # Mechanism 11 -- an anchor that cannot be checked is not one that failed
 # ---------------------------------------------------------------------------

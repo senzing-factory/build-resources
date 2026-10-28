@@ -142,6 +142,11 @@ INVISIBLE = re.compile(
 )
 
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# An UNTERMINATED `<!--` hides everything after it in GitHub's render while
+# leaving it in the API body, so the pattern above -- which needs the `-->`
+# -- would pass text to the model that no human reviewer can see. Applied
+# after it, so anything still open really is unterminated.
+HTML_COMMENT_OPEN = re.compile(r"<!--.*\Z", re.DOTALL)
 IMAGE_ALT_INLINE = re.compile(r"!\[[^\]]*\]\(")
 IMAGE_ALT_REF = re.compile(r"!\[[^\]]*\](\[[^\]]*\])")
 LINK_TITLE = re.compile(r"(\[[^\]]*\]\([^)\s]+)\s+(?:\"[^\"]*\"|'[^']*')")
@@ -222,6 +227,7 @@ def sanitise(text: str) -> tuple:
         return cleaned
 
     text = _count("html_comment", HTML_COMMENT, "", text)
+    text = _count("html_comment", HTML_COMMENT_OPEN, "", text)
     text = _count("invisible", INVISIBLE, "", text)
     text = _count("image_alt", IMAGE_ALT_INLINE, "![](", text)
     text = _count("image_alt", IMAGE_ALT_REF, r"![]\1", text)

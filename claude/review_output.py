@@ -208,7 +208,15 @@ CONVENTION = re.compile(
 # 150-word stoplist and its merger.
 SELF_DISCLAIM = re.compile(
     r"(?:"
-    r"\bnothing (?:to|worth) (?:flag|report|raise|fix|change|address|note|do)"
+    # "flag", "report", "raise" and "note" are what a REVIEWER does, so a
+    # finding whose sentence contains them is talking about the review.
+    r"\bnothing (?:to|worth) (?:flag|report|raise|note)"
+    # "fix", "change", "address" and "do" describe code perfectly well --
+    # "the retry loop has nothing to change between attempts, so it spins
+    # forever" is a real finding, and the unscoped form ate it. These count
+    # only where the sentence ends there or scopes itself to the review.
+    r"|\bnothing (?:to|worth) (?:fix|change|address|do)"
+    r"(?= here\b| there\b| in this\b| in the (?:diff|patch)\b|[\s.!]*$)"
     r"|\bno (?:issue|issues|problem|problems|concern|concerns|finding"
     r"|findings|defect|defects) (?:here|there|found|identified|detected"
     r"|to report|in this|with this)\b"
@@ -710,7 +718,8 @@ def collapse(findings: list) -> int:
     The highest severity in the group wins, so a defect reported once as a
     BLOCKER and once as a RISK keeps the BLOCKER.
     """
-    seen, collapsed = {}, 0
+    seen: dict[tuple[str, int, str], Verdict] = {}
+    collapsed = 0
     for finding in findings:
         if finding.dropped:
             continue
@@ -1205,8 +1214,14 @@ def metrics(argv: list, kept: list, counts: dict, size: int) -> int:
         with open(notes, "r", encoding="utf-8", errors="replace") as handle:
             text = handle.read()
         if text.strip():
+            # `| ` on every line. The runner strips leading whitespace before
+            # testing for `::`, so indenting is not enough: a note beginning
+            # `::add-mask::` or `::error::` would RUN as a workflow command,
+            # and the reviewer writing these notes is reading the pull
+            # request under review.
             print("\nReviewer notes (kept off the pull request):")
-            print(text)
+            for line in text.splitlines():
+                print(f"| {line}")
 
     prev_chars, prev_findings = previous_stats(_flag(argv, "--previous"))
     regression = int(
