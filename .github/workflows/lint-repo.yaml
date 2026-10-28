@@ -9,6 +9,42 @@ on:
 permissions: {}
 
 jobs:
+  # The helper programs decide what the fleet's PR reviewer is given to
+  # read, whether a review counts as having covered the change, and what
+  # reaches a pull request. They carry fixture suites, and until recently
+  # nothing ran them: a change could break the coverage gate or the filler
+  # rejection and reach `main`, then every consumer at @v4, with every test
+  # still green on somebody's laptop.
+  #
+  # test_filter_diff.sh builds a real git repository, because the manifest is
+  # computed from git plumbing now and the cases that matter -- a blob whose
+  # content is binary, a `.gitattributes` entry that lies about one, a
+  # mode-only change, a path containing a newline -- cannot be expressed as a
+  # JSON fixture. So this job needs git, which the checkout above provides.
+  #
+  # test_review_git.sh builds one as well, and poisons its `.git/config` with
+  # a diff driver: what is worth asserting about that wrapper is that the
+  # driver does not fire, not that a flag is spelled correctly.
+  claude-helper-tests:
+    runs-on: ubuntu-latest
+    # Six shell suites over local fixtures, no network: seconds in practice.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run the Claude helper fixture suites
+        run: |
+          ./claude/test_filter_diff.sh
+          ./claude/test_pr_discussion.sh
+          ./claude/test_review_coverage.sh
+          ./claude/test_review_git.sh
+          ./claude/test_review_output.sh
+          ./claude/test_review_text.sh
+
   lint-code-base:
     permissions:
       contents: read

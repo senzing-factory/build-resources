@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# review-note -- record something the reviewer checked, where it will not be
+# posted to the pull request.
+#
+# Usage:  review-note <text...>
+#
+# The reviewer is told to use this for anything it looked at and found clean.
+# That impulse is real and constant -- "no SQL injection in the new handler",
+# "the version table is consistent" -- and the fourth requirement on this
+# reviewer is that none of it reaches the comment. Forbidding it in the prompt
+# does not work on its own, because the text has nowhere else to go; this is
+# the somewhere else. review_output.py prints the file to the job log and
+# never to a pull request.
+#
+# WHY A WRAPPER AND NOT AN ALLOWED COMMAND. Claude Code's `Bash(cmd:*)`
+# permission bounds the START of the command string and nothing after it, so
+# the argument list is unconstrained -- which is why `Bash(git push:*)` is a
+# remote-code-execution hole by way of `--receive-pack`, and why Anthropic's
+# own action replaced that pattern with a wrapper. A wrapper is sound where a
+# prefix is not, because the wrapper validates its own arguments, and this one
+# is sound by construction: argv reaches exactly one `printf` as data, and the
+# destination comes from the environment rather than from argv, so no argument
+# can redirect the write.
+#
+# BOUNDS. A note is capped at NOTE_MAX characters and the file at FILE_MAX, so
+# a loop cannot fill the runner's disk. Over either limit the note is refused
+# with a message and a non-zero status, which the reviewer sees as a failed
+# tool call rather than as silent acceptance.
+#
+# REVIEW_NOTES names the file. Unset is an error, not a default path: a
+# default would mean a copy of this running outside the workflow silently
+# writes somewhere nobody reads.
+
+usage() {
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit "${1:-2}"
+}
+
+set -euo pipefail
+
+NOTE_MAX=500
+FILE_MAX=65536
+
+case "${1:-}" in
+  -h | --help) usage 0 ;;
+esac
+
+if [ "$#" -eq 0 ]; then
+  echo "review-note: nothing to record" >&2
+  usage 2
+fi
+
+if [ -z "${REVIEW_NOTES:-}" ]; then
+  echo "review-note: REVIEW_NOTES is not set; refusing to guess a path" >&2
+  exit 2
+fi
+
+NOTE="$*"
+if [ "${#NOTE}" -gt "$NOTE_MAX" ]; then
+  echo "review-note: note is ${#NOTE} characters; the limit is ${NOTE_MAX}" >&2
+  exit 2
+fi
+
+if [ -f "$REVIEW_NOTES" ]; then
+  SIZE=$(wc -c <"$REVIEW_NOTES")
+else
+  SIZE=0
+fi
+if [ "$SIZE" -ge "$FILE_MAX" ]; then
+  echo "review-note: the notes file has reached ${FILE_MAX} bytes" >&2
+  exit 2
+fi
+
+printf '%s\n' "$NOTE" >>"$REVIEW_NOTES"
+echo "noted"

@@ -8,11 +8,43 @@ on:
         required: false
         type: string
         default: ""
+      claude_cli_version:
+        description: |
+          Exact Claude Code CLI version to install, or `latest` to float.
+
+          PINNED BY DEFAULT, because the coverage gate parses the CLI's
+          `stream-json` transcript to decide which files the reviewer
+          opened. That makes the transcript schema a merge gate: an upstream
+          rename of the `tool_use`/`tool_result` envelope would zero the
+          coverage count in every repository at once, failing the ones set
+          to `fail` and filling the comment with every file listed as
+          unopened in the rest. Pinned, that arrives as a reviewed version
+          bump here instead. The installer verifies the binary against a
+          published per-platform SHA256 manifest, so the pin is on behaviour,
+          not integrity.
+        required: false
+        type: string
+        default: "2.1.310"
       max_review_bytes:
-        description: "Backstop on the total patch bytes handed to the reviewer. Over budget, whole patches are dropped largest-first; those files keep their manifest row and are named in the PR comment. 0 means no backstop. The default sits above the largest post-exclusion patch set measured across a 300-PR sample (640,442 bytes)."
+        description: "Backstop on the total patch bytes handed to the reviewer. Over budget, whole patches are dropped largest-first; those files keep their manifest row and are named in the PR comment. 0 means no backstop. The default was chosen against a 300-PR sample whose largest post-exclusion patch set was 640,442 bytes, but that sample measured the files API, which omits the patch for the largest file in a change, so the real figure is higher by an unmeasured amount. Raise it if the review comment reports omitted files. The PR's own comment thread is budgeted out of this number too: it gets what the patches did not spend, floored at an eighth of it so a large change cannot drop the thread altogether, which means the total handed over can exceed this value by that eighth."
         required: false
         type: number
         default: 1048576
+      coverage_enforcement:
+        description: |
+          What to do when the reviewer did not open every openable file in
+          the manifest: `fail`, `warn` or `off`.
+
+          `warn` is the default and is deliberate. Roughly 170 repositories
+          consume this workflow at a floating major tag, so the ability to
+          fail a pull request is NEW BEHAVIOUR reaching all of them at once
+          with nobody watching. The number is on the comment and in the job
+          log either way; what this input decides is only whether a short
+          review also blocks a merge. Move a repository to `fail` once its
+          own history shows the measurement is sound there.
+        required: false
+        type: string
+        default: warn
       exclude_globs:
         description: |
           Newline- or comma-separated path globs dropped from the review,
@@ -76,9 +108,30 @@ permissions: {}
 jobs:
   review:
     runs-on: ubuntu-latest
+    # NOT MEASURED -- a bound, not a budget. Without one a hung CLI burns the
+    # 6-hour default while holding the concurrency group below, which blocks
+    # every later push on the same pull request from being reviewed at all.
+    # Raise it if a real review is ever cut off; the step logs say which.
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
+
+    # ONE COMMENT, EDITED IN PLACE, means two runs must not write at once.
+    # A pull request with nine pushes previously ended up with nine review
+    # comments and no way to tell which was current; editing one comment
+    # fixes that only if the writes are serialised, because two runs that
+    # both find no existing comment both POST one and the problem returns
+    # with two authors instead of nine.
+    #
+    # cancel-in-progress is true because a superseded review is waste: the
+    # head it reviewed no longer exists, and the run that replaced it is
+    # already on its way. The posting step re-checks the head SHA as a
+    # second guard, for the case where cancellation does not arrive in time.
+    concurrency:
+      group: claude-review-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+
     env:
       # Every step after the first is gated on this. 'reviewed' is the happy
       # path; 'empty' means nothing survived the exclude globs; 'bot' means
@@ -86,14 +139,200 @@ jobs:
       # a step the review depends on failed. All four post a comment, and
       # none of them fails the job -- a red job posts nothing, and a repo
       # that has made this a required check would then be unable to merge.
+      # A CANCELLED job is the fifth case and is not one of these four:
+      # see "Post review-cancelled message" at the end of the job.
       #
       # 'bot' is set before anything expensive runs, so a skipped PR costs
       # one checkout and a grep rather than a model call.
       REVIEW_OUTCOME: reviewed
       REVIEW_ERROR: ""
       PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      # ONE PREDICATE, TWO READERS: the step below finds this reviewer's own
+      # comment by it, and the discussion fetch drops that same comment from
+      # the prompt. A second copy would be free to drift, and a drifted copy
+      # feeds the reviewer its own previous review as third-party evidence.
+      #
+      # ON AN UNRESOLVED IDENTITY IT FALLS BACK TO THE MARKER ALONE. Leading
+      # with `VIEWER_ID != "" and` made the whole predicate false instead, and
+      # the discussion fetch NEGATES it -- so every comment was included, the
+      # reviewer's own last review among them with `sanitise()` stripping the
+      # marker off it on the way in. The cost is that a third party quoting
+      # the marker can hide their own comment from the thread, and only while
+      # the identity is unresolved; that is the smaller harm. `or`
+      # short-circuits in jq, so `tonumber` never sees an empty value.
+      #
+      # The comment-to-EDIT lookup does not take that fallback: the step below
+      # searches only `if [ -n "$VIEWER_ID" ]`, so a forgeable body can never
+      # select a comment to PATCH. Guarding by skipping the call is stronger
+      # than guarding inside the expression it would otherwise evaluate.
+      REVIEW_COMMENT_JQ: '((env.VIEWER_ID // "") == "" or .user.id == (env.VIEWER_ID | tonumber)) and ((.body // "") | test("<!-- claude-review v[0-9]+ "))'
 
     steps:
+      # REQUIREMENT 3, first half: find the ONE comment to edit.
+      #
+      # THE FIRST STEP IN THE JOB, deliberately. Every posting step below is
+      # a PATCH when this found a comment and a POST when it did not, so a
+      # run that dies anywhere after this point still edits the existing
+      # comment instead of adding a second one. It was previously placed
+      # after input validation and the checkout, which meant a caller with a
+      # typo'd input, or a flaky checkout, posted a fresh comment on every
+      # push -- the repeated-failure case the requirement exists for.
+      #
+      # It needs nothing from the job but PR_NUMBER, which is job-level env,
+      # and sets its own GH_REPO and GH_TOKEN. It runs unconditionally, so a
+      # bot-authored pull request still edits its own skip notice.
+      - name: Find this reviewer's existing comment
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          # NOT `head.repo.fork`. That is a property of the head
+          # REPOSITORY, so in a repository that is itself a fork it is true
+          # for every pull request -- including a maintainer's same-repo
+          # branch, whose token IS writable. Every review in such a
+          # repository would be diverted to the job summary, green, with
+          # nothing on the pull request. `Senzing/libpostal` is one today.
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          # IDENTITY IS RESOLVED AT RUNTIME, from the token itself.
+          #
+          # `GET /user` answers 403 for an installation token -- measured --
+          # so the identity comes from GraphQL `viewer`, which returns the
+          # app's own bot user and its `databaseId`. That number is exactly
+          # the `user.id` carried by every comment the token authors:
+          # verified against a real review comment, where `viewer.databaseId`
+          # for the app and `user.id` on its comment are the same integer.
+          #
+          # Why not the three things Anthropic's action uses. A hardcoded
+          # bot id breaks the moment a repository is moved to a different
+          # app. A login substring breaks on a rename, and matches a human
+          # who picks a similar name. Body matching makes any commenter able
+          # to impersonate the reviewer by quoting it. A numeric id resolved
+          # from the credential doing the writing breaks under none of those.
+          VIEWER_ID=$(gh api graphql -f query='{viewer{databaseId login}}' \
+            --jq '.data.viewer.databaseId' 2>/dev/null || true)
+          case "$VIEWER_ID" in
+            '' | *[!0-9]*)
+              echo "::warning::could not resolve this token's identity; a new comment will be posted"
+              VIEWER_ID=""
+              ;;
+          esac
+          echo "Writing as user id: ${VIEWER_ID:-<unresolved>}"
+
+          # THE MARKER IS STATE, NOT IDENTITY. Identity above says WHO wrote
+          # a comment; this says WHICH of that author's comments is the
+          # review. Both are needed, because `github-actions[bot]` also
+          # authors super-linter summaries, coverage reports and release
+          # notes on the same pull request -- so identity alone would find
+          # the lowest-numbered of those and edit it.
+          #
+          # Lowest-numbered, so the review stays where the thread first put
+          # it rather than migrating down the page; and if a previous run
+          # ever did post two, every later run converges on the same one.
+          COMMENT_ID=""
+          if [ -n "$VIEWER_ID" ]; then
+            COMMENT_ID=$(VIEWER_ID="$VIEWER_ID" gh api \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+              --paginate \
+              --jq ".[] | select(${REVIEW_COMMENT_JQ}) | .id" \
+              2>/dev/null | sort -n | head -1 || true)
+          fi
+          case "$COMMENT_ID" in
+            '' | *[!0-9]*) COMMENT_ID="" ;;
+          esac
+
+          if [ -n "$COMMENT_ID" ]; then
+            echo "Editing existing review comment ${COMMENT_ID}"
+            # Kept so review_output.py can compare this run against the one
+            # it replaces: longer output with fewer findings is the
+            # signature of a review driven by its prompt rather than by the
+            # code, and the comment being edited is where the previous
+            # measurement lives.
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+              --jq '.body' > "$RUNNER_TEMP/previous.md" 2>/dev/null || true
+
+            # A MARKER WHOSE head= IS NOT THE CURRENT HEAD IS A FALSE CLAIM,
+            # however this run ends. Relabel it HERE, where there is time:
+            # a job that is cancelled, times out or loses its runner writes
+            # nothing later, and the pull request would go on showing the
+            # previous head's findings as a review of this one. The cost is
+            # one extra revision in the comment's edit history per push.
+            #
+            # No `findings=` in the interim marker, deliberately:
+            # `previous_stats()` in review_output.py reads that field, and a
+            # 0 here would be compared against the next real review as
+            # though a review had found nothing.
+            PREV_HEAD=$(sed -n 's/.*<!-- claude-review v[0-9]* [^>]*head=\([0-9a-fA-F]*\).*/\1/p' \
+              "$RUNNER_TEMP/previous.md" | tail -1)
+            if [ "$IS_FORK" != "true" ] && [ -n "$PREV_HEAD" ] && [ "$PREV_HEAD" != "$HEAD_SHA" ]; then
+              {
+                echo "## Claude Code Review"
+                echo ""
+                echo "**Superseded.** The review this comment carried described \`${PREV_HEAD}\`, which is no longer the head of this pull request. A review of \`${HEAD_SHA}\` is running and will replace it."
+                echo ""
+                echo "<!-- claude-review v3 lane=P blockers=0 read=0/0 head=${HEAD_SHA} -->"
+              } > "$RUNNER_TEMP/superseded.md"
+              if gh api --method PATCH \
+                "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+                --field "body=@${RUNNER_TEMP}/superseded.md" > /dev/null 2>&1; then
+                echo "Relabelled the review of ${PREV_HEAD} as superseded"
+              else
+                echo "::warning::could not relabel the superseded review comment"
+              fi
+            fi
+          else
+            echo "No existing review comment; one will be created."
+          fi
+          echo "COMMENT_ID=${COMMENT_ID}" >> "$GITHUB_ENV"
+          echo "VIEWER_ID=${VIEWER_ID}" >> "$GITHUB_ENV"
+
+          # CAN A COMMENT BE WRITTEN AT ALL? GitHub gives a `pull_request`
+          # from a FORK a read-only token whatever the `permissions:` block
+          # asks for, so every write below would 403 and end the job red
+          # having posted nothing -- the one outcome this file exists to
+          # prevent, and it would hit every external contribution to the
+          # public repositories. Reads still work, so the review itself is
+          # unaffected; only its delivery changes, to the job summary.
+          if [ "$IS_FORK" = "true" ]; then
+            echo "::notice::this pull request is from a fork, so the token is read-only; the review will go to the job summary instead of a comment"
+            echo "CAN_COMMENT=false" >> "$GITHUB_ENV"
+          else
+            echo "CAN_COMMENT=true" >> "$GITHUB_ENV"
+          fi
+
+      # Validated before any work, so a caller's typo fails before the model
+      # call rather than after it, and on every run rather than only on a
+      # reviewed one. `workflow_call` has no enum type. It sits second
+      # because finding the comment to edit has to precede anything that can
+      # exit non-zero -- see that step's comment.
+      - name: Validate the caller's inputs
+        env:
+          ENFORCEMENT: ${{ inputs.coverage_enforcement }}
+          MAX_REVIEW_BYTES: ${{ inputs.max_review_bytes }}
+        run: |
+          case "$ENFORCEMENT" in
+            fail | warn | off) ;;
+            *)
+              echo "::error::coverage_enforcement must be fail, warn or off (got '${ENFORCEMENT}')"
+              exit 1
+              ;;
+          esac
+          # type: number permits a float, and `[ "$x" -gt "$y" ]` with a
+          # float exits 2 with "integer expression expected" inside an `if`
+          # that does not trip bash -e, so a mistyped budget would silently
+          # not apply.
+          case "$MAX_REVIEW_BYTES" in
+            '' | *[!0-9]*)
+              echo "::error::max_review_bytes must be a non-negative integer (got '$MAX_REVIEW_BYTES')"
+              exit 1
+              ;;
+          esac
+          echo "coverage_enforcement: ${ENFORCEMENT}"
+
+      # fetch-depth: 0 is load-bearing beyond history browsing: the review
+      # set is computed from `git diff` between the pull request's merge base
+      # and its head, which needs both parents of the merge commit and their
+      # common ancestor present in the clone.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -139,7 +378,7 @@ jobs:
           STALE_NEEDLE=$(printf '%s' "$PR_TITLE" \
             | sed -n 's/.*from \([^ ][^ ]*\) to [^ ][^ ]*.*/\1/p')
           case "$STALE_NEEDLE" in
-            v[0-9]*.[0-9]*|[0-9]*.[0-9]*) ;;
+            v[0-9]*.[0-9]* | [0-9]*.[0-9]*) ;;
             *) STALE_NEEDLE="" ;;
           esac
 
@@ -242,7 +481,11 @@ jobs:
           fi
 
           MISSING=""
-          for f in claude/pr-prompt-v2.md claude/filter_diff.py; do
+          for f in claude/pr-prompt-v2.md claude/filter_diff.py \
+            claude/pr_discussion.py claude/review_io.py \
+            claude/review-schema.json \
+            claude/review_coverage.py claude/review_output.py \
+            claude/review_text.py claude/review-note claude/review-git; do
             if [ ! -f "build-resources/$f" ]; then
               MISSING="${MISSING} ${f}"
             fi
@@ -256,6 +499,54 @@ jobs:
             exit 0
           fi
 
+      # THE DENOMINATOR. Everything the coverage check divides by is decided
+      # here, and it is decided by git rather than by the GitHub API.
+      - name: Resolve the range under review
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        run: |
+          # The shape is VERIFIED rather than assumed. Every caller in the
+          # fleet triggers on `pull_request`, where `github.ref` is
+          # `refs/pull/N/merge` and the checkout is the merge commit, so
+          # HEAD^ is the base tip and HEAD^2 is the PR head. A caller on
+          # `push` would have neither, and anything derived from HEAD^ would
+          # then quietly describe something else entirely.
+          #
+          # `pull_request_target` is NOT supported and must not be: with a
+          # head checkout it runs the pull request's own code against a
+          # token with write scope. The check below rejects it the same way
+          # it rejects a push, because the head SHA will not match.
+          MERGE_HEAD=$(git rev-parse -q --verify 'HEAD^2' 2>/dev/null || true)
+          if [ -z "$MERGE_HEAD" ] || [ "$MERGE_HEAD" != "$HEAD_SHA" ]; then
+            echo "::warning::the checkout is not this pull request's merge commit (HEAD^2=${MERGE_HEAD:-none}, head=${HEAD_SHA:-none})"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the checkout is not this pull request's merge commit, so the changed-file list could not be computed from git; this workflow must be called on \`pull_request\`"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # The MERGE BASE, not HEAD^. `git diff HEAD^ HEAD` over a merge
+          # commit happens to give the same answer, but the merge base is
+          # what `pulls/{n}/files` reports against -- so comparing the two
+          # path sets tests the tooling rather than discovering that the two
+          # sources measured different ranges.
+          MERGE_BASE=$(git merge-base 'HEAD^' 'HEAD^2' 2>/dev/null || true)
+          if [ -z "$MERGE_BASE" ]; then
+            echo "::warning::no merge base between HEAD^ and HEAD^2"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=git could not find a merge base for this pull request, so the changed-file list could not be computed"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "Merge base: ${MERGE_BASE}"
+          echo "PR head:    ${MERGE_HEAD}"
+          {
+            echo "MERGE_BASE=${MERGE_BASE}"
+            echo "MERGE_HEAD=${MERGE_HEAD}"
+          } >> "$GITHUB_ENV"
+
       - name: Collect reviewable files
         if: env.REVIEW_OUTCOME == 'reviewed'
         env:
@@ -263,27 +554,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MAX_REVIEW_BYTES: ${{ inputs.max_review_bytes }}
         run: |
-          # type: number permits a float, and `[ "$x" -gt "$y" ]` with a float
-          # exits 2 with "integer expression expected" inside an `if` that does
-          # not trip bash -e, so a mistyped budget would silently not apply.
-          case "$MAX_REVIEW_BYTES" in
-            ''|*[!0-9]*)
-              echo "::error::max_review_bytes must be a non-negative integer (got '$MAX_REVIEW_BYTES')"
-              exit 1
-              ;;
-          esac
-
-          # The workspace IS the reviewed checkout, and Lane A's first check
-          # greps that whole tree for the OLD version string. The reviewer's
-          # own scratch directories sit in it and would match, reading as a
-          # surviving stale reference -- a false blocker on every dependency
-          # bump. Listing them in .git/info/exclude is untracked, alters
-          # nothing under review, and makes ripgrep (which is what the
-          # reviewer's Grep tool is) skip them with no instruction for the
-          # model to follow and no flag for it to get wrong.
+          # The workspace IS the reviewed checkout, and the bot lane's first
+          # check greps that whole tree for the OLD version string. The
+          # reviewer's own scratch directories sit in it and would match,
+          # reading as a surviving stale reference -- a false blocker on
+          # every dependency bump. Listing them in .git/info/exclude is
+          # untracked, alters nothing under review, and makes ripgrep (which
+          # is what the reviewer's Grep tool is) skip them with no
+          # instruction for the model to follow and no flag to get wrong.
+          #
+          # The second write is a TRUST BOUNDARY, not a formatting
+          # preference. `git diff` resolves attributes from the checkout,
+          # which here is the pull request's own merge commit and so its own
+          # `.gitattributes`; git emits `Binary files ... differ` for any
+          # path marked `-diff` whatever the content, so one added line --
+          # `src/auth.go -diff` -- would let a pull request suppress the
+          # patch for its own code. `.git/info/attributes` outranks any
+          # in-tree `.gitattributes`, and `!diff` restores git's own content
+          # detection rather than forcing a text diff, so genuinely binary
+          # files are still reported as binary.
+          #
+          # BELT AND BRACES, and the braces are the important half: the
+          # manifest's `binary` token no longer comes from git's verdict at
+          # all. filter_diff.py reads each blob with `git cat-file` and
+          # applies git's own NUL-in-the-first-8000-bytes test, which
+          # consults no attribute and so cannot be written by a pull
+          # request. This line keeps the PATCH BYTES honest; the content
+          # sniff keeps the VERDICT honest; and where the two disagree the
+          # path is named as an attribute conflict.
           if [ -d .git ]; then
             mkdir -p .git/info
             printf '%s\n' '/pr-files/' '/build-resources/' >> .git/info/exclude
+            printf '%s\n' '* !diff' >> .git/info/attributes
           fi
 
           # filter_diff.py refuses to write into an existing directory, on
@@ -299,42 +601,41 @@ jobs:
             exit 0
           fi
 
-          # Intermediate files go to RUNNER_TEMP for the same reason.
+          # The files API is now a WITNESS, not a source. filter_diff.py
+          # compares its path set against git's and refuses to continue if
+          # they disagree, which is the only way a silently wrong
+          # denominator gets caught -- and the denominator is what
+          # "every changed file is reviewed" is a claim about.
           #
           # per_page goes in the URL, never as -F: `gh api` switches from GET
           # to POST as soon as any -f/-F field is present, which in 4.6.0 POSTed
           # this read-only route, 404d, and left the job green with no review.
           # A query parameter has no such failure mode.
           #
-          # Independently of paging, the endpoint caps at 3,000 files, after
-          # which the count is silently short.
-          echo "Fetching the PR's changed files..."
-          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+          # A failed fetch is NOT fatal here: it costs the cross-check, and
+          # the manifest is still git's. It is reported so a run with one
+          # witness is distinguishable from a run with two.
+          CROSSCHECK=()
+          echo "Fetching the PR's changed files for cross-checking..."
+          if gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
             --paginate > "$RUNNER_TEMP/pr_files.json"; then
-            echo "::warning::could not fetch the PR's changed files"
-            {
-              echo "REVIEW_OUTCOME=error"
-              echo "REVIEW_ERROR=the GitHub API call for the pull request's changed files failed"
-            } >> "$GITHUB_ENV"
-            exit 0
+            CROSSCHECK=("$RUNNER_TEMP/pr_files.json")
+          else
+            echo "::warning::could not fetch the PR's changed files; the file list will have one witness"
           fi
 
-          # Per-file patches on disk, not a diff pasted into the prompt: the
-          # reviewer reads pr-files/manifest.tsv and opens only what it needs,
-          # so prompt size stops being a function of PR size.
-          #
           # Not piped through `tee`: GitHub runs this with `bash -e` and no
           # `pipefail`, so the pipeline status would be tee's (always 0) and
           # a crashed filter would leave the manifest unwritten, read as "no
           # reviewable changes", and pass the job with a green check.
           if ! python3 build-resources/claude/filter_diff.py \
-            --manifest "$RUNNER_TEMP/pr_files.json" pr-files \
+            --manifest pr-files "$MERGE_BASE" "$MERGE_HEAD" "${CROSSCHECK[@]}" \
             > "$RUNNER_TEMP/filter.log"; then
             cat "$RUNNER_TEMP/filter.log"
             echo "::warning::filter_diff.py failed"
             {
               echo "REVIEW_OUTCOME=error"
-              echo "REVIEW_ERROR=assembling the reviewable file set failed"
+              echo "REVIEW_ERROR=the reviewer could not establish which files this pull request changes, so nothing has been reviewed; see the job log"
             } >> "$GITHUB_ENV"
             exit 0
           fi
@@ -344,14 +645,16 @@ jobs:
           # record is the job log, and a reviewer cannot tell an empty diff
           # from a diff the globs removed entirely.
           #
-          # Both counts are validated rather than trusted: an unparseable
+          # Every count is validated rather than trusted: an unparseable
           # count is the exact shape of a suppressed disclosure, so it fails
           # closed to a comment instead of quietly reporting nothing.
           EXCLUDED_COUNT=$(sed -n 's/^Excluded \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
           OMITTED_COUNT=$(sed -n 's/^Omitted \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
-          for n in "$EXCLUDED_COUNT" "$OMITTED_COUNT"; do
+          UNPATCHED_COUNT=$(sed -n 's/^Unpatched \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
+          BINARY_COUNT=$(sed -n 's/^Binary \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
+          for n in "$EXCLUDED_COUNT" "$OMITTED_COUNT" "$UNPATCHED_COUNT" "$BINARY_COUNT"; do
             case "$n" in
-              ''|*[!0-9]*)
+              '' | *[!0-9]*)
                 echo "::warning::unparseable exclusion report"
                 {
                   echo "REVIEW_OUTCOME=error"
@@ -362,42 +665,65 @@ jobs:
             esac
           done
 
-          if [ "$EXCLUDED_COUNT" -gt 0 ]; then
-            EXCLUDED_LIST=$(sed -n 's/^  - //p' "$RUNNER_TEMP/filter.log" | head -20 | paste -sd, -)
-            if [ "$EXCLUDED_COUNT" -gt 20 ]; then
-              EXCLUDED_LIST="${EXCLUDED_LIST} (+$((EXCLUDED_COUNT - 20)) more)"
-            fi
-            echo "EXCLUDED_SUMMARY=${EXCLUDED_COUNT} file(s) excluded by exclude_globs: ${EXCLUDED_LIST}" >> "$GITHUB_ENV"
-          else
-            echo "EXCLUDED_SUMMARY=" >> "$GITHUB_ENV"
-          fi
+          # The disclosure sections are written to a FILE, as label/text
+          # pairs, not to GITHUB_ENV. Two reasons, and both matter: these
+          # strings carry paths from the pull request's own tree, so the
+          # environment file is the wrong place for them; and
+          # review_output.py drops any row whose text is empty, which is how
+          # "a section exists only if something populated it" is enforced in
+          # one place rather than by a conditional per section here.
+          SECTIONS="$RUNNER_TEMP/sections.tsv"
+          : > "$SECTIONS"
 
-          # Same, for files whose patch was dropped to fit max_review_bytes.
-          # A partial review that names what it could not read is honest; one
-          # that splits itself into parts that cannot see each other is not.
-          if [ "$OMITTED_COUNT" -gt 0 ]; then
-            OMITTED_LIST=$(sed -n 's/^  \* //p' "$RUNNER_TEMP/filter.log" | head -20 | paste -sd, -)
-            if [ "$OMITTED_COUNT" -gt 20 ]; then
-              OMITTED_LIST="${OMITTED_LIST} (+$((OMITTED_COUNT - 20)) more)"
+          list_from() { # list_from <sed-prefix> <count>
+            if [ "$2" -gt 0 ]; then
+              LIST=$(sed -n "s/^$1//p" "$RUNNER_TEMP/filter.log" | head -20 | paste -sd, -)
+              if [ "$2" -gt 20 ]; then
+                LIST="${LIST} (+$(($2 - 20)) more)"
+              fi
+              printf '%s' "$LIST"
             fi
-            echo "OMITTED_SUMMARY=${OMITTED_COUNT} file(s) over max_review_bytes (${MAX_REVIEW_BYTES}); path and change count supplied, patch not: ${OMITTED_LIST}" >> "$GITHUB_ENV"
-          else
-            echo "OMITTED_SUMMARY=" >> "$GITHUB_ENV"
-          fi
+          }
+
+          EXCLUDED_LIST=$(list_from '  - ' "$EXCLUDED_COUNT")
+          OMITTED_LIST=$(list_from '  \* ' "$OMITTED_COUNT")
+          UNPATCHED_LIST=$(list_from '  ! ' "$UNPATCHED_COUNT")
+          BINARY_LIST=$(list_from '  ~ ' "$BINARY_COUNT")
 
           {
+            # SC2016 reads the backticks as command substitution. They are
+            # markdown: these labels become bold headings in a PR comment,
+            # and `exclude_globs` is the input's name rendered as code. The
+            # single quotes are correct and the values arrive via %s.
+            # shellcheck disable=SC2016
+            printf 'Not reviewed (dropped by `exclude_globs`)\t%s\n' "$EXCLUDED_LIST"
+            # shellcheck disable=SC2016
+            printf 'Patch not supplied (over `max_review_bytes`)\t%s\n' "$OMITTED_LIST"
+            printf 'No patch available (open in the working tree)\t%s\n' "$UNPATCHED_LIST"
+            printf 'Binary (no reviewable content)\t%s\n' "$BINARY_LIST"
+          } >> "$SECTIONS"
+
+          # The prompt needs the same facts in prose. These go to GITHUB_ENV
+          # because the prompt-building step reads them, and filter_diff.py
+          # C-escapes every path it prints, so a path containing a newline
+          # cannot append a second variable here.
+          {
+            echo "EXCLUDED_SUMMARY=${EXCLUDED_LIST}"
+            echo "OMITTED_SUMMARY=${OMITTED_LIST}"
+            echo "UNPATCHED_SUMMARY=${UNPATCHED_LIST}"
+            echo "BINARY_SUMMARY=${BINARY_LIST}"
             echo "REVIEW_FILES=$(sed -n 's/^Files: //p' "$RUNNER_TEMP/filter.log")"
             echo "REVIEW_ADDITIONS=$(sed -n 's/^Additions: //p' "$RUNNER_TEMP/filter.log")"
             echo "REVIEW_DELETIONS=$(sed -n 's/^Deletions: //p' "$RUNNER_TEMP/filter.log")"
           } >> "$GITHUB_ENV"
 
           if [ ! -s pr-files/manifest.tsv ]; then
-            echo "⚠️  Nothing left to review after applying exclude_globs."
+            echo "Nothing left to review after applying exclude_globs."
             echo "REVIEW_OUTCOME=empty" >> "$GITHUB_ENV"
             exit 0
           fi
 
-          echo "✅ Review set: $(wc -l < pr-files/manifest.tsv) file(s)"
+          echo "Review set: $(wc -l < pr-files/manifest.tsv) file(s)"
 
       - name: Collect the pull request's own discussion
         if: env.REVIEW_OUTCOME == 'reviewed'
@@ -413,9 +739,9 @@ jobs:
           # CHANGELOG in a repository that has never had one, the second
           # after the first had been answered.
           #
-          # This bot posts its own reviews as ISSUE comments, not as GitHub
-          # reviews, so `gh pr view --json reviews` returns empty and the
-          # issue-comments endpoint is the one that carries them.
+          # This bot posts its own review as an ISSUE comment, not as a
+          # GitHub review, so `gh pr view --json reviews` returns empty and
+          # the issue-comments endpoint is the one that carries it.
           #
           # Best effort throughout: a thread that cannot be fetched degrades
           # to a review without it, never to a review that does not happen.
@@ -427,8 +753,24 @@ jobs:
           # In the URL here too, and for a sharper reason: POST on
           # issues/N/comments and pulls/N/comments CREATES a comment, so an
           # inferred method on these two is a write route, not a failed read.
+          #
+          # THE REVIEWER'S OWN COMMENT IS DROPPED HERE, at fetch time, because
+          # `sanitise()` strips HTML comments and would take the marker with
+          # it -- after which the previous review arrives labelled as an
+          # untrusted third-party comment with text hidden from it. Feeding a
+          # review its own prior findings anchors it on them, which is exactly
+          # the signature `review_output.py --previous` exists to DETECT.
+          # Nothing is lost: that comparison reads the marker out of
+          # `previous.md`, never this copy.
+          #
+          # Both halves of the predicate are wanted. The id alone would also
+          # drop super-linter's summary, which is a separate decision needing
+          # its own measurement. With no id resolved the marker carries it
+          # alone -- see REVIEW_COMMENT_JQ, where that fallback and what it
+          # costs are set out.
           if ! gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
-            --paginate > "$RUNNER_TEMP/discussion_issue.json"; then
+            --paginate --jq ".[] | select((${REVIEW_COMMENT_JQ}) | not)" \
+            > "$RUNNER_TEMP/discussion_issue.json"; then
             echo "::warning::could not fetch the PR's issue comments"
             echo '[]' > "$RUNNER_TEMP/discussion_issue.json"
           fi
@@ -438,25 +780,58 @@ jobs:
             echo '[]' > "$RUNNER_TEMP/discussion_review.json"
           fi
 
-          # The thread is budgeted against max_review_bytes like everything
-          # else: it gets what the patches did not spend. Exhausted means
-          # "drop the thread", which is 1 rather than 0, because 0 is this
-          # program's "no backstop".
+          # The thread gets what the patches did not spend, but never less
+          # than a FLOOR. A pure residual collapses exactly where the thread
+          # is worth most: a large change is also the one with the longest
+          # thread, so without a floor the reviewer re-raises points the
+          # author has already answered on precisely the pull requests this
+          # block was added for.
+          #
+          # The floor is an eighth of max_review_bytes. The SHAPE is
+          # derived -- a share of the one knob a caller sets, so there is no
+          # second input to keep in step -- and `write_discussion` caps each
+          # entry at a quarter of what it is given, so a share guarantees
+          # four entries whatever the share is. THE EIGHTH ITSELF IS A
+          # CHOICE, NOT A MEASUREMENT: no sample of this fleet's thread
+          # sizes has been taken. What would falsify it is this log line
+          # appearing next to a discussion summary reporting dropped
+          # entries; if that becomes routine the share is too small.
           PATCH_BYTES=$(sed -n 's/^Patch bytes: //p' "$RUNNER_TEMP/filter.log")
           case "$PATCH_BYTES" in
-            ''|*[!0-9]*) PATCH_BYTES=0 ;;
+            '' | *[!0-9]*) PATCH_BYTES=0 ;;
           esac
           if [ "$MAX_REVIEW_BYTES" -eq 0 ]; then
             DISCUSSION_BUDGET=0
-          elif [ "$MAX_REVIEW_BYTES" -gt "$PATCH_BYTES" ]; then
-            DISCUSSION_BUDGET=$((MAX_REVIEW_BYTES - PATCH_BYTES))
           else
-            DISCUSSION_BUDGET=1
+            DISCUSSION_FLOOR=$((MAX_REVIEW_BYTES / 8))
+            DISCUSSION_BUDGET=$((MAX_REVIEW_BYTES - PATCH_BYTES))
+            if [ "$DISCUSSION_BUDGET" -lt "$DISCUSSION_FLOOR" ]; then
+              DISCUSSION_BUDGET="$DISCUSSION_FLOOR"
+            fi
+            # 0 is this program's "no backstop", so a floor that rounds down
+            # to nothing becomes 1 rather than switching the cap off.
+            if [ "$DISCUSSION_BUDGET" -lt 1 ]; then
+              DISCUSSION_BUDGET=1
+            fi
           fi
-          echo "Discussion budget: ${DISCUSSION_BUDGET} byte(s)"
+          echo "Discussion budget: ${DISCUSSION_BUDGET} byte(s); the patches spent ${PATCH_BYTES} of ${MAX_REVIEW_BYTES}"
+
+          # THE FENCE NONCE. The untrusted block is delimited by a value
+          # generated here, this run, so an author writing a comment before
+          # the run started cannot close the fence around their own text.
+          # The per-line `| ` prefixing is the first defence and remains;
+          # this is the one that still holds if that prefixing ever has a
+          # bug. /dev/urandom rather than $RANDOM, which is 15 bits and
+          # seeded predictably.
+          DISCUSSION_NONCE=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          case "$DISCUSSION_NONCE" in
+            [0-9a-f][0-9a-f]*) ;;
+            *) DISCUSSION_NONCE="" ;;
+          esac
 
           if ! MAX_DISCUSSION_BYTES="$DISCUSSION_BUDGET" \
-            python3 build-resources/claude/filter_diff.py --discussion \
+            DISCUSSION_NONCE="$DISCUSSION_NONCE" \
+            python3 build-resources/claude/pr_discussion.py \
               "$RUNNER_TEMP/discussion.md" \
               "$RUNNER_TEMP/discussion_pull.json" \
               "$RUNNER_TEMP/discussion_issue.json" \
@@ -465,13 +840,235 @@ jobs:
             rm -f "$RUNNER_TEMP/discussion.md"
           fi
 
-      - name: Install Claude Code CLI
+      # The CLI reads configuration out of the current directory at startup,
+      # and the current directory is the pull request's own checkout.
+      - name: Neutralise reviewer configuration the PR controls
         if: env.REVIEW_OUTCOME == 'reviewed'
         run: |
-          echo "Installing Claude Code CLI..."
+          # TWO CONTROLS, and they cover different things.
+          #
+          # `--safe-mode --setting-sources user` on the CLI invocation is
+          # the primary one, and it is why this step is short: safe mode
+          # does not load CLAUDE.md, skills, plugins, hooks, MCP servers or
+          # custom commands and agents, and `--setting-sources user` keeps
+          # the branch's project and local settings files out as well. For
+          # everything the CLI itself auto-loads, the flags are a better
+          # answer than restoring files, because they neither touch the tree
+          # under review nor depend on a list of paths staying current.
+          #
+          # What the flags do NOT cover is anything read by a program the
+          # CLI merely invokes. `.ripgreprc` is the one that matters and it
+          # is a COVERAGE ATTACK: the reviewer's Grep tool is ripgrep, and a
+          # single `--max-count=0` or `--glob=!*.go` in that file silently
+          # empties every search the reviewer runs, with no error and
+          # nothing in the output to say the search was neutered.
+          # `.gitignore`, `.ignore` and `.rgignore` are the SAME ATTACK and
+          # the likelier one, because ripgrep honours all three by default
+          # and adding a `.gitignore` line is an ordinary thing for a pull
+          # request to do: one `*` line empties every tree-wide search, the
+          # stale-version grep the prompt calls the first check of the
+          # review among them, and the run stays green. ripgrep applies the
+          # CLOSEST such file to each directory, so restoring the ROOT
+          # copies does not close this -- a `src/.gitignore` is reached by
+          # the second block below, not by the loop.
+          # `.gitmodules` is the other: git reads it during a fetch, where
+          # an attacker-controlled submodule URL blocks on a credential
+          # prompt and hangs the job.
+          #
+          # So the whole list is restored from the merge base anyway. It is
+          # one loop over the root paths plus one bulk pass over the nested
+          # ignore files, it costs nothing, and the list is Anthropic's own
+          # from their action's `SENSITIVE_PATHS` plus the three ignore
+          # files, which that list does not carry.
+          #
+          # DELETE BEFORE RESTORING, and that order is not cosmetic: a bare
+          # `git checkout <ref> -- <path>` cannot remove a file the pull
+          # request ADDED, which is the case that matters most -- a
+          # repository with no `.ripgreprc` whose pull request adds one.
+          #
+          # There is no `git fetch` here at all. Anthropic's action deletes
+          # before fetching so the hostile `.gitmodules` is absent during
+          # the network call; this restores from the merge base, which
+          # `fetch-depth: 0` already put in the clone, so the network call
+          # does not happen and the window does not exist.
+          SENSITIVE=".claude .mcp.json .claude.json .gitmodules .ripgreprc CLAUDE.md CLAUDE.local.md .husky .gitignore .ignore .rgignore"
 
-          # Download install script
-          if ! curl -fsSL https://claude.ai/install.sh -o install.sh; then
+          # One listing of what this pull request changed, read twice
+          # below: to find the NESTED ignore files, and to decide which
+          # restored paths are worth disclosing. `--name-status` because
+          # the restore has to tell a file the pull request ADDED, which
+          # has no base version, from one it modified or deleted.
+          # `--no-renames` so a rename reports both of its paths.
+          CHANGED=()
+          CHANGED_STATUS=()
+          CHANGED_OK=1
+          if git diff --name-status --no-renames -z "$MERGE_BASE" "$MERGE_HEAD" \
+            > "$RUNNER_TEMP/changed_paths.z" 2>/dev/null; then
+            mapfile -d '' -t DIFF_FIELDS < "$RUNNER_TEMP/changed_paths.z"
+            n=0
+            while [ "$((n + 1))" -lt "${#DIFF_FIELDS[@]}" ]; do
+              CHANGED_STATUS+=("${DIFF_FIELDS[n]}")
+              CHANGED+=("${DIFF_FIELDS[n + 1]}")
+              n=$((n + 2))
+            done
+          else
+            CHANGED_OK=0
+            echo "::warning::could not list this pull request's changed paths; nested ignore files are NOT restored and every restored path is disclosed"
+          fi
+
+          RESTORED=""
+          for p in $SENSITIVE; do
+            if [ -e "$p" ]; then
+              rm -rf -- "$p"
+              RESTORED="${RESTORED} ${p}"
+            fi
+            if git checkout "$MERGE_BASE" -- "$p" 2>/dev/null; then
+              case " $RESTORED " in
+                *" $p "*) ;;
+                *) RESTORED="${RESTORED} ${p}" ;;
+              esac
+            fi
+          done
+
+          # `git checkout <ref> -- <path>` STAGES what it restores, so
+          # without this the revert sits in the index where anything that
+          # later commits would carry it onto the author's branch. Nothing
+          # in this job commits, which is exactly why it would go unnoticed
+          # if something ever did.
+          # shellcheck disable=SC2086
+          git reset -q -- $SENSITIVE 2>/dev/null || true
+
+          if [ -n "$RESTORED" ]; then
+            echo "Restored from the merge base:${RESTORED}"
+          else
+            echo "No reviewer-configuration paths present."
+          fi
+
+          # The loop above tests RELATIVE paths, so it reaches only the
+          # repository root, and the comment at the top of this step says
+          # why that is not enough. Only ignore files this pull request
+          # CHANGED are candidates: an untouched nested one is base content
+          # already, which is also why this composes with the disclosure
+          # intersection below instead of fighting it.
+          NESTED=()
+          NESTED_AT_BASE=()
+          i=0
+          while [ "$i" -lt "${#CHANGED[@]}" ]; do
+            p="${CHANGED[i]}"
+            i=$((i + 1))
+            # `*/.gitignore`, not the `*.gitignore` pathspec a git-side
+            # filter would want: that one matches `foo.gitignore` too,
+            # because git's wildcards cross `/`.
+            case "$p" in
+              */.gitignore | */.ignore | */.rgignore) ;;
+              *) continue ;;
+            esac
+            NESTED+=("$p")
+            # An ADDED file has no base version, and `git checkout <base>
+            # --` fails for the WHOLE pathspec when one element misses,
+            # restoring nothing rather than the rest. Deleting it IS the
+            # revert, so it is left out of the checkout set.
+            if [ "${CHANGED_STATUS[i - 1]}" != "A" ]; then
+              NESTED_AT_BASE+=("$p")
+            fi
+          done
+
+          if [ "${#NESTED[@]}" -gt 0 ]; then
+            # Bulk, not a loop: a pull request can add these in any number
+            # and a fork per file would become the step, whereas `xargs -0`
+            # and `--pathspec-from-file` are one pass whatever the count.
+            # `:(literal)` because a path git printed is a path, and one
+            # containing `*` would otherwise be read back as a glob.
+            printf '%s\0' "${NESTED[@]}" > "$RUNNER_TEMP/nested_ignore.z"
+            # -rf, not -f: a pull request may replace one of these names with a
+          # DIRECTORY, and `rm -f` on a directory fails, which under `bash -e`
+          # kills the step before the error branch below can annotate it.
+          # None of these three names can legitimately be a directory.
+          xargs -0 -r rm -rf -- < "$RUNNER_TEMP/nested_ignore.z"
+            if [ "${#NESTED_AT_BASE[@]}" -gt 0 ]; then
+              printf ':(literal)%s\0' "${NESTED_AT_BASE[@]}" > "$RUNNER_TEMP/nested_base.z"
+              if ! git checkout "$MERGE_BASE" --pathspec-file-nul \
+                --pathspec-from-file="$RUNNER_TEMP/nested_base.z"; then
+                echo "::error::could not restore this pull request's nested ignore files from the merge base; refusing to review with the reviewer's own searches under the branch's control"
+                exit 1
+              fi
+              git reset -q --pathspec-file-nul \
+                --pathspec-from-file="$RUNNER_TEMP/nested_base.z" 2>/dev/null || true
+            fi
+            echo "Restored ${#NESTED[@]} nested ignore file(s) from the merge base."
+          fi
+
+          # Disclose only the restored paths this pull request CHANGED: one
+          # identical at base and head was reverted to the bytes it already
+          # had, so its anchors still resolve against the checkout and the
+          # disclosure would waive the line-number check for nothing. The
+          # test is segment-wise because the list carries DIRECTORIES --
+          # `.claude` must stay disclosed when `.claude/settings.json`
+          # changed. A `git diff` that failed discloses everything, as
+          # before.
+          DISCLOSED="$RESTORED"
+          if [ -n "$RESTORED" ] && [ "$CHANGED_OK" = 1 ]; then
+            DISCLOSED=""
+            for p in $RESTORED; do
+              for c in "${CHANGED[@]}"; do
+                if [ "$c" = "$p" ] || [ "${c#"$p"/}" != "$c" ]; then
+                  DISCLOSED="${DISCLOSED} ${p}"
+                  break
+                fi
+              done
+            done
+          fi
+
+          # Every nested path here was changed by this pull request, so all
+          # of them are disclosed -- their line numbers cannot be checked
+          # against the checkout either. But these paths are
+          # attacker-chosen and `RESTORED_PATHS` is a whitespace-separated
+          # value appended to $GITHUB_ENV, so one carrying a space or a
+          # newline cannot go in the list without corrupting that file;
+          # those are counted in the log instead. So is anything past the
+          # cap, which stops a pull request inflating the reviewer's prompt
+          # by adding ignore files. 50 is a chosen bound, not a measured
+          # one.
+          NESTED_LISTED=0
+          NESTED_UNLISTED=0
+          for p in "${NESTED[@]}"; do
+            case "$p" in
+              *[[:space:]]*)
+                NESTED_UNLISTED=$((NESTED_UNLISTED + 1))
+                continue
+                ;;
+            esac
+            if [ "$NESTED_LISTED" -ge 50 ]; then
+              NESTED_UNLISTED=$((NESTED_UNLISTED + 1))
+              continue
+            fi
+            DISCLOSED="${DISCLOSED} ${p}"
+            NESTED_LISTED=$((NESTED_LISTED + 1))
+          done
+          if [ "$NESTED_UNLISTED" -gt 0 ]; then
+            echo "::warning::${NESTED_UNLISTED} restored nested ignore file(s) are not named in RESTORED_PATHS: whitespace in the path, or past the 50-path cap"
+          fi
+
+          if [ -n "$DISCLOSED" ]; then
+            echo "Disclosed to the reviewer (changed by this pull request):${DISCLOSED}"
+            echo "RESTORED_PATHS=${DISCLOSED# }" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Claude Code CLI
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        env:
+          CLI_VERSION: ${{ inputs.claude_cli_version }}
+        run: |
+          # $RUNNER_TEMP, NOT the working directory. The working directory
+          # is $GITHUB_WORKSPACE, which is the pull request's own checkout: a
+          # repository that tracks `install.sh` had its file overwritten with
+          # Anthropic's installer and then deleted, so a manifest row for it
+          # carrying `-` or `omitted` sent the reviewer to a working-tree file
+          # that was gone. `filter_diff.py` refuses to create `pr-files/` for
+          # the same reason.
+          INSTALLER="$RUNNER_TEMP/install.sh"
+          echo "Installing Claude Code CLI ${CLI_VERSION}..."
+          if ! curl -fsSL https://claude.ai/install.sh -o "$INSTALLER"; then
             echo "::warning::could not download the Claude Code installer"
             {
               echo "REVIEW_OUTCOME=error"
@@ -480,40 +1077,55 @@ jobs:
             exit 0
           fi
 
-          # Calculate checksum of downloaded script
-          SCRIPT_CHECKSUM=$(sha256sum install.sh | awk '{print $1}')
-          echo "Install script checksum: $SCRIPT_CHECKSUM"
+          # Recorded, not verified: Anthropic publishes no checksum for this
+          # script, so the value is logged so that a change is at least
+          # visible after the fact in a run comparison. The BINARY it
+          # fetches is verified -- the installer checks it against a
+          # per-platform SHA256 from the release manifest and exits
+          # non-zero on a mismatch -- so this covers only the bootstrap.
+          echo "Install script checksum: $(sha256sum "$INSTALLER" | awk '{print $1}')"
 
-          # TODO: Verify against known good checksum when available from Claude documentation
-          # EXPECTED_CHECKSUM="..."
-          # if [ "$SCRIPT_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
-          #   echo "❌ ERROR: Install script checksum verification failed!"
-          #   exit 1
-          # fi
-
-          # Execute install script
-          if ! bash install.sh; then
+          # The version argument reaches the bootstrap binary's own `install`
+          # subcommand, which is what makes the pin effective; the installer
+          # accepts `stable`, `latest` or an exact x.y.z.
+          if ! bash "$INSTALLER" "$CLI_VERSION"; then
             echo "::warning::the Claude Code CLI installer failed"
             {
               echo "REVIEW_OUTCOME=error"
               echo "REVIEW_ERROR=the Claude Code CLI could not be installed"
             } >> "$GITHUB_ENV"
-            rm -f install.sh
+            rm -f "$INSTALLER"
             exit 0
           fi
 
-          # Add to PATH
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          rm "$INSTALLER"
 
-          # Cleanup
-          rm install.sh
+          # The reviewer's private bin. Exactly two executables in a directory
+          # of its own, rather than putting build-resources/claude on PATH, so
+          # that each `Bash(...:*)` grant reaches exactly one program and
+          # nothing else in that checkout becomes runnable by name.
+          #
+          # 555, NOT 755. `review-git log --output=<path>` truncates its
+          # target in place and preserves its mode, so a writable wrapper is a
+          # way to replace the program the NEXT call runs -- which is how
+          # `review-note` was reachable while being sound about its own argv.
+          # Defence in depth, not the fix: these are owned by the runner user,
+          # whose own permission bits apply to it. The fix is that review-git
+          # refuses the argument.
+          mkdir -p "$RUNNER_TEMP/bin"
+          cp build-resources/claude/review-note "$RUNNER_TEMP/bin/review-note"
+          cp build-resources/claude/review-git "$RUNNER_TEMP/bin/review-git"
+          chmod 555 "$RUNNER_TEMP/bin/review-note" "$RUNNER_TEMP/bin/review-git"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          : > "$RUNNER_TEMP/review-notes.txt"
 
       - name: Verify Claude CLI installation
         if: env.REVIEW_OUTCOME == 'reviewed'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLI_VERSION: ${{ inputs.claude_cli_version }}
         run: |
-          # Verify installation succeeded
           if ! command -v claude > /dev/null 2>&1; then
             echo "::warning::claude is not on PATH after installation"
             {
@@ -523,7 +1135,7 @@ jobs:
             exit 0
           fi
 
-          if ! claude --version; then
+          if ! INSTALLED=$(claude --version); then
             echo "::warning::claude is on PATH but will not run"
             {
               echo "REVIEW_OUTCOME=error"
@@ -531,12 +1143,35 @@ jobs:
             } >> "$GITHUB_ENV"
             exit 0
           fi
-          echo "✅ Claude CLI installed successfully"
+          echo "Claude CLI installed: ${INSTALLED}"
+
+          # The pin only holds if what landed is what was asked for, and a
+          # mismatch is an ERROR rather than a warning: the transcript schema
+          # this version writes IS the merge gate, so a silent fall-through to
+          # latest would be measured as a fleet-wide coverage number of zero
+          # and read as thin reviews rather than as a broken parser. `error`
+          # routes to the review-unavailable comment and fails only where the
+          # caller set `fail`, which is the same treatment every other
+          # install failure in this job already gets.
+          if [ "$CLI_VERSION" != "latest" ] && [ "$CLI_VERSION" != "stable" ]; then
+            # THE FIRST FIELD, COMPARED WHOLE. `claude --version` prints
+            # "2.1.310 (Claude Code)", so the version is field one. The
+            # previous shape was a `case` prefix match, which accepted
+            # 2.1.310 for a caller pinning 2.1.31 -- a different transcript
+            # format passing the gate that exists to pin it.
+            INSTALLED_VERSION=${INSTALLED%% *}
+            if [ "$INSTALLED_VERSION" != "$CLI_VERSION" ]; then
+              echo "::warning::asked for Claude Code ${CLI_VERSION} but ${INSTALLED} was installed"
+              {
+                echo "REVIEW_OUTCOME=error"
+                echo "REVIEW_ERROR=the Claude Code CLI installed as ${INSTALLED} rather than the pinned ${CLI_VERSION}, and the coverage gate parses the pinned version's transcript format"
+              } >> "$GITHUB_ENV"
+              exit 0
+            fi
+          fi
 
       - name: Create review prompt
         if: env.REVIEW_OUTCOME == 'reviewed'
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           # The prompt's last line is "Begin.", and the run context has to come
           # before it rather than after an instruction to start. Dropping that
@@ -544,11 +1179,6 @@ jobs:
           sed '$ {/^Begin\.$/ d}' build-resources/claude/pr-prompt-v2.md \
             > "$RUNNER_TEMP/prompt.md"
 
-          # The no-findings line is given to the model literally, agreeing in
-          # number, rather than described: the contract's regex accepts
-          # `file` or `files` and a count of 1 is the common case on this
-          # fleet, so leaving the model to inflect it is a contract break
-          # waiting to happen.
           : "${REVIEW_FILES:=0}"
           : "${REVIEW_ADDITIONS:=0}"
           : "${REVIEW_DELETIONS:=0}"
@@ -564,37 +1194,49 @@ jobs:
             echo ""
             echo "## Run context"
             echo ""
-            echo "- Reviewed PR head: \`${HEAD_SHA:0:7}\`. Use exactly that in the marker's \`head=\`."
-            echo "- The working tree is this PR merged into its base branch, so it is what would land. \`git rev-parse HEAD\` is that merge commit, not the head above, and \`HEAD^\` is the base."
-            echo "- After exclusions this PR changes ${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS}/-${REVIEW_DELETIONS}. If you have no findings, your first line is exactly:"
-            echo "  \`**No blocking findings.** ${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS}/-${REVIEW_DELETIONS}.\`"
+            echo "- Reviewed PR head: \`${HEAD_SHA:0:7}\`."
+            # `git rev-parse` is no longer a tool the reviewer has, so this
+            # states the facts it would have been used to discover rather
+            # than naming the command.
+            echo "- The working tree is this PR merged into its base branch, so it is what would land. \`HEAD\` is that merge commit, not the head above; \`HEAD^\` is the base branch tip and \`HEAD^2\` is the PR head. There is nothing left to resolve: do not look for a command to confirm it."
+            echo "- After exclusions this PR changes ${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS}/-${REVIEW_DELETIONS}."
             echo "- \`pr-files/\` (the patches) and \`build-resources/\` (this reviewer's own prompt and scripts) sit in the workspace but are NOT part of the repository under review. They are listed in \`.git/info/exclude\`, so \`Grep\` already skips both and you need no exclusion flags; a plain tree-wide \`Grep\` is correct."
           } >> "$RUNNER_TEMP/prompt.md"
 
+          if [ -n "${RESTORED_PATHS:-}" ]; then
+            echo "- These paths were restored to their BASE-BRANCH content before you started, because the CLI or a tool it runs would otherwise load them as configuration from this branch: ${RESTORED_PATHS}. Their patches are still in \`pr-files/\`, so review the change there; what is in the working tree at those paths is the base's version and a difference between the two is expected, not a finding." >> "$RUNNER_TEMP/prompt.md"
+          fi
           if [ -n "${EXCLUDED_SUMMARY:-}" ]; then
-            echo "- Already dropped before you saw the manifest, so absent by design and never a finding — but it does answer \"did the lockfile move with the manifest?\": ${EXCLUDED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+            echo "- Already dropped before you saw the manifest, so absent by design and never a finding -- but it does answer \"did the lockfile move with the manifest?\": ${EXCLUDED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
           fi
           if [ -n "${OMITTED_SUMMARY:-}" ]; then
-            echo "- Too large to supply a patch for; these carry \`omitted\` in the manifest's fourth column. Open them in the working tree if the lane needs them: ${OMITTED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+            echo "- Too large to supply a patch for; these carry \`omitted\` in the manifest's fourth column. **Open each of these in the working tree.** ${OMITTED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+          fi
+          if [ -n "${UNPATCHED_SUMMARY:-}" ]; then
+            echo "- **No diff could be rendered for these, so they carry \`-\` in the manifest's fourth column. Open each one in the working tree and review it there; they are not optional and they are not generated. The one exception is a row whose status column reads \`removed\` -- that file is gone from the working tree, the deletion is the whole change, and you cannot and need not open it.** ${UNPATCHED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+          fi
+          if [ -n "${BINARY_SUMMARY:-}" ]; then
+            echo "- These carry \`binary\` in the manifest's fourth column. The file's own content is binary, so there is nothing to read: **do not try to open them** and do not treat their absence from your review as a finding: ${BINARY_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
           fi
 
           # The thread goes last, immediately before "Begin.", so the rules
           # that govern it are already established when it arrives. Its own
-          # framing -- delimiters plus a "| " prefix on every data line -- is
-          # written by filter_diff.py, not by any pull request author.
+          # framing -- a nonce-bearing fence plus a "| " prefix on every data
+          # line -- is written by pr_discussion.py, not by any PR author.
           if [ -s "$RUNNER_TEMP/discussion.md" ]; then
             printf '\n' >> "$RUNNER_TEMP/prompt.md"
             cat "$RUNNER_TEMP/discussion.md" >> "$RUNNER_TEMP/prompt.md"
           fi
 
           printf '\nBegin.\n' >> "$RUNNER_TEMP/prompt.md"
-          echo "✅ Prompt created ($(wc -c < "$RUNNER_TEMP/prompt.md") bytes)"
+          echo "Prompt created ($(wc -c < "$RUNNER_TEMP/prompt.md") bytes)"
 
       - name: Run Claude Code Review
         if: env.REVIEW_OUTCOME == 'reviewed'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           MODEL: ${{ inputs.model }}
+          REVIEW_NOTES: ${{ runner.temp }}/review-notes.txt
         run: |
           echo "Running Claude code review..."
 
@@ -616,61 +1258,92 @@ jobs:
 
           # One call per review, always -- no chunking, no second pass.
           #
-          # The reviewer now works from the checked-out tree rather than a
-          # pasted diff, so the tools it needs are named explicitly. `claude -p`
-          # is non-interactive: a tool that would prompt for permission there is
-          # refused, not queued. Naming them cannot widen access -- an allow
-          # list only suppresses prompts, and nothing here restricts what the
-          # CLI would otherwise permit -- but leaving them unnamed can silently
-          # reduce the review to reading nothing, which is the one failure this
-          # input shape exists to prevent. git is listed per read-only
-          # subcommand rather than as a bare `Bash`.
+          # EVERY Bash GRANT IS A WRAPPER, and this is not a style choice. A
+          # `Bash(cmd:*)` permission bounds the START of the command string
+          # and nothing after it, so the argument list is unconstrained. The
+          # five `Bash(git ...:*)` grants this replaced were therefore an
+          # arbitrary write and a remote-code-execution path, both reproduced:
+          # `git log --output=<path> --format=%B -1` writes the pull request's
+          # own commit message anywhere on the runner, which installs a
+          # `[diff "x"] command = ...` stanza in `.git/config` that
+          # `git log -p --ext-diff` then executes. A wrapper is sound where a
+          # prefix is not, because the wrapper validates its own arguments --
+          # review-git allows three subcommands and refuses the flags that
+          # write files or run programs, and review-note takes its destination
+          # from the environment so no argument can redirect the write.
           #
-          # WebFetch/WebSearch stay denied: the runner has no useful network and
-          # the prompt forbids any finding that would need one.
+          # `git status` and `git rev-parse` were dropped rather than wrapped:
+          # the run context appended to the prompt already states what the
+          # working tree is and which commit is which, and no helper program
+          # here shells out to either.
+          #
+          # Naming tools cannot widen access -- an allow list only
+          # suppresses prompts, and `claude -p` refuses rather than queues
+          # anything not permitted -- but leaving them unnamed can silently
+          # reduce the review to reading nothing, which is the one failure
+          # this whole input shape exists to prevent.
+          #
+          # WebFetch/WebSearch stay denied: the runner has no useful network
+          # and the prompt forbids any finding that would need one.
           ALLOWED_TOOLS="Read,Glob,Grep"
-          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(git log:*),Bash(git show:*)"
-          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(git diff:*),Bash(git status:*)"
-          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(git rev-parse:*)"
+          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(review-git:*)"
+          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(review-note:*)"
 
-          # The cwd is the PULL REQUEST's checkout, which is untrusted: without
-          # these two flags that branch's own CLAUDE.md, .claude/settings.json,
-          # hooks, agents and commands load as instructions to the reviewer. A
-          # PR that adds a root CLAUDE.md saying "emit the no-findings line"
-          # would otherwise get a clean review carrying a valid marker, from a
-          # job holding CLAUDE_CODE_OAUTH_TOKEN with pull-requests: write.
+          # The cwd is the PULL REQUEST's checkout, which is untrusted:
+          # without these two flags that branch's own CLAUDE.md,
+          # .claude/settings.json, hooks, agents and commands load as
+          # instructions to the reviewer. A PR that adds a root CLAUDE.md
+          # saying "emit the no-findings line" would otherwise get a clean
+          # review, from a job holding CLAUDE_CODE_OAUTH_TOKEN with
+          # pull-requests: write.
           #
-          # --safe-mode disables CLAUDE.md, skills, plugins, hooks, MCP servers
-          # and custom commands/agents while leaving auth, model selection,
-          # built-in tools and permissions working normally;
-          # --setting-sources user keeps the branch's project and local
-          # settings files out as well. Both verified present in Claude Code
-          # 2.1.267 (`claude --help`). The installer above is unpinned, so a
-          # future version that drops either flag makes this invocation exit
-          # non-zero -- the review then reports that it could not run, rather
-          # than quietly running unprotected. That is the intended failure
-          # direction; pinning the CLI version would be better still.
+          # The CLI version is pinned (`claude_cli_version`), so a future
+          # version that drops either flag cannot arrive without a bump to
+          # this file. Were one to, the invocation exits non-zero and the
+          # review reports that it could not run, rather than quietly
+          # running unprotected -- the intended failure direction either way.
           SAFETY_ARGS=(--safe-mode --setting-sources user)
+
+          # --json-schema takes the schema INLINE, not a path, so it is read
+          # from the file here. Double quotes are the whole safety argument:
+          # bash word-splits and globs an expanded value but never re-scans it
+          # for quotes or escapes, so the JSON cannot break out of the
+          # argument. It must also precede the variadic flags below, which
+          # would otherwise swallow a value starting with `{`.
+          REVIEW_SCHEMA=$(cat build-resources/claude/review-schema.json)
 
           # --allowedTools and --disallowedTools are VARIADIC in this CLI, so
           # they swallow any following argument that does not start with "-".
           # The prompt therefore arrives on stdin and these two stay last;
           # do not add a positional argument after them.
           #
-          # stderr goes to its own file, NOT into review.txt: the whole comment
-          # body is review.txt, and the output contract is machine-checkable, so
-          # one line of CLI progress or warning noise folded in would be posted
-          # to the PR and would break the contract's regexes.
+          # `--output-format stream-json --verbose` replaces plain text
+          # output, so stdout is the run's TRANSCRIPT rather than the
+          # review. That is the whole point: the transcript records every
+          # file the model opened, with the tool result that says whether
+          # the read returned anything, and that is the only coverage signal
+          # which is a measurement rather than a second opinion from the
+          # thing being measured. Anthropic's own action captures the same
+          # Agent SDK message array into an execution file; this is the CLI
+          # equivalent, and `--verbose` is required alongside stream-json in
+          # print mode.
           if ! claude -p "${MODEL_ARGS[@]}" "${SAFETY_ARGS[@]}" \
+            --output-format stream-json --verbose \
+            --json-schema "$REVIEW_SCHEMA" \
             --allowedTools "$ALLOWED_TOOLS" \
             --disallowedTools "WebFetch,WebSearch" \
             < "$RUNNER_TEMP/prompt.md" \
-            > "$RUNNER_TEMP/review.txt" 2> "$RUNNER_TEMP/review.err"; then
+            > "$RUNNER_TEMP/stream.jsonl" 2> "$RUNNER_TEMP/review.err"; then
             echo "::warning::claude exited non-zero"
             echo "stderr:"
             cat "$RUNNER_TEMP/review.err"
-            echo "stdout:"
-            cat "$RUNNER_TEMP/review.txt"
+            # The SHAPE of the last events, never their content. A raw
+            # `tail` of the transcript prints every `Read` result in full,
+            # which on a public repository publishes whole source files into
+            # a job log that anyone can open.
+            echo "stdout (shape of the last transcript events):"
+            python3 build-resources/claude/review_text.py --events \
+              "$RUNNER_TEMP/stream.jsonl" || true
             {
               echo "REVIEW_OUTCOME=error"
               echo "REVIEW_ERROR=the review command failed; see the job log for the CLI's output"
@@ -683,50 +1356,204 @@ jobs:
             cat "$RUNNER_TEMP/review.err"
           fi
 
-          if [ ! -s "$RUNNER_TEMP/review.txt" ]; then
+          python3 build-resources/claude/review_text.py \
+            "$RUNNER_TEMP/stream.jsonl" > "$RUNNER_TEMP/review.txt"
+
+          # Not `-s`: a file holding only a newline passes that test, reaches
+          # the adjudicator with nothing to parse and no stray lines, and
+          # comes out as "No blocking findings." Require real content.
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/review.txt" 2>/dev/null; then
             echo "::warning::claude produced an empty review"
+            echo "shape of the last transcript events:"
+            python3 build-resources/claude/review_text.py --events \
+              "$RUNNER_TEMP/stream.jsonl" || true
             {
               echo "REVIEW_OUTCOME=error"
-              echo "REVIEW_ERROR=the review command produced no output"
+              echo "REVIEW_ERROR=the review command produced no usable output"
             } >> "$GITHUB_ENV"
             exit 0
           fi
 
-          # The output contract caps the whole review at 1600 characters, so
-          # the log can hold all of it.
           echo ""
-          echo "Review output:"
+          echo "Raw model output:"
           cat "$RUNNER_TEMP/review.txt"
           echo ""
-          echo "✅ Code review completed ($(wc -c < "$RUNNER_TEMP/review.txt") characters)"
 
-      - name: Post review comment
-        env:
-          # gh otherwise resolves the repository from the checkout's git
-          # remote, and the error comment can run when that checkout is the
-          # thing that failed.
-          GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
+      # The measurement the reviewer never had. Everything above this point
+      # could succeed on a run that opened one file out of thirty-three, and
+      # on 2026-10-21 it did: 33 files and 6,654 added lines, reviewed in 33
+      # seconds down to one comment about hardcoded paths in a markdown
+      # handoff note, green check, nothing to see.
+      #
+      # This step measures and annotates. It does not fail -- enforcement is
+      # a separate step AFTER the comment is posted, so a failing job still
+      # leaves the review on the pull request rather than swallowing it.
+      - name: Measure review coverage
         if: env.REVIEW_OUTCOME == 'reviewed'
         run: |
-          echo "Posting review to PR..."
-          gh pr comment "$PR_NUMBER" --body "## 🤖 Claude Code Review
-          $(cat "$RUNNER_TEMP/review.txt")
-          ${EXCLUDED_SUMMARY:+
-          **Not reviewed** (dropped by \`exclude_globs\`):
-          \`\`\`text
-          $EXCLUDED_SUMMARY
-          \`\`\`}
-          ${OMITTED_SUMMARY:+
-          **Patch not supplied** (over \`max_review_bytes\`):
-          \`\`\`text
-          $OMITTED_SUMMARY
-          \`\`\`}
-          ---
-          *Automated code review analyzing defects and coding standards*"
-          echo "✅ Review posted to PR #${PR_NUMBER}"
+          # A checker that cannot run is NOT coverage of zero files and is
+          # not a pass either -- it is an unmeasured review, handed to the
+          # enforcement step as such rather than failing this step, which
+          # would skip the comment entirely.
+          #
+          # The missed-path LIST goes to the sections file and never to
+          # GITHUB_ENV: those paths come from the pull request's own tree,
+          # and a path containing a newline in that file appends arbitrary
+          # variables to the job environment. Only counts cross into the
+          # environment.
+          #
+          # RESTORED_PATHS leaves the denominator. Those paths were reverted
+          # to base content after the manifest was written, so a row under one
+          # of them whose patch column is `-` or `omitted` sends the reviewer
+          # to a working-tree file that is now the base's, or absent if this
+          # pull request added it. The read cannot succeed, the row counts
+          # unopened, and under `fail` the author has no way to clear it.
+          if python3 build-resources/claude/review_coverage.py \
+            pr-files/manifest.tsv "$RUNNER_TEMP/stream.jsonl" \
+            --workspace "$GITHUB_WORKSPACE" \
+            --github-env "$GITHUB_ENV" \
+            --missed-file "$RUNNER_TEMP/missed.txt" \
+            --restored "${RESTORED_PATHS:-}" \
+            > "$RUNNER_TEMP/coverage.log"; then
+            cat "$RUNNER_TEMP/coverage.log"
+            READ=$(sed -n 's/^COVERAGE_READ=//p' "$GITHUB_ENV" | tail -1)
+            TOTAL=$(sed -n 's/^COVERAGE_TOTAL=//p' "$GITHUB_ENV" | tail -1)
+            if [ -s "$RUNNER_TEMP/missed.txt" ]; then
+              printf 'Files the reviewer did not open (%s of %s openable opened)\t%s\n' \
+                "$READ" "$TOTAL" "$(paste -sd, - < "$RUNNER_TEMP/missed.txt")" \
+                >> "$RUNNER_TEMP/sections.tsv"
+            fi
+          else
+            cat "$RUNNER_TEMP/coverage.log"
+            echo "::warning::the coverage check could not run"
+            # `read=0/0` would be a MEASUREMENT of a change with nothing in
+            # it. This run measured nothing, and the marker has to say the
+            # same thing the enforcement step below acts on.
+            {
+              echo "COVERAGE_TOTAL=unmeasured"
+              echo "COVERAGE_READ=unmeasured"
+              echo "COVERAGE_UNCOVERED=unmeasured"
+              echo "COVERAGE_EXEMPT=unmeasured"
+            } >> "$GITHUB_ENV"
+            printf 'Review coverage\tcould not be measured for this run\n' \
+              >> "$RUNNER_TEMP/sections.tsv"
+          fi
+
+      # REQUIREMENT 4: the comment body is assembled, and the filler
+      # rejected, by a program rather than by the model that produced it.
+      - name: Adjudicate the review and build the comment
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        run: |
+          # The lane in the marker is the SIZE CLASS, computed here. It used
+          # to be the model's own classification, which made a field anyone
+          # parsing the marker reads into another thing the model could get
+          # wrong about itself.
+          TOTAL_CHANGES=$(( ${REVIEW_ADDITIONS:-0} + ${REVIEW_DELETIONS:-0} ))
+          if [ "$TOTAL_CHANGES" -gt 2000 ]; then
+            LANE=C
+          else
+            LANE=B
+          fi
+
+          : "${REVIEW_FILES:=0}"
+          if [ "$REVIEW_FILES" = "1" ]; then
+            FILE_WORD="file"
+          else
+            FILE_WORD="files"
+          fi
+
+          # RESTORED_PATHS for the same reason the coverage check takes
+          # it: those paths hold the BASE's file, so a finding's line
+          # number there cannot be resolved against the checkout.
+          if ! python3 build-resources/claude/review_output.py \
+            --findings "$RUNNER_TEMP/review.txt" \
+            --manifest pr-files/manifest.tsv \
+            --base "$MERGE_BASE" \
+            --out "$RUNNER_TEMP/body.md" \
+            --sections "$RUNNER_TEMP/sections.tsv" \
+            --notes "$RUNNER_TEMP/review-notes.txt" \
+            --previous "$RUNNER_TEMP/previous.md" \
+            --metrics "$GITHUB_ENV" \
+            --head "$HEAD_SHA" \
+            --lane "$LANE" \
+            --coverage-read "${COVERAGE_READ:-0}" \
+            --coverage-total "${COVERAGE_TOTAL:-0}" \
+            --summary "${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS:-0}/-${REVIEW_DELETIONS:-0}." \
+            --restored "${RESTORED_PATHS:-}"; then
+            echo "::warning::the review output could not be adjudicated"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the review was produced but could not be turned into a comment; see the job log"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo ""
+          echo "Comment body:"
+          cat "$RUNNER_TEMP/body.md"
+
+      # REQUIREMENT 3, second half: write that one comment.
+      - name: Post or update the review comment
+        id: post_review
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # RE-CHECK THE HEAD BEFORE WRITING. The concurrency group
+          # serialises this job against itself, but a push that lands while
+          # the model is running produces a review of a head that no longer
+          # exists, and writing it over the comment would replace a current
+          # review with a stale one. The newer run is already on its way, so
+          # standing down is the correct answer and the only one that keeps
+          # the single comment true.
+          CURRENT_HEAD=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq '.head.sha' 2>/dev/null || true)
+          if [ -n "$CURRENT_HEAD" ] && [ "$CURRENT_HEAD" != "$HEAD_SHA" ]; then
+            echo "::warning::the head moved from ${HEAD_SHA} to ${CURRENT_HEAD} while this review ran; not overwriting the comment with a review of the older head"
+            exit 0
+          fi
+
+          # --field reads the body from a file, so the body never passes
+          # through a shell-quoted string. It contains model output and
+          # paths from the pull request's own tree, and the previous shape
+          # interpolated both into a double-quoted `gh pr comment --body`.
+          # A FORK CANNOT BE COMMENTED ON -- see "Find this reviewer's
+          # existing comment", which decides this once. The review is not
+          # lost; it goes to the job summary, and the job stays green.
+          if [ "${CAN_COMMENT:-true}" != "true" ]; then
+            echo "::warning::no write access to this pull request's comments; the review is in the job summary instead"
+            cat "${RUNNER_TEMP}/body.md" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "${COMMENT_ID:-}" ]; then
+            # PATCH, never delete-and-repost. Editing preserves the comment's
+            # revision history -- `userContentEdits` on GraphQL -- so a
+            # reviewer can see what the earlier reviews said; deleting and
+            # reposting throws every one of them away and moves the comment
+            # to the bottom of the thread.
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+              --field "body=@${RUNNER_TEMP}/body.md" > /dev/null
+            echo "Updated review comment ${COMMENT_ID} on PR #${PR_NUMBER}"
+          else
+            # THE POST RESPONSE IS WHERE THE IDENTITY ASSUMPTION IS PROVED.
+            # The step above matches an existing comment on `user.id ==
+            # viewer.databaseId`. If those are not the same number for
+            # `GITHUB_TOKEN`, no comment is ever found, every push POSTs a
+            # new one, and nothing says so -- the pre-change behaviour with
+            # a job log that looks healthy. The created comment carries the
+            # id this token really writes as, so compare them once here
+            # rather than waiting for a human to count comments.
+            AUTHORED_ID=$(gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --field "body=@${RUNNER_TEMP}/body.md" --jq '.user.id')
+            echo "Posted review comment on PR #${PR_NUMBER}"
+            if [ -n "${VIEWER_ID:-}" ] && [ "$AUTHORED_ID" != "$VIEWER_ID" ]; then
+              echo "::warning::this token authors comments as user id ${AUTHORED_ID} but resolved its own identity as ${VIEWER_ID}; the next run will not find this comment and will post another"
+            fi
+          fi
 
       - name: Post skip message
+        id: post_empty
         env:
           # gh otherwise resolves the repository from the checkout's git
           # remote, and the error comment can run when that checkout is the
@@ -735,58 +1562,89 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         if: env.REVIEW_OUTCOME == 'empty'
         run: |
-          echo "Posting skip message to PR..."
-          gh pr comment "$PR_NUMBER" --body "## 🤖 Claude Code Review
+          # Every outcome carries the marker, so the next run finds and
+          # edits this same comment rather than adding to it.
+          {
+            echo "## Claude Code Review"
+            echo ""
+            echo "**No reviewable changes.** This pull request has no source changes left after applying \`exclude_globs\`, or contains only metadata changes."
+            if [ -n "${EXCLUDED_SUMMARY:-}" ]; then
+              echo ""
+              echo "**Not reviewed (dropped by \`exclude_globs\`)**"
+              echo ""
+              echo '```text'
+              echo "${EXCLUDED_SUMMARY}"
+              echo '```'
+            fi
+            echo ""
+            echo "<!-- claude-review v3 lane=E findings=0 blockers=0 read=0/0 head=${HEAD_SHA} -->"
+          } > "$RUNNER_TEMP/body.md"
 
-          ⚠️ **No reviewable changes detected** — skipping code review.
-
-          This PR has no source changes left after applying \`exclude_globs\`, or contains only metadata changes (labels, description, etc.).
-
-          ${EXCLUDED_SUMMARY:+**Excluded:**
-          \`\`\`text
-          $EXCLUDED_SUMMARY
-          \`\`\`}"
-          echo "✅ Skip message posted to PR #${PR_NUMBER}"
+          # Degraded on a fork, as above.
+          if [ "${CAN_COMMENT:-true}" != "true" ]; then
+            echo "::warning::no write access to this pull request's comments; this notice is in the job summary instead"
+            cat "${RUNNER_TEMP}/body.md" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "${COMMENT_ID:-}" ]; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+              --field "body=@${RUNNER_TEMP}/body.md" > /dev/null
+          else
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --field "body=@${RUNNER_TEMP}/body.md" > /dev/null
+          fi
+          echo "Skip message posted to PR #${PR_NUMBER}"
 
       - name: Post bot-skip message
+        id: post_bot
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         if: env.REVIEW_OUTCOME == 'bot'
         run: |
           # A silently absent review is indistinguishable from a broken
           # workflow, so the skip says so on the PR and carries the marker,
-          # exactly like the three other outcomes. lane=S is reserved for this
+          # exactly like the other outcomes. lane=S is reserved for this
           # comment: the model is never running when it is posted, so nothing
           # else can emit it and a parser can tell a skip from a clean review.
-          echo "Posting bot-skip message to PR..."
+          #
           STALE_NEEDLE=$(cat "$RUNNER_TEMP/stale_needle.txt" 2>/dev/null || true)
-          if [ -s "$RUNNER_TEMP/stale_refs.txt" ]; then
-            FINDINGS=1
-            DETAIL="
-          **1 finding** — 0 blockers, 1 risk.
+          {
+            echo "## Claude Code Review"
+            echo ""
+            echo "**Skipped** -- this pull request was opened by a bot, and \`review_bot_authors\` is false."
+            if [ -s "$RUNNER_TEMP/stale_refs.txt" ]; then
+              FINDINGS=1
+              echo ""
+              echo "- **RISK** \`${STALE_NEEDLE}\` -- the previous version string still appears in the working tree. Confirm each is meant to stay; a dependency table, a badge or a \`REFRESHED_AT\` left behind is the usual cause."
+              echo ""
+              echo '```text'
+              cat "$RUNNER_TEMP/stale_refs.txt"
+              echo '```'
+            else
+              FINDINGS=0
+            fi
+            echo ""
+            echo "<!-- claude-review v3 lane=S findings=${FINDINGS} blockers=0 read=0/0 head=${HEAD_SHA} -->"
+          } > "$RUNNER_TEMP/body.md"
 
-          - **RISK** \`${STALE_NEEDLE}\` — the previous version string still appears in the working tree. Confirm each is meant to stay; a dependency table, a badge or a \`REFRESHED_AT\` left behind is the usual cause.
-
-          \`\`\`text
-          $(cat "$RUNNER_TEMP/stale_refs.txt")
-          \`\`\`"
+          # Degraded on a fork, as above.
+          if [ "${CAN_COMMENT:-true}" != "true" ]; then
+            echo "::warning::no write access to this pull request's comments; this notice is in the job summary instead"
+            cat "${RUNNER_TEMP}/body.md" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "${COMMENT_ID:-}" ]; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+              --field "body=@${RUNNER_TEMP}/body.md" > /dev/null
           else
-            FINDINGS=0
-            DETAIL=""
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --field "body=@${RUNNER_TEMP}/body.md" > /dev/null
           fi
-          gh pr comment "$PR_NUMBER" --body "## 🤖 Claude Code Review
-
-          ⏭️ **Skipped** — this pull request was opened by a bot, and \`review_bot_authors\` is false.
-          $DETAIL
-
-          <!-- claude-review v2 lane=S findings=${FINDINGS} blockers=0 head=${HEAD_SHA} -->
-          ---
-          *Automated code review analyzing defects and coding standards*"
-          echo "✅ Bot-skip message posted to PR #${PR_NUMBER}"
+          echo "Bot-skip message posted to PR #${PR_NUMBER}"
 
       - name: Post review-unavailable message
+        id: post_unavailable
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
@@ -801,15 +1659,167 @@ jobs:
           # turned the job red and posted nothing, which is indistinguishable
           # from the workflow being broken and blocks merges anywhere this is
           # a required check.
-          echo "Posting review-unavailable message to PR..."
-          gh pr comment "$PR_NUMBER" --body "## 🤖 Claude Code Review
+          {
+            echo "## Claude Code Review"
+            echo ""
+            echo "**The code review could not run.**"
+            echo ""
+            echo "Reason: ${REVIEW_ERROR:-a step of the review workflow failed; see the job log}"
+            echo ""
+            echo "Nothing about this pull request has been reviewed or approved by this check."
+            echo ""
+            echo "<!-- claude-review v3 lane=X findings=0 blockers=0 read=0/0 head=${HEAD_SHA} -->"
+          } > "$RUNNER_TEMP/unavailable.md"
 
-          ⚠️ **The code review could not run.**
+          # Degraded on a fork, as above.
+          if [ "${CAN_COMMENT:-true}" != "true" ]; then
+            echo "::warning::no write access to this pull request's comments; this notice is in the job summary instead"
+            cat "${RUNNER_TEMP}/unavailable.md" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "${COMMENT_ID:-}" ]; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+              --field "body=@${RUNNER_TEMP}/unavailable.md" > /dev/null
+          else
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --field "body=@${RUNNER_TEMP}/unavailable.md" > /dev/null
+          fi
+          echo "Review-unavailable message posted to PR #${PR_NUMBER}"
 
-          Reason: ${REVIEW_ERROR:-a step of the review workflow failed; see the job log}
+      # THE INVARIANT UNDER CANCELLATION. `timeout-minutes` above and
+      # `cancel-in-progress` both end this job by CANCELLING it, and under
+      # cancellation neither `failure()` nor `REVIEW_OUTCOME == 'error'` is
+      # true -- so the step above does not run and nothing is written.
+      #
+      # WHAT THIS CANNOT DO IS MAKE THE CHECK GREEN. A cancelled job reports
+      # cancelled whatever it posts, so a repository that made this a
+      # required check is blocked until it re-runs; that is Actions'
+      # semantics and not something a step can undo. Nor is the comment
+      # guaranteed: a cancelled job gets a grace window, and one PATCH fits
+      # inside it where a retry loop would not. The property that IS
+      # guaranteed is the one bought at the top of this job, where a marker
+      # carrying a stale head= is relabelled before any work starts.
+      #
+      # A HEAD THAT MOVED means a push superseded this run. The newer run
+      # has already relabelled the comment and will post the real review,
+      # so standing down is correct and avoids racing it.
+      - name: Post review-cancelled message
+        if: ${{ cancelled() && steps.post_review.conclusion != 'success' && steps.post_empty.conclusion != 'success' && steps.post_bot.conclusion != 'success' && steps.post_unavailable.conclusion != 'success' }}
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${CAN_COMMENT:-true}" != "true" ]; then
+            echo "::warning::no write access to this pull request's comments; the review was cancelled before it finished"
+            exit 0
+          fi
 
-          Nothing about this pull request has been reviewed or approved by this check. See the job log for detail.
+          CURRENT_HEAD=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq '.head.sha' 2>/dev/null || true)
+          if [ -n "$CURRENT_HEAD" ] && [ "$CURRENT_HEAD" != "$HEAD_SHA" ]; then
+            echo "the head moved to ${CURRENT_HEAD}; the run that superseded this one owns the comment"
+            exit 0
+          fi
 
-          ---
-          *Automated code review analyzing defects and coding standards*"
-          echo "✅ Review-unavailable message posted to PR #${PR_NUMBER}"
+          # lane=T, and no `findings=` -- for the reason given where the
+          # superseded marker is written: an absent field is read as "no
+          # comparison", a zero as a review that found nothing.
+          {
+            echo "## Claude Code Review"
+            echo ""
+            echo "**The code review did not finish.** The job was cancelled before it could post -- the job timeout, a newer push, or a manual cancellation."
+            echo ""
+            echo "Nothing about this pull request has been reviewed or approved by this check. Re-run the workflow to review \`${HEAD_SHA}\`."
+            echo ""
+            echo "<!-- claude-review v3 lane=T blockers=0 read=0/0 head=${HEAD_SHA} -->"
+          } > "$RUNNER_TEMP/cancelled.md"
+
+          if [ -n "${COMMENT_ID:-}" ]; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+              --field "body=@${RUNNER_TEMP}/cancelled.md" > /dev/null
+          else
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --field "body=@${RUNNER_TEMP}/cancelled.md" > /dev/null
+          fi
+          echo "Review-cancelled message posted to PR #${PR_NUMBER}"
+
+      # LAST STEP IN THE JOB, and that position is load-bearing twice over.
+      #
+      # After the comment, because the review the model did produce is worth
+      # reading even when it covered a tenth of the change; a red job that
+      # posts nothing is the failure mode the rest of this file is built to
+      # avoid. After every other posting step, because those are guarded by
+      # `failure()` -- a gate that failed earlier would trigger the
+      # "review could not run" comment on top of a review that did run.
+      - name: Enforce review coverage
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        env:
+          ENFORCEMENT: ${{ inputs.coverage_enforcement }}
+        run: |
+          echo "coverage: ${COVERAGE_READ:-?}/${COVERAGE_TOTAL:-?} opened, ${COVERAGE_UNCOVERED:-?} not, ${COVERAGE_EXEMPT:-?} exempt"
+          # EVERY NAME HERE IS ONE review_output.py WRITES, and every name
+          # it writes is here. REVIEW_MALFORMED and REVIEW_STRAY_LINES used
+          # to be on this line and were left behind by the deleted markdown
+          # parser, so both rendered `?` on every run.
+          echo "filler: ${REVIEW_PADDING_REJECTED:-?} padding rejection(s), ${REVIEW_BLIND_REROUTED:-?} blindness claim(s) rerouted, ${REVIEW_SELF_DISCLAIMED:-?} self-disclaimed, ${REVIEW_DUPLICATES:-?} duplicate(s) collapsed"
+          echo "refused: ${REVIEW_SCHEMA_REJECTED:-?} schema reject(s), ${REVIEW_UNSAFE_REJECTED:-?} refused as unsafe text, ${REVIEW_MESSAGE_NORMALISED:-?} message(s) normalised"
+          echo "anchors: ${REVIEW_ANCHOR_DOWNGRADED:-?} downgraded, ${REVIEW_ANCHOR_UNVERIFIED:-?} left unchecked in a restored path"
+          echo "findings: ${REVIEW_FINDINGS:-?} kept (${REVIEW_BLOCKERS:-?} blocker(s), ${REVIEW_RISKS:-?} risk(s)), ${REVIEW_DROPPED_FOR_SPACE:-?} dropped for space"
+          echo "size: ${REVIEW_CHARS:-?} characters against ${REVIEW_PREV_CHARS:-?} in the comment it replaces, whose marker read ${REVIEW_PREV_FINDINGS:-?} finding(s) (-1 means none to compare); regression=${REVIEW_REGRESSION:-?}"
+          echo "verdict: ${REVIEW_NO_VERDICT:-?} (1 means no finding and no verdict could be read from the output)"
+
+          # "0" is the only passing value. An empty or non-numeric one means
+          # the measurement did not happen, which is not a pass: an
+          # unmeasured review is exactly what shipped on 2026-10-21.
+          if [ "${COVERAGE_UNCOVERED:-unmeasured}" = "0" ]; then
+            echo "every openable file in the manifest was opened"
+            exit 0
+          fi
+
+          MESSAGE="the reviewer opened ${COVERAGE_READ:-0} of ${COVERAGE_TOTAL:-0} openable file(s); the unopened files are named on the pull request"
+          case "$ENFORCEMENT" in
+            off) echo "::notice::${MESSAGE}" ;;
+            warn) echo "::warning::${MESSAGE}" ;;
+            fail)
+              echo "::error::${MESSAGE}"
+              exit 1
+              ;;
+          esac
+
+      # REQUIREMENT 1, the other half of enforcement. The step above fails a
+      # `fail` repository for a review that ran and opened too little. These
+      # are the two outcomes that are strictly worse and that it cannot see,
+      # because it is gated on the reviewed lane:
+      #
+      #   - the review could not run at all (`error`), which was previously
+      #     green on every setting -- a repository that chose `fail` got a
+      #     pass for no review and a failure for a nine-of-ten review, which
+      #     is the severity ordering inverted;
+      #   - the output parsed to no finding and no verdict, which is the
+      #     condition that exists precisely so that unreadable output is not
+      #     a clean verdict, and which nothing acted on.
+      #
+      # `!cancelled()` rather than `always()`: a cancelled run is a
+      # superseded push, not a shortfall. Last in the job, after every
+      # posting step, so the comment is on the pull request before this can
+      # turn the job red.
+      - name: Enforce review completion
+        if: ${{ !cancelled() }}
+        env:
+          ENFORCEMENT: ${{ inputs.coverage_enforcement }}
+        run: |
+          if [ "$ENFORCEMENT" != "fail" ]; then
+            exit 0
+          fi
+
+          if [ "${REVIEW_OUTCOME:-}" = "error" ]; then
+            echo "::error::the review could not run (${REVIEW_ERROR:-no reason recorded}); this repository sets coverage_enforcement to fail, so an absent review is a failure"
+            exit 1
+          fi
+
+          if [ "${REVIEW_NO_VERDICT:-0}" = "1" ]; then
+            echo "::error::the reviewer's output could not be read as findings or as a verdict, so nothing on this pull request has been adjudicated"
+            exit 1
+          fi

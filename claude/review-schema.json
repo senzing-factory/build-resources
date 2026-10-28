@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "description": "Every finding, one object each. An empty array is the clean verdict and is the ONLY way to report one; do not add a field, a note or a sentence to say so. Report every finding you have: the workflow decides how many reach the comment and discloses the rest.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "path", "line", "message"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["BLOCKER", "RISK"],
+            "description": "BLOCKER = it will break something, or it is a security defect. RISK = plausible breakage you could not confirm from the tree."
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "Repository-relative path, exactly as the manifest spells it, with no leading ./ and no line number. The empty string, and only the empty string, means the finding is repo-wide. A backtick, a newline or any other control character in it refuses the finding: the comment renders this field inside an inline code span, so those characters break the comment rather than the path."
+          },
+          "line": {
+            "type": "integer",
+            "description": "Line number in the PR HEAD file, not a patch offset. 0 when the finding is not line-specific, and always 0 when path is empty. A line past the end of the file costs the finding its severity, so 0 beats a confident wrong number."
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "One sentence saying what is wrong and what it breaks, then one imperative clause giving the fix. No severity word, no path, no line number, no markdown bullet: those are separate fields and the comment is assembled from them. Aim for 400 characters; 2000 is the hard limit and a finding over it is refused. A newline is collapsed to a space, and `<!--` or `-->` refuses the finding, because the comment body is assembled line by line and its state marker is an HTML comment."
+          }
+        }
+      }
+    }
+  }
+}

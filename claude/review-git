@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# review-git -- run one of git's three read-only history subcommands with the
+# code-execution machinery turned off.
+#
+# Usage:  review-git <log|show|diff> [args...]
+#
+# Use it exactly as you would use git, with `review-git` in place of the word
+# `git`:  review-git diff --name-only HEAD^ HEAD
+#
+# WHY A WRAPPER AND NOT FIVE ALLOWED PREFIXES. Claude Code's `Bash(cmd:*)`
+# permission bounds the START of the command string and nothing after it, so
+# `Bash(git log:*)` grants `git log` with ANY arguments. That is not a reading
+# of the grant, it is an exploit: `git log --output=<path> --format=%B -1`
+# writes the pull request's own commit message to any path on the runner,
+# which is enough to install a `[diff "x"] command = ...` stanza in
+# `.git/config` and execute it with `git log -p --ext-diff`. A wrapper is
+# sound where a prefix is not, because the wrapper validates its arguments.
+#
+# WHAT IS REFUSED, and why each one:
+#   --output        writes an arbitrary file, following symlinks, in place
+#   --ext-diff      runs a diff driver named by the repository's own config
+#   --textconv      same, through the textconv driver
+#   -c              git's config override, and the combined-diff option
+#   --no-index      diffs two paths anywhere on the runner
+#   --exec-path     relocates the directory git runs its helpers from
+#   --upload-pack   }  name a program to run on the far end of a transport
+#   --receive-pack  }
+# ANY PREFIX of one of those is refused too, because git expands an
+# unambiguous long-option abbreviation. That costs `--text`, which git treats
+# as its own option but which spells a prefix of `--textconv`; use `--binary`
+# or open the file instead. A refusal goes to stderr and exits non-zero, so it
+# is visible in the job log rather than silently producing nothing.
+#
+# AND EVERY PATH ARGUMENT MUST STAY INSIDE THE CHECKOUT. Refusing `--no-index`
+# refuses nothing on its own: git IMPLIES it whenever a path argument lies
+# outside the work tree, so `review-git diff /etc/hostname /dev/null` printed
+# the file with the flag nowhere in sight, and `diff <dir> <dir>` dumped an
+# arbitrary tree. An argument that is absolute, or that carries a `..` path
+# SEGMENT, is therefore refused. A segment, not a substring, so revision
+# ranges keep working -- `HEAD~2..HEAD` is one segment and passes.
+#
+# REJECTION IS NOT THE WHOLE CONTROL. The driver machinery is also disabled at
+# the source below, because a `[diff "x"] textconv = ...` driver runs on a
+# plain `git diff` with NO flag at all -- measured on git 2.47.3.
+#
+# `git status` and `git rev-parse` are deliberately absent: the review prompt
+# already states what the working tree is and which commit is which.
+
+usage() {
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
+  exit "${1:-2}"
+}
+
+set -euo pipefail
+
+refuse() { # refuse <message>
+  echo "review-git: $1" >&2
+  exit 2
+}
+
+case "${1:-}" in
+  -h | --help) usage 0 ;;
+esac
+
+# The subcommand must be the FIRST argument, so no global option can precede
+# it -- `git -c k=v log` and `git --exec-path=... log` are excluded by this
+# test rather than by the argument scan below.
+SUBCOMMAND="${1:-}"
+case "$SUBCOMMAND" in
+  log | show | diff) ;;
+  '') refuse "no subcommand given; expected log, show or diff" ;;
+  *) refuse "refusing '${SUBCOMMAND}': the first argument must be log, show or diff" ;;
+esac
+shift
+
+REFUSED="--output --ext-diff --textconv --no-index"
+REFUSED="${REFUSED} --exec-path --upload-pack --receive-pack"
+
+# Every argument is scanned, including any after `--`: a path that happens to
+# be spelled like a refused option is refused too, which costs nothing.
+for arg in "$@"; do
+  case "$arg" in
+    /*) refuse "refusing '${arg}': an absolute path reads outside this repository" ;;
+  esac
+  case "/$arg/" in
+    */../*)
+      refuse "refusing '${arg}': a '..' path segment reads outside this repository"
+      ;;
+  esac
+  if [ "$arg" = "-c" ]; then
+    refuse "refusing '-c': it is git's configuration override and the combined-diff option"
+  fi
+  # `--value=x` is matched on the name; a bare `--` is the path separator and
+  # is not an option at all.
+  NAME="${arg%%=*}"
+  case "$NAME" in
+    --?*) ;;
+    *) continue ;;
+  esac
+  for bad in $REFUSED; do
+    # "$NAME" is the PATTERN, so this matches whenever $NAME is $bad or an
+    # abbreviation of it. It is QUOTED, so a glob character in $NAME is
+    # literal and NARROWS the match -- the argument is admitted, not refused.
+    # Sound, because git does not expand globs in option names, so `--out*ut`
+    # reaches git as an unknown option; but the control is the literal prefix
+    # test and nothing else.
+    case "$bad" in
+      "$NAME"*)
+        refuse "refusing '${arg}': it names or abbreviates ${bad}, which writes a file, reads outside this repository, or runs a program the repository's own configuration chooses"
+        ;;
+    esac
+  done
+done
+
+# Belt and braces. The flags above are refused, and these turn the same
+# machinery off whatever the repository's own config says -- the pull request
+# under review owns `.git/info/attributes` and can reach `.git/config`.
+# `--no-pager` removes the `core.pager` route by the same argument.
+unset GIT_EXTERNAL_DIFF
+exec git --no-pager -c diff.external= -c core.fsmonitor= \
+  "$SUBCOMMAND" --no-ext-diff --no-textconv "$@"
