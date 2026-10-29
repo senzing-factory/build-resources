@@ -54,6 +54,7 @@
     "fpath",
     "frozenset",
     "fsmonitor",
+    "fullmatch",
     "ghaction",
     "gitignore",
     "gitlink",
