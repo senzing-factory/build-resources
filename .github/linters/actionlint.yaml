@@ -10,20 +10,28 @@
 paths:
   .github/workflows/claude-pull-request-review.yaml:
     ignore:
-      # actionlint 1.7.12 -- the version super-linter v8.7.0 pins -- does not
-      # know `github.job_workflow_sha`, so it reports the reviewer's self-pin
-      # as an undefined property.
+      # actionlint 1.7.12 -- the version super-linter v8.7.0 pins -- PREDATES
+      # the `job` context's workflow-identity properties. Its `job` type is
+      # `{check_run_id, container, services, status}`, so it reports
+      # `job.workflow_sha` and `job.workflow_repository` as undefined. Both
+      # are real and documented; `job.workflow_sha` is the commit of the
+      # workflow file defining the job, which for a called reusable workflow
+      # is that workflow's own commit -- the one value that can pin the
+      # reviewer's helpers to the ref each caller asked for.
       #
-      # READ THIS BEFORE REMOVING THE EXPRESSION IT PROTECTS. The previous
-      # way of satisfying this lint was to launder the property through
-      # `fromJSON(toJSON(github))`, which types as `any` and so lints clean.
-      # That expression evaluated to the EMPTY STRING at runtime,
-      # `actions/checkout` omitted `ref:`, and the reviewer silently ran
-      # build-resources' default branch instead of the ref each caller
-      # pinned -- measured 2026-10-29 across five runs pinned at
-      # `@330-skern`, none of which executed the branch's helpers. Routing
-      # around the linter converted a build-time error into a silent runtime
-      # one. An ignore here keeps the failure visible in the one place that
-      # can act on it: "Verify build resources checkout" now fails closed
-      # when the value comes back empty from a consumer.
-      - 'property "job_workflow_sha" is not defined in object type'
+      # READ THIS BEFORE WIDENING IT. The earlier attempt reached for
+      # `job_workflow_sha` on the GITHUB context, where it has never existed
+      # -- it is an OIDC claim, and the names collide. actionlint rejected
+      # that correctly, and it was silenced by laundering the property
+      # through `fromJSON(toJSON(github))`, which types as `any`. The
+      # expression then evaluated to the EMPTY STRING, `actions/checkout`
+      # omitted `ref:`, and the reviewer ran build-resources' default branch
+      # instead of the pinned ref -- measured 2026-10-29 across five runs at
+      # `@330-skern`, none of which executed the branch's helpers. An
+      # indirection hides a wrong name; this ignore does not, because it
+      # names the exact property it permits.
+      #
+      # Remove this file when super-linter ships an actionlint that knows
+      # the `job` context.
+      - 'property "workflow_sha" is not defined in object type'
+      - 'property "workflow_repository" is not defined in object type'

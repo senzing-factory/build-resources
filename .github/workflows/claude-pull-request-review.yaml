@@ -479,24 +479,29 @@ jobs:
           # that does the reviewing: every `claude/*.py`, `pr-prompt-v2.md`
           # and `review-schema.json` comes from here.
           #
-          # THE DIRECT FORM, DELIBERATELY. The previous
-          # `fromJSON(toJSON(github)).job_workflow_sha` evaluated to the
-          # EMPTY STRING in every real call, `actions/checkout` then omitted
-          # `ref:` and took this repository's default branch, and nothing
-          # said so. Measured 2026-10-29: five runs pinned at `@330-skern`
-          # all executed `main`'s helpers while the workflow file itself
-          # came from the branch, so the pin was decorative for four months.
+          # `job.workflow_sha` IS THE PROPERTY, and the JOB context is why
+          # this was wrong for so long. For a job that came from a called
+          # reusable workflow it is that workflow's OWN commit, where the
+          # `github` context describes the CALLER throughout -- so
+          # `github.workflow_sha` is the consumer's workflow file and is
+          # useless here.
           #
-          # The indirection existed only to stop actionlint 1.7.12 -- the
-          # version super-linter v8.7.0 runs -- rejecting the property as
-          # undefined. Routing around a linter turned a build-time error
-          # into a silent runtime empty, so the lint is now handled by a
-          # scoped ignore in `.github/linters/actionlint.yaml` instead.
+          # ~~The previous form was `fromJSON(toJSON(github)).job_workflow_sha`~~
+          # and it evaluated to the EMPTY STRING in every real call:
+          # `job_workflow_sha` is a real identifier, but as an OIDC CLAIM,
+          # and it has never existed on the `github` context. Measured
+          # 2026-10-29, five runs pinned at `@330-skern` all executed
+          # `main`'s helpers while the workflow file came from the branch,
+          # so the pin was decorative. actionlint rejected the direct form
+          # correctly; the wrapper types as `any`, which silenced a true
+          # build-time error and bought a silent runtime one instead.
           #
-          # Empty when this file runs directly rather than as a reusable
-          # workflow, which is the one benign case; "Verify build resources
-          # checkout" fails closed on every other empty value.
-          ref: ${{ github.job_workflow_sha }}
+          # NOT AVAILABLE ON GITHUB ENTERPRISE SERVER. The `job` context's
+          # four workflow-identity properties are github.com only. Every
+          # consumer of this workflow is on github.com; an Enterprise Server
+          # consumer would get an empty value and be refused by the guard
+          # below, which is the correct failure rather than a silent one.
+          ref: ${{ job.workflow_sha }}
           repository: senzing-factory/build-resources
 
       - name: Verify build resources checkout
@@ -504,7 +509,7 @@ jobs:
         env:
           # THE SAME EXPRESSION THE CHECKOUT USED, so the guard and the
           # checkout cannot disagree about what was pinned.
-          EXPECTED_SHA: ${{ github.job_workflow_sha }}
+          EXPECTED_SHA: ${{ job.workflow_sha }}
           # Who is calling. This CANNOT be empty, which is what makes the
           # test below decidable: the previous guard inferred "running
           # directly" from an empty EXPECTED_SHA, so the one state it
@@ -512,6 +517,11 @@ jobs:
           # the state it read as benign and waved through. It failed OPEN.
           CALLER_REPO: ${{ github.repository }}
           SELF_REPO: senzing-factory/build-resources
+          # Free alongside the SHA, and from the same context: the owner/repo
+          # the RUNNING workflow file came from. Logged always; load-bearing
+          # only when non-empty, so a context that does not supply it
+          # (Enterprise Server) changes nothing rather than refusing a run.
+          WORKFLOW_REPO: ${{ job.workflow_repository }}
         run: |
           # THE PROPERTY THIS STEP EXISTS TO HOLD: it is impossible for this
           # job to review anything using helpers from an unverified ref.
@@ -524,6 +534,7 @@ jobs:
           echo "build-resources expected: ${EXPECTED_SHA:-<empty>}"
           echo "build-resources actual:   ${ACTUAL_SHA:-<no checkout>}"
           echo "called from:              ${CALLER_REPO}"
+          echo "workflow file's repo:     ${WORKFLOW_REPO:-<not supplied>}"
 
           # FAIL CLOSED, and on a value that cannot be absent. Running
           # directly in build-resources is the ONLY case where an empty
@@ -533,7 +544,20 @@ jobs:
             echo "::warning::the reviewer's self-pin did not resolve"
             {
               echo "REVIEW_OUTCOME=error"
-              echo "REVIEW_ERROR=the reviewer could not resolve its own commit (github.job_workflow_sha was empty), so its helpers would have come from build-resources' default branch rather than the ref this caller pinned. Refusing to review rather than reviewing with unverified code."
+              echo "REVIEW_ERROR=the reviewer could not resolve its own commit (job.workflow_sha was empty), so its helpers would have come from build-resources' default branch rather than the ref this caller pinned. Refusing to review rather than reviewing with unverified code."
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # The workflow we are running is not the repository we check out
+          # from -- a fork of build-resources running its own copy would
+          # resolve a SHA that does not exist in senzing-factory's. Inert
+          # when the context does not supply the value.
+          if [ -n "${WORKFLOW_REPO:-}" ] && [ "$WORKFLOW_REPO" != "$SELF_REPO" ]; then
+            echo "::warning::the running workflow came from ${WORKFLOW_REPO}"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the running reviewer workflow belongs to ${WORKFLOW_REPO}, but its helpers are checked out from ${SELF_REPO}; the pinned commit would not resolve there"
             } >> "$GITHUB_ENV"
             exit 0
           fi

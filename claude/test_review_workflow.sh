@@ -89,7 +89,7 @@ mk_checkout() { # mk_checkout <dir>
     commit -q --allow-empty -m c
 }
 
-# run_guard <case> <caller repo> <expected sha> <with checkout?>
+# run_guard <case> <caller repo> <expected sha> <with checkout?> [workflow repo]
 # Echoes what the guard wrote to GITHUB_ENV.
 # An EXPECTED SHA of `MATCH` means "whatever this fixture's own checkout is
 # at". Two separately created repositories only agree when their commits land
@@ -108,6 +108,7 @@ run_guard() {
     EXPECTED_SHA="$expected" \
     CALLER_REPO="$2" \
     SELF_REPO=senzing-factory/build-resources \
+    WORKFLOW_REPO="${5:-}" \
     bash "$GUARD" > "$dir/log.txt" 2>&1 ) || true
   cat "$dir/github.env"
 }
@@ -129,7 +130,7 @@ check "a consumer whose self-pin did not resolve is not reviewed" \
 # The reason has to name the expression, because the next person to see this
 # needs to know which value was empty rather than that something went wrong.
 check "and the error names the expression that came back empty" \
-  '1' "$(printf '%s\n' "$CALLED_NO_REF" | grep -c 'job_workflow_sha')"
+  '1' "$(printf '%s\n' "$CALLED_NO_REF" | grep -c 'job\.workflow_sha')"
 
 # FAILING CLOSED IS THE POINT. A green review built on unverified helpers is
 # worse than no review, because a required check that passes is read as the
@@ -166,6 +167,24 @@ check "a pin the checkout did not honour is an error" \
   'error' "$(outcome_of "$MISMATCH")"
 
 # ---------------------------------------------------------------------------
+# The SECOND witness the job context supplies for free: which repository the
+# running workflow file came from. A fork of build-resources running its own
+# copy resolves a commit that does not exist in senzing-factory's, so the
+# checkout would silently fall back rather than fail on the SHA.
+# ---------------------------------------------------------------------------
+FOREIGN=$(run_guard foreign "example-org/consumer" "MATCH" "yes" "someone-else/build-resources")
+check "a workflow file from another repository is refused" \
+  'error' "$(outcome_of "$FOREIGN")"
+
+# INERT WHEN ABSENT, which is the whole reason it is safe to depend on a
+# property this actionlint does not yet know. GitHub Enterprise Server does
+# not supply the job context's workflow-identity fields; an empty value must
+# change nothing rather than refuse every run.
+ABSENT_REPO=$(run_guard absent_repo "example-org/consumer" "MATCH" "yes" "")
+check "and an absent value refuses nothing" \
+  '' "$(outcome_of "$ABSENT_REPO")"
+
+# ---------------------------------------------------------------------------
 # A checkout that produced nothing. `continue-on-error: true` on the checkout
 # means a clone failure arrives here as an empty HEAD rather than a red step,
 # so this is where it has to become visible.
@@ -181,7 +200,16 @@ check "a checkout that produced nothing is an error, not a review" \
 # ---------------------------------------------------------------------------
 # shellcheck disable=SC2016  # a literal workflow expression under test
 check "the checkout and the guard read the same expression" \
-  '2' "$(grep -c '\${{ github.job_workflow_sha }}' "$WORKFLOW_FILE")"
+  '2' "$(grep -c '\${{ job.workflow_sha }}' "$WORKFLOW_FILE")"
+
+# THE WRONG CONTEXT IS THE WHOLE DEFECT, so it gets its own assertion.
+# `job_workflow_sha` is an OIDC claim and has never been a `github` context
+# property; reaching for it there is what produced an empty ref, and the
+# names are close enough that it will be reached for again.
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "nothing reads the self-pin off the github context" \
+  '0' "$(grep -v '^[[:space:]]*#' "$WORKFLOW_FILE" \
+    | grep -c 'github\.\(job_\)\?workflow_sha')"
 
 # The expression that silently evaluated empty must not come back, in either
 # the direct or the serialized-context form. Comment lines are excluded: the
