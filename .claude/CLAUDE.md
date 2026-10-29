@@ -62,9 +62,9 @@ docker run --rm \
   body -- but only so `previous_stats()` can compare this run against it; it
   is never written to. ~~An earlier version of this line said only "the
   previous review", and the lookup it described took the LOWEST comment
-  id~~: correct while one comment was edited in place, and under append-only
+  ID~~: correct while one comment was edited in place, and under append-only
   it pinned every run on a pull request to the first review ever posted
-  there. Newest id now, and only a comment whose marker carries a review
+  there. Newest ID now, and only a comment whose marker carries a review
   lane (`lane=[ABC]`) -- a skip, error or cancellation notice is not a
   baseline, because lane=T carries no `findings=` at all and lane=E carries
   `findings=0`, which deaden the comparison in opposite directions.

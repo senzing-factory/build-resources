@@ -322,8 +322,8 @@ output was the clean verdict.
 a finding.** This rule has already over-fired once, and it cost more than it
 saved: on 2026-10-29 a narrower wording of it took two real findings out of a
 review — a `README` stating a set of alarms exists once per function for all
-four, in a change that made it five, and a file header stating there is no zip
-packaging, in the file that had just added zip packaging. Neither names a flag,
+four, in a change that made it five, and a file header stating there is no ZIP
+packaging, in the file that had just added ZIP packaging. Neither names a flag,
 a path or a knob, so neither survived the narrowing; both are prose against
 CODE, and both were worth reporting.
 

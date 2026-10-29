@@ -1297,8 +1297,8 @@ def previous_stats(path: str) -> tuple:
     so a skip, error or cancellation notice is never the baseline. See
     REVIEW_BASELINE_JQ in claude-pull-request-review.yaml.
 
-    THE LAST MARKER WITHIN THAT BODY, NEVER THE FIRST. `compose` writes the marker as the
-    final line of the body, so the real one is always last and anything
+    THE LAST MARKER WITHIN THAT BODY, NEVER THE FIRST. `compose` writes the marker
+    as the final line of the body, so the real one is always last and anything
     earlier claiming to be one was put there by something else. With
     `re.search` the first match won, which let a marker forged in a finding
     drive the regression detector -- the detector whose whole job is to
