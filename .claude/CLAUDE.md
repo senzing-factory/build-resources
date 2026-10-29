@@ -30,7 +30,25 @@ docker run --rm \
 ## Key Workflows
 
 - **`linter.yaml`**: Reusable workflow wrapping super-linter v8.7.0
-- **`claude-pull-request-review.yaml`**: Automated Claude Code PR reviews using the prompt at `claude/pr-prompt-v2.md` and the helper at `claude/filter_diff.py`
+- **`claude-pull-request-review.yaml`**: Automated Claude Code PR reviews using the prompt at `claude/pr-prompt-v2.md` and eight helper programs in `claude/`, six of them with a fixture suite run by `lint-repo.yaml` (`review_io.py` and `review-note` have none):
+  - `filter_diff.py` assembles the review set. Every fact in the manifest comes from Git plumbing over the merge base to the PR head; `pulls/{n}/files` is used only as a second witness to the file list, and a disagreement aborts the run. Binary-ness is read from the blob with `git cat-file`, never from `.gitattributes`, which the PR under review owns
+  - `pr_discussion.py` renders the PR's description and comment thread as untrusted context: a run-random fence, a `|` prefix, pipe then space, on every author line, covert channels removed and the removals declared
+  - `review_coverage.py` measures which manifest rows the reviewer actually opened, from the run's own `stream-json` transcript rather than from anything the model says about itself
+  - `review_output.py` turns the model's schema-validated findings into the
+    comment body, rejecting filler -- padding whose citation does not resolve
+    at the base ref, blindness dressed as a finding, a finding whose own text
+    says there is nothing to flag, an anchor that does not resolve -- and
+    counting each rejection. Duplicate findings are DROPPED, never merged --
+    same path, same line, same message once case and punctuation are set
+    aside, highest severity surviving; `collapse()` records what merging cost
+    and why it is gone. `--restored` names the paths the workflow reverted to
+    the merge base, whose line numbers cannot be checked against the checkout
+    and so are disclosed rather than downgraded
+  - `review_text.py` recovers the review from that transcript: the `structured_output` of the last `result` event, which the CLI has already validated against `claude/review-schema.json`. There is no text fallback -- under the schema the findings exist only as the tool call's argument
+  - `review-git` is the reviewer's only route to Git history: `log`, `show` and `diff`, with the options that write a file or run a program named by the repository's own config refused and every path argument held inside the checkout. A wrapper rather than a `Bash(git log:*)` prefix, which bounds the start of the command string and nothing after it
+  - `review-note` is where the reviewer puts what it checked and found clean, so that text reaches the job log and never the comment
+  - `review_io.py` holds the file conventions the others share
+- The review posts **one comment, edited in place**: the comment is found by the token's runtime-resolved identity (GraphQL `viewer.databaseId`, since `GET /user` 403s for an installation token) plus the marker in the body, and updated with `PATCH` so GitHub keeps its revision history
 - **`lint-repo.yaml`**: This repo's own linting configuration
 
 ## Claude Code Commands
@@ -40,7 +58,12 @@ The `/senzing` slash command (defined in `.claude/commands/senzing.md`) provides
 - `changelog-update`: Updates CHANGELOG.md following keepachangelog.com and semver.org standards
 - `code-review`: Performs code review against the Senzing checklist
 
-The prompts for these commands live in `senzing-factory/claude` at tag `v1`, which is what `.claude/commands/senzing.md` fetches. They are NOT in this repository's `claude/` directory -- that holds the automated PR-review prompts (`claude/pr-prompt.md`, still read by the released `v4` workflow, and `claude/pr-prompt-v2.md`, read by the current one) and their helper, which are a different thing.
+The prompts for these commands live in `senzing-factory/claude` at tag `v1`,
+which is what `.claude/commands/senzing.md` fetches. They are NOT in this
+repository's `claude/` directory -- that holds the automated PR-review prompts
+(`claude/pr-prompt.md`, still read by the released `v4` workflow, and
+`claude/pr-prompt-v2.md`, read by the current one) and their helper, which are
+a different thing.
 
 ## Code Review Standards
 

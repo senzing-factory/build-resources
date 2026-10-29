@@ -21,7 +21,12 @@
 #           .vscode/cspell.json's word list, used in
 #           .github/workflows/claude-pull-request-review.yaml for a count
 #           that failed to parse.
+#
+#   covert  -- the word, not a misspelling of "convert". claude/pr_discussion.py
+#           removes covert channels from the pull request's comment thread --
+#           HTML comments, invisible characters, image alt text -- and that is
+#           what they are called.
 [codespell]
 check-hidden =
 skip = */package-lock.json,*/go.mod,*/go.sum,*.log,.git
-ignore-words-list = caf,unparseable
+ignore-words-list = caf,covert,unparseable
