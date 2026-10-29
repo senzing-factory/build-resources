@@ -1562,12 +1562,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         if: env.REVIEW_OUTCOME == 'empty'
         run: |
+          # The anchor line, in review_output.py `anchor()`'s exact format
+          # and place. Every body this workflow can write carries one: the
+          # comment is edited in place, so GitHub renders it at its original
+          # creation time, and a pull request whose last outcome was a skip
+          # would otherwise show an undated-looking comment.
+          REVIEWED_AT=$(date -u +'%Y-%m-%d %H:%M UTC')
           # Every outcome carries the marker, so the next run finds and
           # edits this same comment rather than adding to it.
           {
             echo "## Claude Code Review"
             echo ""
             echo "**No reviewable changes.** This pull request has no source changes left after applying \`exclude_globs\`, or contains only metadata changes."
+            echo ""
+            echo "Reviewed [\`${HEAD_SHA:0:7}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${HEAD_SHA}) at ${REVIEWED_AT}."
             if [ -n "${EXCLUDED_SUMMARY:-}" ]; then
               echo ""
               echo "**Not reviewed (dropped by \`exclude_globs\`)**"
@@ -1608,11 +1616,15 @@ jobs:
           # comment: the model is never running when it is posted, so nothing
           # else can emit it and a parser can tell a skip from a clean review.
           #
+          # The anchor line; see review_output.py `anchor()`.
+          REVIEWED_AT=$(date -u +'%Y-%m-%d %H:%M UTC')
           STALE_NEEDLE=$(cat "$RUNNER_TEMP/stale_needle.txt" 2>/dev/null || true)
           {
             echo "## Claude Code Review"
             echo ""
             echo "**Skipped** -- this pull request was opened by a bot, and \`review_bot_authors\` is false."
+            echo ""
+            echo "Reviewed [\`${HEAD_SHA:0:7}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${HEAD_SHA}) at ${REVIEWED_AT}."
             if [ -s "$RUNNER_TEMP/stale_refs.txt" ]; then
               FINDINGS=1
               echo ""
@@ -1659,10 +1671,14 @@ jobs:
           # turned the job red and posted nothing, which is indistinguishable
           # from the workflow being broken and blocks merges anywhere this is
           # a required check.
+          # The anchor line; see review_output.py `anchor()`.
+          REVIEWED_AT=$(date -u +'%Y-%m-%d %H:%M UTC')
           {
             echo "## Claude Code Review"
             echo ""
             echo "**The code review could not run.**"
+            echo ""
+            echo "Reviewed [\`${HEAD_SHA:0:7}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${HEAD_SHA}) at ${REVIEWED_AT}."
             echo ""
             echo "Reason: ${REVIEW_ERROR:-a step of the review workflow failed; see the job log}"
             echo ""

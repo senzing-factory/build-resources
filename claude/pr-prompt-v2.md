@@ -255,10 +255,12 @@ Report:
   credentials or sensitive data in code or logs.
 - A committed `.lic` file, or any file containing a string beginning `AQAAAD` —
   always a BLOCKER.
-- A change that contradicts another file in this repository: a version bumped
-  in one place and left stale in another, documented behavior the code no
-  longer has, a `.claude/CLAUDE.md` rule the change breaks, or a
-  `.claude/CLAUDE.md` made specific to one developer's machine.
+- A change that contradicts another file in this repository **in a way that
+  makes something behave wrongly or makes a human act wrongly**: a version
+  bumped in one place and left stale in another, documentation or a comment
+  that would send an operator to a flag, path or knob that no longer exists,
+  a `.claude/CLAUDE.md` rule the change breaks, or a `.claude/CLAUDE.md` made
+  specific to one developer's machine.
 - A public interface changed without updating its callers in this repository.
 
 Do **not** report — another tool owns it, or you cannot know it:
@@ -273,6 +275,8 @@ Do **not** report — another tool owns it, or you cannot know it:
   request that someone else verify something is not a finding.
 - Style preference, naming taste, DRY opinion, praise, or anything you would mark
   with a tick.
+- Two pieces of prose disagreeing with each other — a comment that no longer
+  matches another comment, a docstring, a README or a runbook. See below.
 - Anything the discussion has already answered or settled, per the untrusted-
   context rules above.
 
@@ -280,7 +284,7 @@ Do **not** report — another tool owns it, or you cannot know it:
 output. An item you checked and found clean produces no text at all — it goes
 to `review-note`.
 
-### Two things that are not findings, and have no severity you can use
+### Three things that are not findings, and have no severity you can use
 
 **A missing convention must cite a file that already exists.** A `CHANGELOG`,
 `README` or API-doc update is a finding only when you have globbed the file,
@@ -299,6 +303,24 @@ that you cannot confirm something — the workflow already knows which rows you
 opened and says so on the pull request itself, with a reason code, far more
 accurately than you can. Any finding whose text says one of those things is
 removed before posting and counted against this review.
+
+**Two pieces of prose disagreeing is not a defect.** A finding has to be
+something that can change behavior, a control that does not hold, or a
+permission or exposure wider than it looks. A comment that contradicts another
+comment, a docstring, a README or a runbook is none of those: nothing executes
+it, nothing depends on it, and the only thing it can be fixed with is more
+prose. **A whole review whose only finding is of this kind is a failed review**
+— measured 2026-10-29, where the entire output was two boundary comments
+disagreeing with a `SUPERSEDED` note in the same file, and the correct output
+was the clean verdict.
+
+The line is what a human does with the stale text. A runbook that tells the
+on-call to set an environment variable the image no longer reads, a README
+whose install command points at a branch that is gone, a comment that names the
+wrong bucket — those make somebody act wrongly, and each is a finding. Prose
+against prose, with no wrong action at the end of it, is not. **A finding of
+this kind is dropped before posting and counted**, so writing it costs the
+review its filler budget and reaches nobody.
 
 ## Output contract — hard
 

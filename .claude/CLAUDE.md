@@ -37,8 +37,13 @@ docker run --rm \
   - `review_output.py` turns the model's schema-validated findings into the
     comment body, rejecting filler -- padding whose citation does not resolve
     at the base ref, blindness dressed as a finding, a finding whose own text
-    says there is nothing to flag, an anchor that does not resolve -- and
-    counting each rejection. Duplicate findings are DROPPED, never merged --
+    says there is nothing to flag, two pieces of prose disagreeing with each
+    other where nothing can act on the difference, an anchor that does not
+    resolve -- and counting each rejection. The body carries the reviewed
+    commit and the review's UTC time under its headline, from the same value
+    as the state marker's `head=`, because the comment is edited in place and
+    GitHub renders an edited comment at its original creation time.
+    Duplicate findings are DROPPED, never merged --
     same path, same line, same message once case and punctuation are set
     aside, highest severity surviving; `collapse()` records what merging cost
     and why it is gone. `--restored` names the paths the workflow reverted to

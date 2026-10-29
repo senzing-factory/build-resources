@@ -56,6 +56,16 @@ is a rejection with a count rather than a request:
      body carries a state marker that later runs parse. Text that can forge
      any of those is collapsed or refused -- see `build_verdict`, and
      `previous_stats`, which reads the LAST marker for the same reason.
+ 13. THE COMMIT UNDER REVIEW IS RENDERED, NOT ONLY MARKED -- see `anchor`.
+     The comment is edited in place, and GitHub renders an edited comment
+     at its original creation time, so the only thing tying a review to a
+     commit was an invisible HTML comment.
+ 14. A DISAGREEMENT BETWEEN TWO PIECES OF PROSE IS NOT A FINDING -- see
+     PROSE_ONLY. Nothing it describes can change behaviour, so unlike
+     every other rejection it is NOT disclosed on the pull request: a
+     review whose only finding was one of these renders the ordinary
+     clean verdict. It stays in the job log, in the metrics and in the
+     marker -- see DISCLOSED, which is the one exception to 7.
 
 WHAT THE SCHEMA TOOK OVER. Every mechanism above used to sit downstream of a
 markdown parser: a bullet regex, a loose variant, a third for the malformed
@@ -97,6 +107,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from typing import NamedTuple
 
 import review_io
@@ -264,6 +275,91 @@ SELF_DISCLAIM = re.compile(
     re.IGNORECASE,
 )
 
+# An artefact whose whole content is WORDS ABOUT the code -- a comment, a
+# docstring, a README, a runbook. Editing one cannot change what anything
+# does, which is why a disagreement between two of them is not a finding
+# where a disagreement between one of them and the CODE is.
+PROSE_NOUN = (
+    r"(?:code |doc |header |boundary |inline |leading |trailing |block )?"
+    r"(?:comments?|docstrings?|documentation|readme|runbook)"
+)
+
+# What a prose disagreement looks like when it DOES matter: it leads
+# somebody to do the wrong thing. That is a finding and this rule must not
+# eat it, so either word vetoes the drop outright.
+#
+# "The README and the CHANGELOG contradict each other about the minimum
+# version, so users install the wrong one" is prose against prose by every
+# other test here, and it is reportable. Deliberately only these two: a
+# human noun is not enough ("a reader of this file" appears in findings
+# that are purely about prose), and `incorrect` is what a prose-only
+# finding says about the prose itself.
+PROSE_CONSEQUENCE = re.compile(r"\bmislead(?:s|ing)?\b|\bwrong\b", re.IGNORECASE)
+
+# The verbs that say two things do not agree.
+DISAGREE = r"(?:(?:contradict|disagree|conflict|match)(?:s|es|ed|ing)?|inconsistent)"
+
+# A gap that may not cross a conjunction or a comma. This is what stops the
+# rule reading ACROSS a second party into a prose noun that is not the one
+# doing the disagreeing. Without it, "the comment says the retry count is 3
+# but the loop runs 5 times, which contradicts the documentation" matched
+# from `comment` to `documentation` and dropped a finding about the LOOP.
+CLAUSE = r"(?:(?!\band\b|\bor\b)[^.;:!?,]){0,40}?"
+
+# Mechanism 14. A finding whose two disagreeing parties are BOTH prose.
+#
+# Measured 2026-10-29: a whole review whose entire output was one of these.
+# "The boundary comment on <resource> (and the one near line 40) still says
+# the deploy role reads the init report after deploy, which this PR marks
+# SUPERSEDED at line 55, so the comments now contradict each other; add a
+# one-line superseded note to both." Two code comments disagreeing. Nothing
+# can break, nothing is exposed, no control stops holding -- so there is no
+# severity under which it is a finding, and moving it to a lower tier that
+# still prints would not help. It must not print.
+#
+# BOTH PARTIES MUST BE NAMED, AND BOTH MUST BE PROSE. An earlier version
+# claimed that and did not do it: it accepted `each other` as the second
+# party, and `each other` names nothing, so only the LEFT side was ever
+# checked. Measured end to end, that silently deleted this BLOCKER --
+#
+#   "The documentation and the code contradict each other about whether the
+#    token is validated: the docs say every request is checked, the handler
+#    skips validation when the header is absent, so a caller with no
+#    token reaches the admin route."
+#
+# -- to REVIEW_FINDINGS=0 and a clean verdict. Hence two explicit branches:
+#
+#  1. THE SECOND PARTY IS NAMED, and named as prose: "no longer matches the
+#     docstring", "is inconsistent with the README". Both ends are nouns
+#     this rule recognises, so there is nothing to infer.
+#  2. THE SECOND PARTY IS `each other`, which names nothing, so the SUBJECT
+#     has to carry both parties by itself -- a prose noun that OPENS its
+#     clause with nothing conjoined into it. "the comments now contradict
+#     each other" qualifies.
+#     "The documentation and the code contradict each other" does not: the
+#     clause opens on `documentation` and `CLAUSE` will not cross the `and`,
+#     and it cannot re-anchor on `code`, which is not a prose noun. Nor does
+#     "The code and the README contradict each other" -- `README` is prose
+#     but does not open the clause, and reading it as the subject is exactly
+#     the inference that deleted the BLOCKER above.
+#
+# What branch 2 costs is "The docs and the comments contradict each other",
+# where both really are prose and the conjunction blocks the match. That is
+# a MISS, and a miss is a line of filler on a pull request while a wrong
+# match deletes a real finding where nobody sees it. This branch DROPS, like
+# CONVENTION and SELF_DISCLAIM, so it is written to miss.
+PROSE_ONLY = re.compile(
+    r"(?:"
+    rf"\b{PROSE_NOUN}\b{CLAUSE}\b{DISAGREE}[^.;:!?]{{0,20}}?"
+    rf"\b(?:with )?(?:the |that |this |its |a |an )?{PROSE_NOUN}\b"
+    r"|"
+    rf"(?:^|[,;:] )(?:so |and )?(?:the |these |both |two )?{PROSE_NOUN}\b"
+    rf"{CLAUSE}\b{DISAGREE}[^.;:!?]{{0,20}}?"
+    r"\b(?:each other|one another|themselves)\b"
+    r")",
+    re.IGNORECASE,
+)
+
 # Everything that is not a letter or a digit, for the IDENTITY test in
 # `collapse`: two findings whose messages differ only by punctuation or case
 # are one finding reported twice.
@@ -282,6 +378,7 @@ REASONS = {
 DROP_LOG = {
     "padding": "padding rejected (citation absent at base)",
     "disclaimer": "self-disclaiming finding rejected",
+    "prose": "prose-only disagreement rejected (nothing it names can change behaviour)",
 }
 
 # How many characters the whole comment body may run to. The old contract
@@ -292,6 +389,29 @@ BODY_LIMIT = 4000
 
 # How many findings reach the comment. Blockers are kept before risks.
 FINDING_LIMIT = 5
+
+# How many characters of the head SHA the comment renders. SEVEN, because
+# that is what the workflow already prints -- `${HEAD_SHA:0:7}` in the run
+# context it hands the model, `.github/workflows/claude-pull-request-review.yaml`
+# at the "Reviewed PR head" line. A second spelling of a commit in the same
+# estate is a second thing to recognise.
+SHORT_SHA = 7
+
+# How the anchor line renders the time. UTC and minute resolution: the
+# reader is matching a comment against a push, which is a question about
+# which minute, and a local-time stamp in a comment read from three
+# timezones is a question rather than an answer.
+STAMP = "%Y-%m-%d %H:%M UTC"
+
+# `owner/repo`, exactly as the runner sets GITHUB_REPOSITORY, and a full
+# hex SHA. Both are CHECKED rather than trusted before they are built into
+# a URL: the shapes are narrow, GitHub guarantees them, and a value that
+# does not match simply loses the link instead of putting an arbitrary
+# string inside a markdown target. `--head` is not always a SHA -- it
+# defaults to the literal `unknown` -- which is the other reason this is a
+# test and not an assumption.
+REPO_SLUG = re.compile(r"[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}")
+FULL_SHA = re.compile(r"[0-9a-f]{7,40}")
 
 # The length bounds `review-schema.json` declares, re-stated here for the
 # same reason SEVERITIES is: this program is the SECOND WITNESS to the CLI's
@@ -679,6 +799,7 @@ def adjudicate(findings: list, rows: dict, base: set, restored: tuple = ()) -> d
         "padding": 0,
         "anchor": 0,
         "disclaimer": 0,
+        "prose": 0,
         "unverified": 0,
     }
     for finding in findings:
@@ -696,6 +817,31 @@ def adjudicate(findings: list, rows: dict, base: set, restored: tuple = ()) -> d
         if SELF_DISCLAIM.search(finding.message):
             finding.dropped = "disclaimer"
             counts["disclaimer"] += 1
+            continue
+
+        # Mechanism 14, and it is tested BEFORE the empty-path shortcut
+        # below: a prose-only disagreement is reportable repo-wide as
+        # readily as at a line, and the shortcut would let that spelling
+        # of it through.
+        #
+        # A BLOCKER IS NEVER DROPPED HERE, whatever the sentence looks
+        # like. The two errors are not symmetrical: a prose nit the model
+        # called a BLOCKER is one visible line somebody can argue with,
+        # and a real BLOCKER deleted by a regex is invisible. This floor
+        # is mechanism 14's alone -- every other rule still drops blockers,
+        # because each of those tests a fact about the repository rather
+        # than reading the sentence for its subject.
+        #
+        # The two checks after it are one decision: both parties named as
+        # prose, AND nothing in the sentence says a human acts wrongly on
+        # the difference.
+        if (
+            finding.severity != "BLOCKER"
+            and PROSE_ONLY.search(finding.message)
+            and not PROSE_CONSEQUENCE.search(finding.message)
+        ):
+            finding.dropped = "prose"
+            counts["prose"] += 1
             continue
 
         # The empty path is the schema's token for "this finding is
@@ -771,21 +917,43 @@ def collapse(findings: list) -> int:
     return collapsed
 
 
-def dropped_total(counts: dict) -> int:
-    """Everything adjudication REMOVED, for the header and the marker.
+# Everything adjudication removed that a READER has to be told about. The
+# reason each is here is the same one: it might have been a finding, so a
+# comment that did not mention it would be indistinguishable from a clean
+# verdict over a real defect.
+#
+# A DUPLICATE is deliberately absent: its text is in the comment on the copy
+# that survived, so counting it as dropped would claim a withholding that
+# never was.
+#
+# A PROSE-ONLY REJECTION IS ABSENT FOR A DIFFERENT REASON, and it is the
+# only member of mechanism 14's class: it is not a finding that was
+# withheld, it is text that was never a finding. Disclosing it puts "1
+# finding dropped before posting" on a pull request whose correct output is
+# the clean verdict, which reads as the reviewer concealing something --
+# measured 2026-10-29, and the complaint this rule exists to answer. It
+# stays where an engineer can audit it in full: the job log names it
+# through DROP_LOG, `REVIEW_PROSE_REJECTED` counts it, and the marker
+# records it.
+DISCLOSED = ("padding", "blind", "disclaimer", "schema", "unsafe")
 
-    A DUPLICATE is deliberately absent: its text is in the comment on the
-    copy that survived, so counting it as dropped would claim a withholding
-    that never was. A SCHEMA REJECT is present, because that one really did
-    leave the comment, and so is an UNSAFE one for the same reason -- a
-    finding refused by mechanism 12 is a finding the reader is not seeing,
-    and a rejection that disclosed nothing would be indistinguishable from
-    a clean verdict.
+# Everything adjudication removed, full stop. The MARKER's number, not the
+# comment's. The marker is an HTML comment -- invisible to every reader and
+# parsed by nothing but `previous_stats`, which reads `findings=` -- so
+# there is no reason for it to lose a fact, and every reason for the one
+# machine-readable record of the run to be complete.
+RECORDED = DISCLOSED + ("prose",)
+
+
+def dropped_total(counts: dict, keys: tuple = DISCLOSED) -> int:
+    """How many findings adjudication removed, over `keys`.
+
+    TWO CALLERS AND TWO ANSWERS, which is the whole point of the argument.
+    `DISCLOSED` is what the header counts and what gates `drop_section`;
+    `RECORDED` is what the marker carries. They differ by exactly the
+    prose-only rejections -- see DISCLOSED for why that is not a hole.
     """
-    return sum(
-        counts.get(key, 0)
-        for key in ("padding", "blind", "disclaimer", "schema", "unsafe")
-    )
+    return sum(counts.get(key, 0) for key in keys)
 
 
 def rank(findings: list) -> list:
@@ -807,10 +975,17 @@ class Tally(NamedTuple):
     were once computed from a different list than the comment carried: the
     header counted the findings before trimming, the body held the ones
     after.
+
+    `adjudged` AND `recorded` ARE THE ONE PLACE THEY LEGITIMATELY DIFFER,
+    and they differ by the prose-only rejections alone -- the header tells a
+    reader what was withheld from them, the marker records everything the
+    run did. Both are computed in `build` from the same `counts`, so neither
+    can drift from the other by accident.
     """
 
     shown: list
     adjudged: int
+    recorded: int
     space: int
     read: str
     total: str
@@ -876,12 +1051,52 @@ def header(tally: Tally, summary: str, unread: bool = False) -> str:
     )
 
 
+def anchor(head: str, when: str, repo: str = "") -> str:
+    """Which commit this review describes, and when it was written.
+
+    MECHANISM 13. The comment is EDITED IN PLACE on every push -- a
+    deliberate decision, recorded at the PATCH in "Post or update the review
+    comment": editing preserves the comment's revision history, where
+    delete-and-repost throws it away and moves the review to the bottom of
+    the thread. The cost GitHub imposes for it is that an edited comment
+    renders at its ORIGINAL creation position and under its ORIGINAL
+    timestamp. Measured 2026-10-29: a current review, updated at 16:13,
+    displayed to every reader as a comment dated sixteen days earlier.
+
+    The commit was never missing -- it was in the state marker, which is an
+    HTML comment and therefore invisible to every human reading the thread.
+    A reader had no way to tell which commit the review described, or that
+    it described the current one at all.
+
+    SAME SOURCE AS THE MARKER, deliberately. `build` resolves `--head` once
+    and hands the same string to this and to `marker`, so the line a human
+    reads and the field the workflow matches on cannot disagree. Rendered
+    from two lookups they could, and the invisible one would be the one that
+    stayed right.
+
+    THE LINK IS AN ADDITION, NEVER A SUBSTITUTION. `repo` is the runner's
+    own `GITHUB_REPOSITORY`, not an input anybody plumbs, so when it is
+    absent -- every fixture here, and anything running outside Actions --
+    the line renders exactly as it does with it, minus the link. A reader
+    can then confirm the SHA is the head without leaving the page; where
+    the value is missing or malformed they are no worse off than before.
+    """
+    short = f"`{head[:SHORT_SHA]}`"
+    if REPO_SLUG.fullmatch(repo) and FULL_SHA.fullmatch(head):
+        short = f"[{short}](https://github.com/{repo}/commit/{head})"
+    return f"Reviewed {short} at {when}."
+
+
 def drop_section(counts: dict) -> tuple:
     """The comment row that says what adjudication removed, and why.
 
     Mechanism 7. A drop used to be recorded nowhere but stdout, so a sole
     finding dropped by the padding or the blindness rule reached the pull
     request as "No blocking findings." with no trace of it at all.
+
+    THE ROWS ARE `DISCLOSED`, NOT `RECORDED`, so mechanism 14 has no row
+    here and never will -- see DISCLOSED. Every other class keeps its row
+    untouched; this is one exception with one reason, not a precedent.
     """
     parts = []
     for key, why in (
@@ -961,7 +1176,7 @@ def marker(lane: str, tally: Tally, head: str) -> str:
     blockers = sum(1 for f in tally.shown if f.severity == "BLOCKER")
     return (
         f"<!-- claude-review v3 lane={lane} findings={len(tally.shown)}"
-        f" blockers={blockers} dropped={tally.adjudged + tally.space}"
+        f" blockers={blockers} dropped={tally.recorded + tally.space}"
         f" read={tally.read}/{tally.total} head={head} -->"
     )
 
@@ -1018,9 +1233,16 @@ def assemble(findings: list, sections: list, render) -> tuple:
 
 
 def compose(kept: list, sections: list, render) -> str:
-    """The comment body for exactly the findings `kept` holds."""
-    body_header, state = render(kept)
-    parts = ["## Claude Code Review", "", body_header]
+    """The comment body for exactly the findings `kept` holds.
+
+    The anchor sits directly under the headline rather than at the foot,
+    because it answers the first question a reader of an edited comment has
+    -- is this about the commit I just pushed -- and an answer below five
+    findings and three disclosure sections is one they reach after deciding
+    whether to trust them.
+    """
+    body_header, body_anchor, state = render(kept)
+    parts = ["## Claude Code Review", "", body_header, "", body_anchor]
     if kept:
         parts.append("")
         parts.extend(f.line_out() for f in kept)
@@ -1040,18 +1262,37 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
     withheld -- by the FINDING_LIMIT cap and by the body budget together.
     """
     survived = rank(findings)
-    adjudged = dropped_total(counts)
     lane = _flag(argv, "--lane", "B")
     head = _flag(argv, "--head", "unknown")
     read = _flag(argv, "--coverage-read", "0")
     total = _flag(argv, "--coverage-total", "0")
     summary = _flag(argv, "--summary")
+    # READ ONCE, not per render. `assemble` calls `render` again after every
+    # trim, so a clock read inside it can change the body between iterations
+    # and would put a different minute in the comment than the one the body
+    # was measured at.
+    when = time.strftime(STAMP, time.gmtime())
+    # The runner sets this on every job; nothing passes it in. See `anchor`.
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
 
     def render(shown: list) -> tuple:
-        """(header, marker) for exactly the findings `shown` holds."""
-        tally = Tally(shown, adjudged, len(survived) - len(shown), read, total)
+        """(header, anchor, marker) for exactly the findings `shown` holds.
+
+        BOTH TOTALS ARE TAKEN FROM `counts` HERE, not hoisted into two
+        locals above. They are two views of one dictionary and nothing
+        between here and there may change one without the other.
+        """
+        tally = Tally(
+            shown,
+            dropped_total(counts, DISCLOSED),
+            dropped_total(counts, RECORDED),
+            len(survived) - len(shown),
+            read,
+            total,
+        )
         return (
             header(tally, summary, bool(counts["no_verdict"])),
+            anchor(head, when, repo),
             marker(lane, tally, head),
         )
 
@@ -1159,7 +1400,7 @@ def main(argv: list) -> int:
     counts["no_verdict"] = int(not supplied)
 
     sections = read_sections(_flag(argv, "--sections"))
-    if dropped_total(counts):
+    if dropped_total(counts, DISCLOSED):
         sections.append(drop_section(counts))
     if counts["duplicate"]:
         sections.append(duplicate_section(counts["duplicate"]))
@@ -1220,6 +1461,20 @@ def report(kept, findings, counts, size) -> None:
             )
         elif finding.dropped == "duplicate":
             print(f"  duplicate of an earlier finding {finding.location()}")
+        elif finding.dropped == "prose":
+            # IN FULL, AND AS AN ANNOTATION. Mechanism 14 is the only drop
+            # class with no witness on the pull request, so this log line is
+            # the whole record a human can audit -- and `[:120]` below cut
+            # the measured BLOCKER mid-clause at "...whether the token is",
+            # losing the half that proves the drop was wrong. The schema
+            # caps `message` at MESSAGE_LIMIT, and `build_verdict` has
+            # already collapsed every control character to a space, so this
+            # is one bounded line that cannot forge a second workflow
+            # command.
+            print(
+                f"::warning::{DROP_LOG['prose']} {finding.location()}:"
+                f" {finding.message}"
+            )
         elif finding.dropped:
             print(
                 f"  {DROP_LOG[finding.dropped]}"
@@ -1229,6 +1484,7 @@ def report(kept, findings, counts, size) -> None:
         f"Adjudicated: {counts['blind']} blindness claim(s) rerouted,"
         f" {counts['padding']} padding rejection(s),"
         f" {counts['disclaimer']} self-disclaiming finding(s) dropped,"
+        f" {counts['prose']} prose-only disagreement(s) dropped,"
         f" {counts['duplicate']} identical duplicate(s) removed,"
         f" {counts['anchor']} unresolvable anchor(s) downgraded,"
         f" {counts['unverified']} anchor(s) left unchecked in restored"
@@ -1283,6 +1539,7 @@ def metrics(argv: list, kept: list, counts: dict, size: int) -> int:
                 ("REVIEW_ANCHOR_DOWNGRADED", counts["anchor"]),
                 ("REVIEW_ANCHOR_UNVERIFIED", counts["unverified"]),
                 ("REVIEW_SELF_DISCLAIMED", counts["disclaimer"]),
+                ("REVIEW_PROSE_REJECTED", counts["prose"]),
                 ("REVIEW_DUPLICATES", counts["duplicate"]),
                 ("REVIEW_SCHEMA_REJECTED", counts["schema"]),
                 ("REVIEW_UNSAFE_REJECTED", counts["unsafe"]),

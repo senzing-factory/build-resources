@@ -1060,8 +1060,8 @@ check "REVIEW_UNSAFE_REJECTED is written on a clean run" \
   '1' "$(grep -c '^REVIEW_UNSAFE_REJECTED=0$' "$REPO/m_clean.env")"
 check "REVIEW_MESSAGE_NORMALISED is written on a clean run" \
   '1' "$(grep -c '^REVIEW_MESSAGE_NORMALISED=0$' "$REPO/m_clean.env")"
-check "and so is every other one, eighteen in all" \
-  '18' "$(grep -c '^REVIEW_' "$REPO/m_clean.env")"
+check "and so is every other one, nineteen in all" \
+  '19' "$(grep -c '^REVIEW_' "$REPO/m_clean.env")"
 
 # A findings file that is not there at all. `load`'s early returns all carry
 # the same three-element shape; one of them returning a bare 0 for the count
@@ -1462,6 +1462,217 @@ BAD_STATUS=$?
 set -e
 check "a corrupt manifest is fatal rather than silently accepted" \
   '1' "$([ "$BAD_STATUS" -ne 0 ] && echo 1 || echo 0)"
+
+# ---------------------------------------------------------------------------
+# Mechanism 13 -- the commit under review is RENDERED, not only marked
+# ---------------------------------------------------------------------------
+#
+# The comment is EDITED IN PLACE on every push, and GitHub renders an edited
+# comment at its ORIGINAL creation position and timestamp. Measured
+# 2026-10-29: a live review, updated at 16:13, displayed to every reader as
+# a comment dated sixteen days earlier -- and the commit it described was
+# recorded only inside the state marker, which is an HTML comment and
+# therefore invisible to every human reading the thread. "It doesn't look
+# tied to a commit" was exactly right.
+
+ANCHOR_SHA=0123456789abcdef0123456789abcdef01234567
+( cd "$REPO" && python3 "$SCRIPT" --findings main.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored.md --head "$ANCHOR_SHA" --lane B \
+  --coverage-read 3 --coverage-total 4 > /dev/null )
+check "the rendered body names the commit the review describes" \
+  '1' "$(grep -c '^Reviewed `0123456` at ' "$REPO/anchored.md")"
+check "the anchor carries a UTC timestamp to the minute" \
+  '1' "$(grep -c '^Reviewed `[0-9a-f]\{7\}` at [0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\} [0-9]\{2\}:[0-9]\{2\} UTC\.$' \
+    "$REPO/anchored.md")"
+
+# ONE SOURCE, TWO RENDERINGS. If the visible line and the marker could be
+# resolved separately they could disagree, and the invisible one is the one
+# that would stay right.
+ANCHOR_VISIBLE=$(sed -n 's/^Reviewed .*`\([0-9a-f]*\)`.* at .*/\1/p' "$REPO/anchored.md")
+ANCHOR_MARKED=$(sed -n 's/.*head=\([0-9a-f]*\) -->.*/\1/p' "$REPO/anchored.md")
+check "the visible commit is the marker's head, truncated to seven" \
+  '0123456 0123456' \
+  "$ANCHOR_VISIBLE $(printf '%s' "$ANCHOR_MARKED" | cut -c1-7)"
+
+# Directly beneath the headline, not at the foot: it answers the first
+# question a reader of an edited comment has, and an answer below five
+# findings and three disclosure sections is one they reach after deciding
+# whether to trust them.
+check "the anchor sits directly beneath the headline" \
+  '1' "$(sed -n '5p' "$REPO/anchored.md" | grep -c '^Reviewed ')"
+
+# The thin clean review is the one most likely to be mistaken for an old
+# comment, because it says the least.
+( cd "$REPO" && python3 "$SCRIPT" --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored_clean.md --head "$ANCHOR_SHA" --lane B \
+  --coverage-read 4 --coverage-total 4 > /dev/null )
+check "a clean verdict is anchored to its commit too" \
+  '1' "$(grep -c '^Reviewed `0123456` at ' "$REPO/anchored_clean.md")"
+
+# THE LINK IS AN ADDITION, NEVER A SUBSTITUTION. `GITHUB_REPOSITORY` is the
+# runner's own value and nothing plumbs it, so the line has to render
+# correctly with it, without it, and with a value that is not a repository.
+( cd "$REPO" && GITHUB_REPOSITORY=senzing-factory/build-resources python3 "$SCRIPT" \
+  --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored_link.md --head "$ANCHOR_SHA" --lane B \
+  --coverage-read 4 --coverage-total 4 > /dev/null )
+check "the commit links to itself when the runner named the repository" \
+  '1' "$(grep -c '^Reviewed \[`0123456`\](https://github.com/senzing-factory/build-resources/commit/0123456789abcdef0123456789abcdef01234567) at ' \
+    "$REPO/anchored_link.md")"
+check "and with no repository the same line renders unlinked" \
+  '1' "$(grep -c '^Reviewed `0123456` at ' "$REPO/anchored_clean.md")"
+
+# A value that is not `owner/repo` must lose the link, not reach the markdown.
+( cd "$REPO" && GITHUB_REPOSITORY='x)](javascript:alert(1)' python3 "$SCRIPT" \
+  --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored_bad.md --head "$ANCHOR_SHA" --lane B \
+  --coverage-read 4 --coverage-total 4 > /dev/null )
+check "a repository value of the wrong shape is refused the link" \
+  '1' "$(grep -c '^Reviewed `0123456` at ' "$REPO/anchored_bad.md")"
+
+# `--head` is not always a SHA: it defaults to the literal `unknown`, and a
+# link built from that would 404 while looking authoritative.
+( cd "$REPO" && GITHUB_REPOSITORY=senzing-factory/build-resources python3 "$SCRIPT" \
+  --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored_nohead.md --lane B \
+  --coverage-read 4 --coverage-total 4 > /dev/null )
+check "a head that is not a SHA is not linked" \
+  '1' "$(grep -c '^Reviewed `unknown` at ' "$REPO/anchored_nohead.md")"
+
+# ---------------------------------------------------------------------------
+# Mechanism 14 -- a disagreement between two pieces of prose is not a finding
+# ---------------------------------------------------------------------------
+#
+# A measured message, 2026-10-29, and it was the WHOLE review. Two code
+# comments disagreeing: nothing executes them, no behaviour changes, no
+# control stops holding, no permission widens, and the only thing either can
+# be fixed with is more prose. There is no severity under which that is a
+# finding, so a lower tier that still prints does not answer it.
+
+jf prose.json '{"findings":[
+{"severity":"RISK","path":"src/auth.go","line":12,"message":"The boundary comment on <resource> (and the one near line 40) still says the deploy role reads the init report after deploy, which this PR marks SUPERSEDED at line 55, so the comments now contradict each other; add a one-line superseded note to both."}
+]}'
+: > "$REPO/m_prose.env"
+PROSE_LOG=$(orun prose.json prose.md m_prose.env)
+check "a comment contradicting another comment reaches nobody" \
+  '0' "$(metric_of "$REPO/m_prose.env" REVIEW_FINDINGS)"
+check "and the drop is counted" \
+  '1' "$(metric_of "$REPO/m_prose.env" REVIEW_PROSE_REJECTED)"
+
+# THE ONE EXCEPTION TO MECHANISM 7, and the reason for it. Every other
+# rejection class is disclosed on the pull request, because every other one
+# might have been a finding. This one was never a finding, so disclosing it
+# posts "1 finding dropped before posting" over a pull request whose correct
+# output is the clean verdict -- which reads as the reviewer concealing
+# something, and is the complaint the whole mechanism answers.
+check "nothing on the pull request says a finding was dropped" \
+  '0' "$(grep -c 'Findings dropped before posting' "$REPO/prose.md" || true)"
+check "and the rejection's wording is nowhere in the comment" \
+  '0' "$(grep -c 'prose-only' "$REPO/prose.md" || true)"
+
+# INVISIBLE TO THE PULL REQUEST, NOT INVISIBLE. This is the ONLY channel the
+# drop has, so it carries the message IN FULL and as an annotation: the
+# 120-character truncation every other class uses cut the measured BLOCKER
+# mid-clause at "...whether the token is", losing the half that proved the
+# drop was wrong.
+check "the job log names the rejection as an annotation" \
+  '1' "$(printf '%s\n' "$PROSE_LOG" | grep -c '^::warning::prose-only disagreement rejected')"
+check "and carries the whole message, not a truncation" \
+  '1' "$(printf '%s\n' "$PROSE_LOG" | grep -c 'add a one-line superseded note to both\.$')"
+check "and the summary line still counts it" \
+  '1' "$(printf '%s\n' "$PROSE_LOG" | grep -c '1 prose-only disagreement(s) dropped')"
+
+# The marker is an HTML comment, parsed by `previous_stats` and read by no
+# human, so it loses nothing: `dropped=` stays the complete count. That is
+# why the byte-identity below is asserted over the body WITHOUT its marker
+# line -- the rendered comment is identical, the machine record is not, and
+# both of those are deliberate.
+check "the marker still records the drop for tooling" \
+  '1' "$(grep -c 'findings=0 blockers=0 dropped=1 read=4/4 ' "$REPO/prose.md")"
+
+# A PULL REQUEST WHOSE ONLY FINDING WAS A PROSE-ONLY DROP IS A CLEAN ONE.
+# Not nearly clean, not clean with a footnote: the same bytes, denominator
+# and all, as a run that produced no findings at all.
+jf prose_none.json '{"findings":[]}'
+: > "$REPO/m_prose2.env"
+orun prose_none.json prose_none.md m_prose2.env > /dev/null
+sed '/^<!-- claude-review /d' "$REPO/prose.md" > "$REPO/prose.visible"
+sed '/^<!-- claude-review /d' "$REPO/prose_none.md" > "$REPO/prose_none.visible"
+check "the rendered comment is byte-identical to one with no findings at all" \
+  'same' \
+  "$(cmp -s "$REPO/prose.visible" "$REPO/prose_none.visible" && echo same || echo differs)"
+check "and that comment is the ordinary clean verdict with its denominator" \
+  '1' "$(grep -c '^\*\*No blocking findings in the 4 of 4 files opened\.\*\*$' \
+    "$REPO/prose.visible")"
+
+# DO NOT GENERALISE THIS. Every other drop class keeps its disclosure, and
+# `solo_pad` above is the live proof for padding; this re-asserts it beside
+# the exception so the two cannot be confused when one of them is edited.
+check "another drop class is still disclosed on the pull request" \
+  '1' "$(grep -c 'Findings dropped before posting' "$REPO/solo_pad.md")"
+
+# THE BOUNDARY, and it is the half that matters: this branch DROPS, so a
+# wrong match deletes a real finding where nobody can see it went.
+#
+# THE FIRST FOUR ARE THE SHAPE MEASURED DELETED -- documentation against
+# code, README against workflow, comment against implementation, docstring
+# against signature. Every one says `contradict each other`, which an
+# earlier version of this rule accepted as the second party; `each other`
+# names nothing, so only the left side was ever checked, and the first of
+# these went out as REVIEW_FINDINGS=0 and a clean verdict while naming an
+# open admin route. The last two name the code, and a dead knob an operator
+# is told to set.
+jf prose_keep.json '{"findings":[
+{"severity":"RISK","path":"src/auth.go","line":12,"message":"The documentation and the code contradict each other about whether the token is validated: the docs say every request is checked, the handler skips validation when the header is absent, so a caller with no token reaches the admin route."},
+{"severity":"RISK","path":"src/auth.go","line":13,"message":"The README and the workflow contradict each other about which branch publishes, so a release cut from main never reaches the registry."},
+{"severity":"RISK","path":"src/auth.go","line":14,"message":"The comment and the implementation contradict each other about the lock ordering, and the implementation is the one that deadlocks."},
+{"severity":"RISK","path":"src/new.go","line":1,"message":"The docstring and the signature contradict each other: the docstring says the timeout is seconds, the parameter is milliseconds."},
+{"severity":"RISK","path":"README.md","line":1,"message":"The runbook tells the on-call to set INIT_BUDGET_MS, which the image no longer reads, so the documented recovery step does nothing. Remove it."}
+]}'
+: > "$REPO/m_prose3.env"
+orun prose_keep.json prose_keep.md m_prose3.env > /dev/null
+# FIVE, not six: FINDING_LIMIT is 5, so a sixth would be withheld for space
+# and this assertion would be measuring the cap instead of the rule.
+check "every docs-against-code finding survives the prose rule" \
+  '5' "$(metric_of "$REPO/m_prose3.env" REVIEW_FINDINGS)"
+check "and not one of them was taken for a prose-only disagreement" \
+  '0' "$(metric_of "$REPO/m_prose3.env" REVIEW_PROSE_REJECTED)"
+
+# Two more that must survive, in their own file to stay under the cap.
+#
+# A prose noun on the FAR SIDE of a second party is not the second party:
+# "the comment says the retry count is 3 but the loop runs 5 times, which
+# contradicts the documentation" is a finding about the LOOP, and reading
+# across the comma to `documentation` deleted it.
+#
+# And the repo-wide spelling, which reaches the prose rule before the
+# empty-path shortcut and so has to be tested there rather than assumed.
+jf prose_across.json '{"findings":[
+{"severity":"RISK","path":"src/auth.go","line":15,"message":"The comment says the retry count is 3 but the loop runs 5 times, which contradicts the documentation."},
+{"severity":"RISK","path":"","line":0,"message":"The documentation contradicts the behaviour this change ships: the install command points at a branch that no longer exists. Update it."}
+]}'
+: > "$REPO/m_prose5.env"
+orun prose_across.json prose_across.md m_prose5.env > /dev/null
+check "the rule does not read across a clause to find its second party" \
+  '2' "$(metric_of "$REPO/m_prose5.env" REVIEW_FINDINGS)"
+check "and a repo-wide prose finding is judged, not skipped" \
+  '0' "$(metric_of "$REPO/m_prose5.env" REVIEW_PROSE_REJECTED)"
+
+# THE SEVERITY FLOOR, which is defence in depth and not the fix: a sentence
+# this rule WOULD drop keeps its finding when the model called it a BLOCKER.
+# The two errors are not symmetrical -- a prose nit called a BLOCKER is one
+# visible line somebody can argue with, a real BLOCKER deleted by a regex is
+# invisible. The message is the verbatim drop case above, which the
+# assertions at the top of this block prove the rule matches.
+jf prose_floor.json '{"findings":[
+{"severity":"BLOCKER","path":"src/auth.go","line":12,"message":"The boundary comment on <resource> (and the one near line 40) still says the deploy role reads the init report after deploy, which this PR marks SUPERSEDED at line 55, so the comments now contradict each other; add a one-line superseded note to both."}
+]}'
+: > "$REPO/m_prose4.env"
+orun prose_floor.json prose_floor.md m_prose4.env > /dev/null
+check "a BLOCKER is never dropped as prose, whatever the sentence says" \
+  '1' "$(metric_of "$REPO/m_prose4.env" REVIEW_BLOCKERS)"
+check "and the prose rule records no drop for it" \
+  '0' "$(metric_of "$REPO/m_prose4.env" REVIEW_PROSE_REJECTED)"
 
 # ---------------------------------------------------------------------------
 # review-note -- the wrapper that gives the scratchpad somewhere to be
