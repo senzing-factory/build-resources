@@ -41,8 +41,8 @@ docker run --rm \
     other where nothing can act on the difference, an anchor that does not
     resolve -- and counting each rejection. The body carries the reviewed
     commit and the review's UTC time under its headline, from the same value
-    as the state marker's `head=`, because the comment is edited in place and
-    GitHub renders an edited comment at its original creation time.
+    as the state marker's `head=`, because a comment's own timestamp says
+    when it was posted and never which commit it read.
     Duplicate findings are DROPPED, never merged --
     same path, same line, same message once case and punctuation are set
     aside, highest severity surviving; `collapse()` records what merging cost
@@ -53,7 +53,7 @@ docker run --rm \
   - `review-git` is the reviewer's only route to Git history: `log`, `show` and `diff`, with the options that write a file or run a program named by the repository's own config refused and every path argument held inside the checkout. A wrapper rather than a `Bash(git log:*)` prefix, which bounds the start of the command string and nothing after it
   - `review-note` is where the reviewer puts what it checked and found clean, so that text reaches the job log and never the comment
   - `review_io.py` holds the file conventions the others share
-- The review posts **one comment, edited in place**: the comment is found by the token's runtime-resolved identity (GraphQL `viewer.databaseId`, since `GET /user` 403s for an installation token) plus the marker in the body, and updated with `PATCH` so GitHub keeps its revision history
+- The review **posts a new comment on every run and leaves every earlier one standing**, so each review sits at its own time and thread position and remains the permanent record of the commit it reviewed, which its body names in the anchor line. The previous review is still located -- by the token's runtime-resolved identity (GraphQL `viewer.databaseId`, since `GET /user` 403s for an installation token) plus the marker in the body -- but only so `previous_stats()` can compare this run against it; it is never written to. ~~Superseded: the review used to be ONE comment edited in place with `PATCH`~~, which kept GitHub's `userContentEdits` revision history but made every review render at the original comment's creation time and position, so a review written minutes ago displayed as weeks old above every later comment. ~~A delete-and-repost design was then tried~~ and rejected in turn, because it fixed the timestamp by destroying the record of earlier reviews. The cost of appending is one comment per push on a long-running pull request
 - **`lint-repo.yaml`**: This repo's own linting configuration
 
 ## Claude Code Commands

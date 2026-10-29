@@ -1,0 +1,29 @@
+# actionlint configuration, read by super-linter as
+# `.github/linters/actionlint.yaml`
+# (LINTER_RULES_PATH + ACTIONLINT_CONFIG_FILE).
+
+# SCOPED TO ONE FILE AND ONE MESSAGE, deliberately. The blanket form -- a
+# disabled `expression` rule, or `ignore` at the top level -- would also hide
+# every real typo'd context property in every other workflow here, and a
+# typo'd property evaluates to the empty string exactly like the defect this
+# entry exists for.
+paths:
+  .github/workflows/claude-pull-request-review.yaml:
+    ignore:
+      # actionlint 1.7.12 -- the version super-linter v8.7.0 pins -- does not
+      # know `github.job_workflow_sha`, so it reports the reviewer's self-pin
+      # as an undefined property.
+      #
+      # READ THIS BEFORE REMOVING THE EXPRESSION IT PROTECTS. The previous
+      # way of satisfying this lint was to launder the property through
+      # `fromJSON(toJSON(github))`, which types as `any` and so lints clean.
+      # That expression evaluated to the EMPTY STRING at runtime,
+      # `actions/checkout` omitted `ref:`, and the reviewer silently ran
+      # build-resources' default branch instead of the ref each caller
+      # pinned -- measured 2026-10-29 across five runs pinned at
+      # `@330-skern`, none of which executed the branch's helpers. Routing
+      # around the linter converted a build-time error into a silent runtime
+      # one. An ignore here keeps the failure visible in the one place that
+      # can act on it: "Verify build resources checkout" now fails closed
+      # when the value comes back empty from a consumer.
+      - 'property "job_workflow_sha" is not defined in object type'

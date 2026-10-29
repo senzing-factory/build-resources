@@ -169,7 +169,8 @@ jobs:
       REVIEW_COMMENT_JQ: '((env.VIEWER_ID // "") == "" or .user.id == (env.VIEWER_ID | tonumber)) and ((.body // "") | test("<!-- claude-review v[0-9]+ "))'
 
     steps:
-      # REQUIREMENT 3, first half: find the ONE comment to edit.
+      # REQUIREMENT 3, first half: find the previous review, to compare
+      # this one against. It is never edited and never removed.
       #
       # THE FIRST STEP IN THE JOB, deliberately. Every posting step below is
       # a PATCH when this found a comment and a POST when it did not, so a
@@ -242,44 +243,28 @@ jobs:
           esac
 
           if [ -n "$COMMENT_ID" ]; then
-            echo "Editing existing review comment ${COMMENT_ID}"
-            # Kept so review_output.py can compare this run against the one
-            # it replaces: longer output with fewer findings is the
-            # signature of a review driven by its prompt rather than by the
-            # code, and the comment being edited is where the previous
-            # measurement lives.
+            echo "Found the previous review comment ${COMMENT_ID}"
+            # READ ONLY, AND FOR ONE PURPOSE. review_output.py compares this
+            # run against the last one: longer output with fewer findings is
+            # the signature of a review driven by its prompt rather than by
+            # the code, and the previous comment is where that measurement
+            # lives. Nothing is written back to it -- see publish_comment,
+            # which posts a new comment and never touches an earlier one.
+            #
+            # A failure here is harmless by construction: no previous.md
+            # means previous_stats() finds no marker and returns -1, which
+            # is "no comparison available" rather than "nothing was found".
             gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
               --jq '.body' > "$RUNNER_TEMP/previous.md" 2>/dev/null || true
 
-            # A MARKER WHOSE head= IS NOT THE CURRENT HEAD IS A FALSE CLAIM,
-            # however this run ends. Relabel it HERE, where there is time:
-            # a job that is cancelled, times out or loses its runner writes
-            # nothing later, and the pull request would go on showing the
-            # previous head's findings as a review of this one. The cost is
-            # one extra revision in the comment's edit history per push.
-            #
-            # No `findings=` in the interim marker, deliberately:
-            # `previous_stats()` in review_output.py reads that field, and a
-            # 0 here would be compared against the next real review as
-            # though a review had found nothing.
-            PREV_HEAD=$(sed -n 's/.*<!-- claude-review v[0-9]* [^>]*head=\([0-9a-fA-F]*\).*/\1/p' \
-              "$RUNNER_TEMP/previous.md" | tail -1)
-            if [ "$IS_FORK" != "true" ] && [ -n "$PREV_HEAD" ] && [ "$PREV_HEAD" != "$HEAD_SHA" ]; then
-              {
-                echo "## Claude Code Review"
-                echo ""
-                echo "**Superseded.** The review this comment carried described \`${PREV_HEAD}\`, which is no longer the head of this pull request. A review of \`${HEAD_SHA}\` is running and will replace it."
-                echo ""
-                echo "<!-- claude-review v3 lane=P blockers=0 read=0/0 head=${HEAD_SHA} -->"
-              } > "$RUNNER_TEMP/superseded.md"
-              if gh api --method PATCH \
-                "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
-                --field "body=@${RUNNER_TEMP}/superseded.md" > /dev/null 2>&1; then
-                echo "Relabelled the review of ${PREV_HEAD} as superseded"
-              else
-                echo "::warning::could not relabel the superseded review comment"
-              fi
-            fi
+            # ~~A "Superseded" relabel used to be PATCHed over this comment
+            # here~~ -- REMOVED. It existed because an edited comment could
+            # not say which commit it described, so a stale review read as
+            # current while the next one ran. Every comment now carries the
+            # anchor line naming its own commit and its own UTC time, and
+            # earlier reviews are left standing as the record of the commit
+            # they reviewed, so there is nothing for a relabel to add and it
+            # would mutate a comment this design does not mutate.
           else
             echo "No existing review comment; one will be created."
           fi
@@ -299,6 +284,61 @@ jobs:
           else
             echo "CAN_COMMENT=true" >> "$GITHUB_ENV"
           fi
+
+          # ONE PUBLISH PATH FOR EVERY OUTCOME, defined once here because
+          # five steps below write a comment -- the review, the skip, the
+          # bot-skip, the error and the cancellation notice -- and they must
+          # not drift apart. Sourced, not re-implemented.
+          cat > "$RUNNER_TEMP/publish-comment.sh" <<'PUBLISH'
+          # publish_comment <body file> <what it is, for the log>
+          #
+          # POST A NEW COMMENT, AND LEAVE EVERY EARLIER ONE ALONE. This path never
+          # PATCHes and never DELETEs.
+          #
+          # Two designs were tried and rejected, recorded because each looks like an
+          # improvement until you see what it costs:
+          #
+          #   * EDIT IN PLACE (PATCH). Kept GitHub's `userContentEdits` revision
+          #     history, but GitHub renders an edited comment at its ORIGINAL
+          #     creation position and timestamp -- measured 2026-10-29, a review
+          #     written at 16:13 displaying to every reader as sixteen days old, and
+          #     sitting above every later comment in the thread.
+          #   * DELETE THE OLD ONE, THEN POST. Fixed the timestamp and lost the
+          #     record: the review of an earlier commit simply stopped existing.
+          #
+          # Appending loses neither. Each comment is a permanent artefact of the
+          # commit it reviewed, at its own true time and in thread order, and the
+          # anchor line in the body names that commit. The cost is one comment per
+          # push on a long-running pull request, which is accepted.
+          publish_comment() {
+            body="$1"
+            label="$2"
+
+            # A FORK'S TOKEN IS READ-ONLY whatever `permissions:` asks for, so the
+            # post would 403 and end the job red having said nothing.
+            if [ "${CAN_COMMENT:-true}" != "true" ]; then
+              echo "::warning::no write access to this pull request's comments; ${label} is in the job summary instead"
+              cat "$body" >> "$GITHUB_STEP_SUMMARY"
+              return 0
+            fi
+
+            # THE POST RESPONSE IS WHERE THE IDENTITY ASSUMPTION IS PROVED. Discovery
+            # matches a previous review on `user.id == viewer.databaseId`. If those
+            # differ for this token, no previous review is ever found -- which no
+            # longer costs a duplicate comment, but does silently disable the
+            # regression comparison `previous_stats()` performs.
+            #
+            # --field reads the body from a file, so model output and paths from the
+            # pull request's own tree never pass through a shell-quoted string.
+            authored=$(gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --field "body=@${body}" --jq '.user.id')
+            echo "Posted ${label} on PR #${PR_NUMBER}"
+            if [ -n "${VIEWER_ID:-}" ] && [ "$authored" != "$VIEWER_ID" ]; then
+              echo "::warning::this token authors comments as user id ${authored} but resolved its own identity as ${VIEWER_ID}; no previous review will be found, so each review's comparison against the last one is lost"
+            fi
+          }
+          PUBLISH
 
       # Validated before any work, so a caller's typo fails before the model
       # call rather than after it, and on every run rather than only on a
@@ -433,49 +473,89 @@ jobs:
         with:
           path: build-resources
           persist-credentials: false
-          # The commit SHA of the reusable workflow that is actually running.
-          # A caller pinned at @v4 therefore gets v4's prompt and scripts, and
-          # a caller pinned at a branch gets that branch's -- so this change
-          # can be exercised end to end before the v4 tag moves, and a push to
-          # main cannot alter the program running in a job that holds
-          # CLAUDE_CODE_OAUTH_TOKEN with pull-requests: write.
+          # The commit of the reusable workflow that is actually running,
+          # so a caller pinned at @v4 gets v4's helpers and a caller pinned
+          # at a branch gets that branch's. This is the half of the version
+          # that does the reviewing: every `claude/*.py`, `pr-prompt-v2.md`
+          # and `review-schema.json` comes from here.
           #
-          # Empty outside a reusable-workflow call (running this file
-          # directly), where it degrades to the default branch, which is the
-          # right answer there.
+          # THE DIRECT FORM, DELIBERATELY. The previous
+          # `fromJSON(toJSON(github)).job_workflow_sha` evaluated to the
+          # EMPTY STRING in every real call, `actions/checkout` then omitted
+          # `ref:` and took this repository's default branch, and nothing
+          # said so. Measured 2026-10-29: five runs pinned at `@330-skern`
+          # all executed `main`'s helpers while the workflow file itself
+          # came from the branch, so the pin was decorative for four months.
           #
-          # Reached through fromJSON(toJSON(github)) because actionlint 1.7.12
-          # -- the version super-linter v8.7.0 runs -- does not yet know
-          # `job_workflow_sha` and rejects the direct form as an undefined
-          # property. The indirection types as `any`, so it lints clean; the
-          # serialized context is consumed inside the expression and only the
-          # extracted SHA reaches the action's input.
-          ref: ${{ fromJSON(toJSON(github)).job_workflow_sha }}
+          # The indirection existed only to stop actionlint 1.7.12 -- the
+          # version super-linter v8.7.0 runs -- rejecting the property as
+          # undefined. Routing around a linter turned a build-time error
+          # into a silent runtime empty, so the lint is now handled by a
+          # scoped ignore in `.github/linters/actionlint.yaml` instead.
+          #
+          # Empty when this file runs directly rather than as a reusable
+          # workflow, which is the one benign case; "Verify build resources
+          # checkout" fails closed on every other empty value.
+          ref: ${{ github.job_workflow_sha }}
           repository: senzing-factory/build-resources
 
       - name: Verify build resources checkout
         if: env.REVIEW_OUTCOME == 'reviewed'
         env:
-          # The same expression the checkout above used. Empty when this file
-          # runs directly rather than as a reusable workflow, which is the
-          # one case where the default branch is the right answer.
-          EXPECTED_SHA: ${{ fromJSON(toJSON(github)).job_workflow_sha }}
+          # THE SAME EXPRESSION THE CHECKOUT USED, so the guard and the
+          # checkout cannot disagree about what was pinned.
+          EXPECTED_SHA: ${{ github.job_workflow_sha }}
+          # Who is calling. This CANNOT be empty, which is what makes the
+          # test below decidable: the previous guard inferred "running
+          # directly" from an empty EXPECTED_SHA, so the one state it
+          # existed to catch -- the expression failing to resolve -- was
+          # the state it read as benign and waved through. It failed OPEN.
+          CALLER_REPO: ${{ github.repository }}
+          SELF_REPO: senzing-factory/build-resources
         run: |
-          # The file check alone cannot catch the failure that matters. If
-          # job_workflow_sha ever evaluates empty, actions/checkout takes the
-          # DEFAULT BRANCH -- exactly the risk the pin was added to remove --
-          # and once this merges both files exist on main too, so a
-          # file-existence test passes while the reviewer runs code from an
-          # unpinned ref. Compare the resolved commit instead, and echo it so
-          # the value is visible in the job log.
+          # THE PROPERTY THIS STEP EXISTS TO HOLD: it is impossible for this
+          # job to review anything using helpers from an unverified ref.
+          #
+          # The file check alone cannot hold it. Both files exist on main
+          # too, so file-existence passes while the reviewer runs code from
+          # the default branch -- measured 2026-10-29, five runs pinned at a
+          # branch that every one of them ignored.
           ACTUAL_SHA=$(git -C build-resources rev-parse HEAD 2>/dev/null || echo "")
-          echo "build-resources expected: ${EXPECTED_SHA:-<empty: running directly>}"
+          echo "build-resources expected: ${EXPECTED_SHA:-<empty>}"
           echo "build-resources actual:   ${ACTUAL_SHA:-<no checkout>}"
+          echo "called from:              ${CALLER_REPO}"
+
+          # FAIL CLOSED, and on a value that cannot be absent. Running
+          # directly in build-resources is the ONLY case where an empty
+          # expected SHA is benign; from a consumer it means the self-pin
+          # did not resolve and the helpers came from the default branch.
+          if [ "$CALLER_REPO" != "$SELF_REPO" ] && [ -z "$EXPECTED_SHA" ]; then
+            echo "::warning::the reviewer's self-pin did not resolve"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the reviewer could not resolve its own commit (github.job_workflow_sha was empty), so its helpers would have come from build-resources' default branch rather than the ref this caller pinned. Refusing to review rather than reviewing with unverified code."
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # The mismatch check, kept: a resolved pin that the checkout did
+          # not honour is the same hazard arriving by another route.
           if [ -n "$EXPECTED_SHA" ] && [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
             echo "::warning::build-resources is not at the pinned commit"
             {
               echo "REVIEW_OUTCOME=error"
               echo "REVIEW_ERROR=the reviewer's own resources are not at the pinned commit (expected ${EXPECTED_SHA}, got ${ACTUAL_SHA:-nothing})"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # A checkout that produced nothing. continue-on-error above means
+          # this step, not the checkout, is where that becomes visible.
+          if [ -z "$ACTUAL_SHA" ]; then
+            echo "::warning::build-resources was not checked out"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the reviewer's own resources could not be checked out"
             } >> "$GITHUB_ENV"
             exit 0
           fi
@@ -1492,8 +1572,10 @@ jobs:
           echo "Comment body:"
           cat "$RUNNER_TEMP/body.md"
 
-      # REQUIREMENT 3, second half: write that one comment.
-      - name: Post or update the review comment
+      # REQUIREMENT 3, second half: post this review as a NEW comment, so
+      # it carries its own creation time and thread position. Earlier
+      # reviews stay where they are.
+      - name: Post the review comment
         id: post_review
         if: env.REVIEW_OUTCOME == 'reviewed'
         env:
@@ -1514,43 +1596,12 @@ jobs:
             exit 0
           fi
 
-          # --field reads the body from a file, so the body never passes
-          # through a shell-quoted string. It contains model output and
-          # paths from the pull request's own tree, and the previous shape
-          # interpolated both into a double-quoted `gh pr comment --body`.
           # A FORK CANNOT BE COMMENTED ON -- see "Find this reviewer's
           # existing comment", which decides this once. The review is not
           # lost; it goes to the job summary, and the job stays green.
-          if [ "${CAN_COMMENT:-true}" != "true" ]; then
-            echo "::warning::no write access to this pull request's comments; the review is in the job summary instead"
-            cat "${RUNNER_TEMP}/body.md" >> "$GITHUB_STEP_SUMMARY"
-          elif [ -n "${COMMENT_ID:-}" ]; then
-            # PATCH, never delete-and-repost. Editing preserves the comment's
-            # revision history -- `userContentEdits` on GraphQL -- so a
-            # reviewer can see what the earlier reviews said; deleting and
-            # reposting throws every one of them away and moves the comment
-            # to the bottom of the thread.
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
-              --field "body=@${RUNNER_TEMP}/body.md" > /dev/null
-            echo "Updated review comment ${COMMENT_ID} on PR #${PR_NUMBER}"
-          else
-            # THE POST RESPONSE IS WHERE THE IDENTITY ASSUMPTION IS PROVED.
-            # The step above matches an existing comment on `user.id ==
-            # viewer.databaseId`. If those are not the same number for
-            # `GITHUB_TOKEN`, no comment is ever found, every push POSTs a
-            # new one, and nothing says so -- the pre-change behaviour with
-            # a job log that looks healthy. The created comment carries the
-            # id this token really writes as, so compare them once here
-            # rather than waiting for a human to count comments.
-            AUTHORED_ID=$(gh api --method POST \
-              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --field "body=@${RUNNER_TEMP}/body.md" --jq '.user.id')
-            echo "Posted review comment on PR #${PR_NUMBER}"
-            if [ -n "${VIEWER_ID:-}" ] && [ "$AUTHORED_ID" != "$VIEWER_ID" ]; then
-              echo "::warning::this token authors comments as user id ${AUTHORED_ID} but resolved its own identity as ${VIEWER_ID}; the next run will not find this comment and will post another"
-            fi
-          fi
+          # The post and the identity check live in publish_comment.
+          . "$RUNNER_TEMP/publish-comment.sh"
+          publish_comment "$RUNNER_TEMP/body.md" "the review"
 
       - name: Post skip message
         id: post_empty
@@ -1588,20 +1639,10 @@ jobs:
             echo "<!-- claude-review v3 lane=E findings=0 blockers=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/body.md"
 
-          # Degraded on a fork, as above.
-          if [ "${CAN_COMMENT:-true}" != "true" ]; then
-            echo "::warning::no write access to this pull request's comments; this notice is in the job summary instead"
-            cat "${RUNNER_TEMP}/body.md" >> "$GITHUB_STEP_SUMMARY"
-          elif [ -n "${COMMENT_ID:-}" ]; then
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
-              --field "body=@${RUNNER_TEMP}/body.md" > /dev/null
-          else
-            gh api --method POST \
-              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --field "body=@${RUNNER_TEMP}/body.md" > /dev/null
-          fi
-          echo "Skip message posted to PR #${PR_NUMBER}"
+          # Same publish path as the review: a new comment, so an outcome
+          # notice carries its own timestamp too.
+          . "$RUNNER_TEMP/publish-comment.sh"
+          publish_comment "$RUNNER_TEMP/body.md" "the skip notice"
 
       - name: Post bot-skip message
         id: post_bot
@@ -1628,7 +1669,8 @@ jobs:
             if [ -s "$RUNNER_TEMP/stale_refs.txt" ]; then
               FINDINGS=1
               echo ""
-              echo "- **RISK** \`${STALE_NEEDLE}\` -- the previous version string still appears in the working tree. Confirm each is meant to stay; a dependency table, a badge or a \`REFRESHED_AT\` left behind is the usual cause."
+              # Same marker review_output.py `line_out()` writes for a RISK.
+              echo "- ⚠️ **RISK** \`${STALE_NEEDLE}\` -- the previous version string still appears in the working tree. Confirm each is meant to stay; a dependency table, a badge or a \`REFRESHED_AT\` left behind is the usual cause."
               echo ""
               echo '```text'
               cat "$RUNNER_TEMP/stale_refs.txt"
@@ -1640,20 +1682,10 @@ jobs:
             echo "<!-- claude-review v3 lane=S findings=${FINDINGS} blockers=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/body.md"
 
-          # Degraded on a fork, as above.
-          if [ "${CAN_COMMENT:-true}" != "true" ]; then
-            echo "::warning::no write access to this pull request's comments; this notice is in the job summary instead"
-            cat "${RUNNER_TEMP}/body.md" >> "$GITHUB_STEP_SUMMARY"
-          elif [ -n "${COMMENT_ID:-}" ]; then
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
-              --field "body=@${RUNNER_TEMP}/body.md" > /dev/null
-          else
-            gh api --method POST \
-              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --field "body=@${RUNNER_TEMP}/body.md" > /dev/null
-          fi
-          echo "Bot-skip message posted to PR #${PR_NUMBER}"
+          # Same publish path as the review: a new comment, so an outcome
+          # notice carries its own timestamp too.
+          . "$RUNNER_TEMP/publish-comment.sh"
+          publish_comment "$RUNNER_TEMP/body.md" "the bot-skip notice"
 
       - name: Post review-unavailable message
         id: post_unavailable
@@ -1687,20 +1719,10 @@ jobs:
             echo "<!-- claude-review v3 lane=X findings=0 blockers=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/unavailable.md"
 
-          # Degraded on a fork, as above.
-          if [ "${CAN_COMMENT:-true}" != "true" ]; then
-            echo "::warning::no write access to this pull request's comments; this notice is in the job summary instead"
-            cat "${RUNNER_TEMP}/unavailable.md" >> "$GITHUB_STEP_SUMMARY"
-          elif [ -n "${COMMENT_ID:-}" ]; then
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
-              --field "body=@${RUNNER_TEMP}/unavailable.md" > /dev/null
-          else
-            gh api --method POST \
-              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --field "body=@${RUNNER_TEMP}/unavailable.md" > /dev/null
-          fi
-          echo "Review-unavailable message posted to PR #${PR_NUMBER}"
+          # Same publish path as the review: a new comment, so the notice
+          # carries its own timestamp.
+          . "$RUNNER_TEMP/publish-comment.sh"
+          publish_comment "$RUNNER_TEMP/unavailable.md" "the review-unavailable notice"
 
       # THE INVARIANT UNDER CANCELLATION. `timeout-minutes` above and
       # `cancel-in-progress` both end this job by CANCELLING it, and under
@@ -1750,16 +1772,20 @@ jobs:
             echo "<!-- claude-review v3 lane=T blockers=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/cancelled.md"
 
-          if [ -n "${COMMENT_ID:-}" ]; then
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
-              --field "body=@${RUNNER_TEMP}/cancelled.md" > /dev/null
+          # THE ONE PATH THAT CAN OUTRUN ITS OWN HELPER. Everything else
+          # here runs after "Find this reviewer's existing comment", which
+          # writes publish-comment.sh; a job cancelled during that step
+          # reaches this one without it. Fall back to a plain post rather
+          # than failing the notice that exists to say the job stopped.
+          if [ -f "$RUNNER_TEMP/publish-comment.sh" ]; then
+            . "$RUNNER_TEMP/publish-comment.sh"
+            publish_comment "$RUNNER_TEMP/cancelled.md" "the cancellation notice"
           else
             gh api --method POST \
               "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
               --field "body=@${RUNNER_TEMP}/cancelled.md" > /dev/null
+            echo "Posted the cancellation notice on PR #${PR_NUMBER}"
           fi
-          echo "Review-cancelled message posted to PR #${PR_NUMBER}"
 
       # LAST STEP IN THE JOB, and that position is load-bearing twice over.
       #

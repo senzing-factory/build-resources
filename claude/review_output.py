@@ -57,9 +57,9 @@ is a rejection with a count rather than a request:
      any of those is collapsed or refused -- see `build_verdict`, and
      `previous_stats`, which reads the LAST marker for the same reason.
  13. THE COMMIT UNDER REVIEW IS RENDERED, NOT ONLY MARKED -- see `anchor`.
-     The comment is edited in place, and GitHub renders an edited comment
-     at its original creation time, so the only thing tying a review to a
-     commit was an invisible HTML comment.
+     The only thing tying a review to a commit used to be an invisible HTML
+     comment. The posted comment's own timestamp says when it was written,
+     never which commit it read.
  14. A DISAGREEMENT BETWEEN TWO PIECES OF PROSE IS NOT A FINDING -- see
      PROSE_ONLY. Nothing it describes can change behaviour, so unlike
      every other rejection it is NOT disclosed on the pull request: a
@@ -125,6 +125,27 @@ USAGE = (
 # program is the second witness to the CLI's enum rather than a consumer of
 # the same assertion.
 SEVERITIES = ("BLOCKER", "RISK")
+
+# A SCANNING AID ON A LINE THAT ALREADY EXISTS, not a line of its own. The
+# 4.8.0 work removed the per-check tick lines because they were zero-action
+# filler -- 29 to 32 of them in a measured pair, each restating that
+# something was fine -- and that stays removed. What went with them was the
+# ability to sort a comment into issues and non-issues at a glance, which is
+# a different thing and is worth one character per finding.
+#
+# The severity WORD stays beside the marker deliberately: the word is what a
+# screen reader announces and what `rg '\*\*BLOCKER\*\*'` matches, and the
+# marker is for the eye. Dropping either one costs a reader who needs it.
+#
+# Keyed on SEVERITIES, so a tier added to the schema without a marker raises
+# a KeyError in `line_out` rather than rendering a bullet with no marker.
+SEVERITY_MARK = {"BLOCKER": "❌", "RISK": "⚠️"}
+
+# The clean verdict, and ONLY the genuine one. "No finding survived
+# adjudication" and "produced no structured output" are deliberately
+# unmarked: both report that nothing was established, and a tick on either
+# reads as a pass for a review that did not happen.
+CLEAN_MARK = "✅"
 
 # What the reviewer says it could not do.
 BLIND_VERBS = r"(?:see|confirm|verify|determine|assess|review|read|open|tell)"
@@ -612,8 +633,13 @@ class Verdict:
         return f"{self.path}:{self.line}" if self.line else self.path
 
     def line_out(self) -> str:
-        """The finding as it will appear in the comment body."""
-        return f"- **{self.severity}** `{self.location()}` — {self.message}"
+        """The finding as it will appear in the comment body.
+
+        The marker precedes the severity word rather than replacing it; see
+        `SEVERITY_MARK` for why both are there.
+        """
+        mark = SEVERITY_MARK[self.severity]
+        return f"- {mark} **{self.severity}** `{self.location()}` — {self.message}"
 
 
 def normalise(message: str) -> str:
@@ -1038,7 +1064,7 @@ def header(tally: Tally, summary: str, unread: bool = False) -> str:
                 f"**No finding survived adjudication{note}.**"
                 f" {tally.adjudged} {noun} dropped before posting; see below."
             )
-        clean = f"**No blocking findings{note}.**"
+        clean = f"{CLEAN_MARK} **No blocking findings{note}.**"
         return f"{clean} {summary}" if summary else clean
     blockers = sum(1 for f in tally.shown if f.severity == "BLOCKER")
     risks = len(tally.shown) - blockers
@@ -1054,14 +1080,24 @@ def header(tally: Tally, summary: str, unread: bool = False) -> str:
 def anchor(head: str, when: str, repo: str = "") -> str:
     """Which commit this review describes, and when it was written.
 
-    MECHANISM 13. The comment is EDITED IN PLACE on every push -- a
-    deliberate decision, recorded at the PATCH in "Post or update the review
-    comment": editing preserves the comment's revision history, where
-    delete-and-repost throws it away and moves the review to the bottom of
-    the thread. The cost GitHub imposes for it is that an edited comment
-    renders at its ORIGINAL creation position and under its ORIGINAL
+    MECHANISM 13. WHY THIS FUNCTION EXISTS, and the history matters
+    because two designs were tried before the current one. The comment used
+    to be EDITED IN PLACE on every push, and GitHub renders an edited
+    comment at its ORIGINAL creation position and under its ORIGINAL
     timestamp. Measured 2026-10-29: a current review, updated at 16:13,
     displayed to every reader as a comment dated sixteen days earlier.
+    ~~A delete-and-repost design replaced it~~ and was rejected in turn,
+    because it bought an honest timestamp by destroying the record of what
+    earlier reviews said.
+
+    The workflow now POSTS A NEW COMMENT on every run and leaves every
+    earlier one standing, so each review keeps its own true creation time
+    and thread position and remains the record of the commit it reviewed.
+
+    THAT MAKES THIS LINE MORE LOAD-BEARING, NOT LESS. A thread now holds
+    several reviews at once, so a reader needs each one to say which commit
+    it describes; a timestamp says when a comment was POSTED, never what
+    was read to produce it.
 
     The commit was never missing -- it was in the state marker, which is an
     HTML comment and therefore invisible to every human reading the thread.
@@ -1076,8 +1112,12 @@ def anchor(head: str, when: str, repo: str = "") -> str:
 
     THE LINK IS AN ADDITION, NEVER A SUBSTITUTION. `repo` is the runner's
     own `GITHUB_REPOSITORY`, not an input anybody plumbs, so when it is
-    absent -- every fixture here, and anything running outside Actions --
-    the line renders exactly as it does with it, minus the link. A reader
+    absent -- anything running outside Actions -- the line renders exactly
+    as it does with it, minus the link. Note that under Actions it is set
+    on EVERY job, the test suite included: `test_review_output.sh` clears
+    it deliberately rather than inheriting it, because a fixture that reads
+    the runner's own repository asserts a different thing in CI than it
+    does on a laptop. A reader
     can then confirm the SHA is the head without leaving the page; where
     the value is missing or malformed they are no worse off than before.
     """

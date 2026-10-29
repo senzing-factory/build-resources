@@ -230,7 +230,7 @@ seam() { # seam <transcript> <body> -> runs both programs over one transcript
 seam clean.jsonl clean_body.md
 seam maxturns.jsonl maxturns_body.md
 check "a clean transcript becomes a clean verdict on the pull request" \
-  '1' "$(grep -c '^\*\*No blocking findings in the 1 of 1 file opened\.\*\* 1 file, +1/-1\.$' \
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 1 of 1 file opened\.\*\* 1 file, +1/-1\.$' \
     "$WORK/clean_body.md")"
 check "an errored transcript says nothing was adjudicated instead" \
   '1' "$(grep -c '^\*\*The reviewer produced no structured output\.\*\*' \
