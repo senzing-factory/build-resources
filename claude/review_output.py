@@ -4,7 +4,7 @@
     review_output.py --findings <file> --manifest <file> --base <rev>
                      --out <file> [--sections <file>] [--notes <file>]
                      [--previous <file>] [--metrics <file>]
-                     [--head <sha>] [--lane <A|B|C|S>]
+                     [--head <sha>] [--lane <A|B|C>]
                      [--coverage-read N] [--coverage-total N]
                      [--summary <text>] [--restored "<paths>"]
 
@@ -61,7 +61,7 @@ is a rejection with a count rather than a request:
      comment. The posted comment's own timestamp says when it was written,
      never which commit it read.
  14. A DISAGREEMENT BETWEEN TWO PIECES OF PROSE IS NOT A FINDING -- see
-     PROSE_ONLY. Nothing it describes can change behaviour, so unlike
+     `prose_only`. Nothing it describes can change behaviour, so unlike
      every other rejection it is NOT disclosed on the pull request: a
      review whose only finding was one of these renders the ordinary
      clean verdict. It stays in the job log, in the metrics and in the
@@ -116,7 +116,7 @@ USAGE = (
     "usage: review_output.py --findings <file> --manifest <file> --base <rev>\n"
     "                        --out <file> [--sections <file>] [--notes <file>]\n"
     "                        [--previous <file>] [--metrics <file>]\n"
-    "                        [--head <sha>] [--lane <A|B|C|S>]\n"
+    "                        [--head <sha>] [--lane <A|B|C>]\n"
     "                        [--coverage-read N] [--coverage-total N]\n"
     '                        [--summary <text>] [--restored "<paths>"]'
 )
@@ -325,13 +325,23 @@ DISAGREE = r"(?:(?:contradict|disagree|conflict|match)(?:s|es|ed|ing)?|inconsist
 # doing the disagreeing. Without it, "the comment says the retry count is 3
 # but the loop runs 5 times, which contradicts the documentation" matched
 # from `comment` to `documentation` and dropped a finding about the LOOP.
+#
+# IT BOUNDS ONE MATCH AND NOTHING ELSE, and the comment here used to read as
+# though it bounded the rule. It does not: `re.search` is free to give up at
+# one offset and RE-ANCHOR at the next, so a sentence whose primary claim is
+# about code still matched on a trailing prose-versus-prose clause. See
+# PROSE_PAIR, which closes that by refusing to be a substring at all.
 CLAUSE = r"(?:(?!\band\b|\bor\b)[^.;:!?,]){0,40}?"
+
+# A leading determiner, so "The comments contradict the docstring." can be
+# required to be the WHOLE message without the article defeating it.
+PROSE_LEAD = r"(?:the |a |an |this |that |its |these |both |two )?"
 
 # Mechanism 14. A finding whose two disagreeing parties are BOTH prose.
 #
 # Measured 2026-10-29: a whole review whose entire output was one of these.
 # "The boundary comment on <resource> (and the one near line 40) still says
-# the deploy role reads the init report after deploy, which this PR marks
+# the caller reloads its configuration after start-up, which this PR marks
 # SUPERSEDED at line 55, so the comments now contradict each other; add a
 # one-line superseded note to both." Two code comments disagreeing. Nothing
 # can break, nothing is exposed, no control stops holding -- so there is no
@@ -352,11 +362,11 @@ CLAUSE = r"(?:(?!\band\b|\bor\b)[^.;:!?,]){0,40}?"
 #
 #  1. THE SECOND PARTY IS NAMED, and named as prose: "no longer matches the
 #     docstring", "is inconsistent with the README". Both ends are nouns
-#     this rule recognises, so there is nothing to infer.
+#     this rule recognises, so there is nothing to infer. PROSE_PAIR.
 #  2. THE SECOND PARTY IS `each other`, which names nothing, so the SUBJECT
 #     has to carry both parties by itself -- a prose noun that OPENS its
 #     clause with nothing conjoined into it. "the comments now contradict
-#     each other" qualifies.
+#     each other" qualifies. PROSE_SELF_PAIR.
 #     "The documentation and the code contradict each other" does not: the
 #     clause opens on `documentation` and `CLAUSE` will not cross the `and`,
 #     and it cannot re-anchor on `code`, which is not a prose noun. Nor does
@@ -367,19 +377,73 @@ CLAUSE = r"(?:(?!\band\b|\bor\b)[^.;:!?,]){0,40}?"
 # What branch 2 costs is "The docs and the comments contradict each other",
 # where both really are prose and the conjunction blocks the match. That is
 # a MISS, and a miss is a line of filler on a pull request while a wrong
-# match deletes a real finding where nobody sees it. This branch DROPS, like
-# CONVENTION and SELF_DISCLAIM, so it is written to miss.
-PROSE_ONLY = re.compile(
-    r"(?:"
-    rf"\b{PROSE_NOUN}\b{CLAUSE}\b{DISAGREE}[^.;:!?]{{0,20}}?"
+# match deletes a real finding where nobody sees it. Both branches DROP,
+# like CONVENTION and SELF_DISCLAIM, so both are written to miss.
+#
+# ===========================================================================
+# WHY BRANCH 1 IS A `fullmatch` AND BRANCH 2 IS A `search`. This is the
+# whole correction of 2026-10-29, and the asymmetry is measured, not taste.
+#
+# THE DEFECT. `CLAUSE` stops one match crossing `and`/`or`/`,`; it does not
+# stop `re.search` giving up and RE-ANCHORING further along the sentence. So
+# a finding whose primary claim is about CODE was deleted on the strength of
+# a trailing clause that happened to name two pieces of prose. Reproduced
+# end to end at RISK severity, both rendering a clean verdict:
+#
+#   "The README's table lists three functions; the code adds a fourth, so
+#    the README is inconsistent with the inline documentation too."
+#   "The inline comment contradicts the docstring, which would send an
+#    operator to a flag that no longer exists."
+#
+# The first is a COUNT this change invalidates -- the shape `pr-prompt-v2.md`
+# promotes to a must-report finding. The second is that file's own canonical
+# example of one. Both are in `test_review_output.sh` now, and both fail
+# against the substring form.
+#
+# THE FIX IS POSITIONAL, NOT LEXICAL. Another veto word would have covered
+# these two sentences and not the next two; requiring the match to BE the
+# message covers the class. A message that is nothing but "these two
+# comments disagree" has nowhere to put a code party or a consequence, so
+# the drop is safe by construction; a message with room for one is not this
+# rule's to judge.
+#
+# AND IT IS APPLIED TO BRANCH 1 ONLY, because branch 2 cannot take it. The
+# one measured true positive this mechanism exists for is branch 2, and its
+# match spans 43 of 250 characters -- 17% -- with the other 83% being the
+# setup that says WHICH comments and WHY. Anchoring branch 2 would not
+# narrow it, it would switch it off. Measured the same day on the fixtures
+# in `test_review_output.sh`: every branch-1 match in the suite is a false
+# positive and every branch-2 match is a true one.
+#
+# WHAT BRANCH 2 THEREFORE STILL CARRIES is the same re-anchoring hazard, in
+# its `each other` spelling only: "The handler drops the token; the comments
+# now contradict each other" would still be dropped. That is UNFIXED and
+# deliberate rather than unnoticed -- the severity floor below is the only
+# thing standing under it, and the rule is one `each other` clause wide.
+# ===========================================================================
+PROSE_PAIR = re.compile(
+    rf"\s*{PROSE_LEAD}{PROSE_NOUN}\b{CLAUSE}\b{DISAGREE}[^.;:!?]{{0,20}}?"
     rf"\b(?:with )?(?:the |that |this |its |a |an )?{PROSE_NOUN}\b"
-    r"|"
-    rf"(?:^|[,;:] )(?:so |and )?(?:the |these |both |two )?{PROSE_NOUN}\b"
-    rf"{CLAUSE}\b{DISAGREE}[^.;:!?]{{0,20}}?"
-    r"\b(?:each other|one another|themselves)\b"
-    r")",
+    r"[\s.!]*",
     re.IGNORECASE,
 )
+
+PROSE_SELF_PAIR = re.compile(
+    rf"(?:^|[,;:] )(?:so |and )?(?:the |these |both |two )?{PROSE_NOUN}\b"
+    rf"{CLAUSE}\b{DISAGREE}[^.;:!?]{{0,20}}?"
+    r"\b(?:each other|one another|themselves)\b",
+    re.IGNORECASE,
+)
+
+
+def prose_only(message: str) -> bool:
+    """Both disagreeing parties are prose, and nothing else is being said.
+
+    `fullmatch` for the named-pair branch and `search` for the `each other`
+    branch -- see the block above for why those are not the same call.
+    """
+    return bool(PROSE_PAIR.fullmatch(message) or PROSE_SELF_PAIR.search(message))
+
 
 # Everything that is not a letter or a digit, for the IDENTITY test in
 # `collapse`: two findings whose messages differ only by punctuation or case
@@ -863,7 +927,7 @@ def adjudicate(findings: list, rows: dict, base: set, restored: tuple = ()) -> d
         # the difference.
         if (
             finding.severity != "BLOCKER"
-            and PROSE_ONLY.search(finding.message)
+            and prose_only(finding.message)
             and not PROSE_CONSEQUENCE.search(finding.message)
         ):
             finding.dropped = "prose"
@@ -1205,7 +1269,10 @@ def marker(lane: str, tally: Tally, head: str) -> str:
 
     The comment's identity as a piece of STATE -- which run, which head, how
     much was covered -- and what the workflow matches on when it goes looking
-    for the comment to edit. It was previously the model's last line, where a
+    for the PREVIOUS REVIEW to measure this run against. ~~The comment to
+    edit~~: nothing is edited, and `lane=` is read as well as the marker
+    itself, because a skip or cancellation notice carries one too and is not
+    a baseline. It was previously the model's last line, where a
     malformed one was simply unreadable and nothing noticed; `read=` in
     particular is the measurement, so it could never have come from there.
 
@@ -1222,9 +1289,15 @@ def marker(lane: str, tally: Tally, head: str) -> str:
 
 
 def previous_stats(path: str) -> tuple:
-    """(characters, findings) of the comment this run is replacing.
+    """(characters, findings) of the previous review this run is measured against.
 
-    THE LAST MARKER, NEVER THE FIRST. `compose` writes the marker as the
+    ~~The comment this run is replacing~~ -- nothing is replaced. The
+    workflow appends a new comment per run and hands this the body of the
+    MOST RECENT earlier REVIEW: newest id, and only a `lane=[ABC]` marker,
+    so a skip, error or cancellation notice is never the baseline. See
+    REVIEW_BASELINE_JQ in claude-pull-request-review.yaml.
+
+    THE LAST MARKER WITHIN THAT BODY, NEVER THE FIRST. `compose` writes the marker as the
     final line of the body, so the real one is always last and anything
     earlier claiming to be one was put there by something else. With
     `re.search` the first match won, which let a marker forged in a finding
@@ -1561,7 +1634,7 @@ def metrics(argv: list, kept: list, counts: dict, size: int) -> int:
     )
     if regression:
         print(
-            f"::warning::this review is longer than the one it replaces"
+            f"::warning::this review is longer than the previous one"
             f" ({size} vs {prev_chars} characters) while reporting fewer"
             f" findings ({len(kept)} vs {prev_findings})"
         )

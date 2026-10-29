@@ -117,12 +117,13 @@ jobs:
       contents: read
       pull-requests: write
 
-    # ONE COMMENT, EDITED IN PLACE, means two runs must not write at once.
-    # A pull request with nine pushes previously ended up with nine review
-    # comments and no way to tell which was current; editing one comment
-    # fixes that only if the writes are serialised, because two runs that
-    # both find no existing comment both POST one and the problem returns
-    # with two authors instead of nine.
+    # ~~ONE COMMENT, EDITED IN PLACE, means two runs must not write at
+    # once.~~ SUPERSEDED: the comment is no longer edited, so serialising
+    # the writes is no longer what the group buys. What it still buys is
+    # that two runs on the same pull request do not review two heads at
+    # once and post both -- the reader would get two reviews minutes apart
+    # with no way to tell which head each described but the anchor line,
+    # and the older one would arrive second as often as not.
     #
     # cancel-in-progress is true because a superseded review is waste: the
     # head it reviewed no longer exists, and the run that replaced it is
@@ -162,28 +163,54 @@ jobs:
       # the identity is unresolved; that is the smaller harm. `or`
       # short-circuits in jq, so `tonumber` never sees an empty value.
       #
-      # The comment-to-EDIT lookup does not take that fallback: the step below
-      # searches only `if [ -n "$VIEWER_ID" ]`, so a forgeable body can never
-      # select a comment to PATCH. Guarding by skipping the call is stronger
-      # than guarding inside the expression it would otherwise evaluate.
+      # ~~The comment-to-EDIT lookup does not take that fallback~~ -- nothing
+      # is edited any more; see REVIEW_BASELINE_JQ, which is the only other
+      # reader and which skips the call outright on an unresolved identity.
+      # Guarding by skipping the call is stronger than guarding inside the
+      # expression it would otherwise evaluate.
       REVIEW_COMMENT_JQ: '((env.VIEWER_ID // "") == "" or .user.id == (env.VIEWER_ID | tonumber)) and ((.body // "") | test("<!-- claude-review v[0-9]+ "))'
+      # THE BASELINE IS NARROWER THAN THE THREAD FILTER, and the two must not
+      # be collapsed into one. The predicate above answers "did this reviewer
+      # write this comment", which is what the discussion fetch NEGATES so the
+      # reviewer is never fed its own output -- every outcome it ever posts,
+      # notices included, has to be caught there.
+      #
+      # This one answers a different question: "is this comment a REVIEW I can
+      # measure the current run against". A skip, an error or a cancellation
+      # notice is not. `lane=` is what separates them, and it is written by
+      # exactly two places -- review_output.py `marker()` for a real review
+      # (A, B or C), and the four notice steps at the end of this job (E, S, X
+      # and T). Comparing a review against a notice is meaningless in both
+      # directions: lane=T carries no `findings=` at all, so `previous_stats`
+      # returns -1 and the comparison is dead, and lane=E carries `findings=0`,
+      # so every later review compares against zero and the detector never
+      # fires. Both were reachable because a notice is now its own comment
+      # rather than an edit of the review's.
+      #
+      # An unrecognised future lane is therefore NOT a baseline. That is the
+      # deliberate direction: a missing comparison prints nothing, a wrong one
+      # prints a regression warning about a run it never described.
+      REVIEW_BASELINE_JQ: '((env.VIEWER_ID // "") == "" or .user.id == (env.VIEWER_ID | tonumber)) and ((.body // "") | test("<!-- claude-review v[0-9]+ lane=[ABC] "))'
 
     steps:
       # REQUIREMENT 3, first half: find the previous review, to compare
       # this one against. It is never edited and never removed.
       #
-      # THE FIRST STEP IN THE JOB, deliberately. Every posting step below is
-      # a PATCH when this found a comment and a POST when it did not, so a
-      # run that dies anywhere after this point still edits the existing
-      # comment instead of adding a second one. It was previously placed
-      # after input validation and the checkout, which meant a caller with a
-      # typo'd input, or a flaky checkout, posted a fresh comment on every
-      # push -- the repeated-failure case the requirement exists for.
+      # THE FIRST STEP IN THE JOB, deliberately. ~~Every posting step below
+      # is a PATCH when this found a comment and a POST when it did not~~ --
+      # superseded by the append-only design: every posting step is now an
+      # unconditional POST, and this step writes nothing to the pull request
+      # at all. What it still owns is everything those steps SHARE -- the
+      # runtime identity, the fork/no-write decision, and
+      # `publish-comment.sh` itself -- so a run that dies anywhere after this
+      # point can still post its notice. Placed after input validation and
+      # the checkout, a caller with a typo'd input or a flaky checkout would
+      # reach the error notice with no publish path to post it through.
       #
       # It needs nothing from the job but PR_NUMBER, which is job-level env,
       # and sets its own GH_REPO and GH_TOKEN. It runs unconditionally, so a
-      # bot-authored pull request still edits its own skip notice.
-      - name: Find this reviewer's existing comment
+      # bot-authored pull request still gets its own skip notice.
+      - name: Find this reviewer's previous review
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
@@ -224,19 +251,36 @@ jobs:
           # a comment; this says WHICH of that author's comments is the
           # review. Both are needed, because `github-actions[bot]` also
           # authors super-linter summaries, coverage reports and release
-          # notes on the same pull request -- so identity alone would find
-          # the lowest-numbered of those and edit it.
+          # notes on the same pull request -- so identity alone would pick
+          # one of those.
           #
-          # Lowest-numbered, so the review stays where the thread first put
+          # ~~Lowest-numbered, so the review stays where the thread first put
           # it rather than migrating down the page; and if a previous run
-          # ever did post two, every later run converges on the same one.
+          # ever did post two, every later run converges on the same one.~~
+          # SUPERSEDED, and it was the right rule only while the comment was
+          # edited in place: converging on one id is what kept a thread to a
+          # single review. Nothing is edited now, so every push appends, and
+          # `head -1` selected the FIRST review ever posted on the pull
+          # request -- forever. The comparison `previous_stats()` performs
+          # exists to catch a review that grew while reporting less, which is
+          # a property of CONSECUTIVE runs; against a frozen first review it
+          # measures nothing after the second push.
+          #
+          # HIGHEST-NUMBERED, therefore: the most recent review is the only
+          # baseline the detector has a question about. Comment ids are
+          # monotonic within a repository, so `sort -n | tail -1` is "newest"
+          # without reading a timestamp that a backdated edit could move.
+          #
+          # AND ONLY A REVIEW IS ELIGIBLE -- REVIEW_BASELINE_JQ, not
+          # REVIEW_COMMENT_JQ. See that variable for why a skip, error or
+          # cancellation notice is not a baseline.
           COMMENT_ID=""
           if [ -n "$VIEWER_ID" ]; then
             COMMENT_ID=$(VIEWER_ID="$VIEWER_ID" gh api \
               "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
               --paginate \
-              --jq ".[] | select(${REVIEW_COMMENT_JQ}) | .id" \
-              2>/dev/null | sort -n | head -1 || true)
+              --jq ".[] | select(${REVIEW_BASELINE_JQ}) | .id" \
+              2>/dev/null | sort -n | tail -1 || true)
           fi
           case "$COMMENT_ID" in
             '' | *[!0-9]*) COMMENT_ID="" ;;
@@ -266,7 +310,7 @@ jobs:
             # they reviewed, so there is nothing for a relabel to add and it
             # would mutate a comment this design does not mutate.
           else
-            echo "No existing review comment; one will be created."
+            echo "No previous review to compare against; this run posts the first."
           fi
           echo "COMMENT_ID=${COMMENT_ID}" >> "$GITHUB_ENV"
           echo "VIEWER_ID=${VIEWER_ID}" >> "$GITHUB_ENV"
@@ -288,7 +332,10 @@ jobs:
           # ONE PUBLISH PATH FOR EVERY OUTCOME, defined once here because
           # five steps below write a comment -- the review, the skip, the
           # bot-skip, the error and the cancellation notice -- and they must
-          # not drift apart. Sourced, not re-implemented.
+          # not drift apart. Sourced, not re-implemented. It also carries
+          # `anchor_line`, for the same reason: three of those steps render
+          # mechanism 13's line themselves rather than through
+          # review_output.py.
           cat > "$RUNNER_TEMP/publish-comment.sh" <<'PUBLISH'
           # publish_comment <body file> <what it is, for the log>
           #
@@ -338,13 +385,52 @@ jobs:
               echo "::warning::this token authors comments as user id ${authored} but resolved its own identity as ${VIEWER_ID}; no previous review will be found, so each review's comparison against the last one is lost"
             fi
           }
+
+          # MECHANISM 13'S LINE, AND THE SAME VALIDATION review_output.py
+          # `anchor()` applies. The review's own body gets this line from
+          # that function; the skip, bot-skip and error notices build it
+          # here, and until now they built the LINKED form unconditionally
+          # while the Python refused to link a head or a repository slug
+          # that did not match its shape. Two renderers disagreeing about
+          # whether a value is checked is the defect, not the link: a
+          # `HEAD_SHA` the event did not supply rendered as
+          # `[``](https://github.com/<repo>/commit/)`, a dead link under an
+          # empty code span, in the one comment class that exists to say
+          # something went wrong.
+          #
+          # The shapes are review_output.py's FULL_SHA (`[0-9a-f]{7,40}`)
+          # and REPO_SLUG (`[A-Za-z0-9._-]{1,100}/` twice over), with one
+          # deliberate approximation: the per-segment 100-character cap is
+          # checked here as a 201-character cap on the whole slug, because
+          # `case` cannot count. Nothing GitHub sets can tell the two apart.
+          anchor_line() { # anchor_line -> "Reviewed <sha> at <time>."
+            _when=$(date -u +'%Y-%m-%d %H:%M UTC')
+            _short="\`${HEAD_SHA:0:7}\`"
+            _link_ok=yes
+            case "$HEAD_SHA" in '' | *[!0-9a-f]*) _link_ok=no ;; esac
+            if [ "${#HEAD_SHA}" -lt 7 ] || [ "${#HEAD_SHA}" -gt 40 ]; then
+              _link_ok=no
+            fi
+            case "${GITHUB_REPOSITORY:-}" in
+              '' | /* | */ | */*/* | *[!A-Za-z0-9._/-]*) _link_ok=no ;;
+              */*) ;;
+              *) _link_ok=no ;;
+            esac
+            if [ "${#GITHUB_REPOSITORY}" -gt 201 ]; then
+              _link_ok=no
+            fi
+            if [ "$_link_ok" = yes ]; then
+              _short="[${_short}](https://github.com/${GITHUB_REPOSITORY}/commit/${HEAD_SHA})"
+            fi
+            printf 'Reviewed %s at %s.\n' "$_short" "$_when"
+          }
           PUBLISH
 
       # Validated before any work, so a caller's typo fails before the model
       # call rather than after it, and on every run rather than only on a
       # reviewed one. `workflow_call` has no enum type. It sits second
-      # because finding the comment to edit has to precede anything that can
-      # exit non-zero -- see that step's comment.
+      # because the step that writes the shared publish path has to precede
+      # anything that can exit non-zero -- see that step's comment.
       - name: Validate the caller's inputs
         env:
           ENFORCEMENT: ${{ inputs.coverage_enforcement }}
@@ -1609,19 +1695,22 @@ jobs:
           # RE-CHECK THE HEAD BEFORE WRITING. The concurrency group
           # serialises this job against itself, but a push that lands while
           # the model is running produces a review of a head that no longer
-          # exists, and writing it over the comment would replace a current
-          # review with a stale one. The newer run is already on its way, so
-          # standing down is the correct answer and the only one that keeps
-          # the single comment true.
+          # exists. ~~Writing it over the comment would replace a current
+          # review with a stale one.~~ Nothing is overwritten now, so the
+          # cost has changed rather than gone: posting would append a review
+          # of a superseded commit BELOW the thread's newest comment, where
+          # a reader takes the last one as the current one. The newer run
+          # is already on its way, so standing down is still the correct
+          # answer.
           CURRENT_HEAD=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
             --jq '.head.sha' 2>/dev/null || true)
           if [ -n "$CURRENT_HEAD" ] && [ "$CURRENT_HEAD" != "$HEAD_SHA" ]; then
-            echo "::warning::the head moved from ${HEAD_SHA} to ${CURRENT_HEAD} while this review ran; not overwriting the comment with a review of the older head"
+            echo "::warning::the head moved from ${HEAD_SHA} to ${CURRENT_HEAD} while this review ran; not posting a review of the older head"
             exit 0
           fi
 
           # A FORK CANNOT BE COMMENTED ON -- see "Find this reviewer's
-          # existing comment", which decides this once. The review is not
+          # previous review", which decides this once. The review is not
           # lost; it goes to the job summary, and the job stays green.
           # The post and the identity check live in publish_comment.
           . "$RUNNER_TEMP/publish-comment.sh"
@@ -1638,19 +1727,22 @@ jobs:
         if: env.REVIEW_OUTCOME == 'empty'
         run: |
           # The anchor line, in review_output.py `anchor()`'s exact format
-          # and place. Every body this workflow can write carries one: the
-          # comment is edited in place, so GitHub renders it at its original
-          # creation time, and a pull request whose last outcome was a skip
-          # would otherwise show an undated-looking comment.
-          REVIEWED_AT=$(date -u +'%Y-%m-%d %H:%M UTC')
-          # Every outcome carries the marker, so the next run finds and
-          # edits this same comment rather than adding to it.
+          # and place -- `anchor_line` in the sourced helper renders it with
+          # the same validation. ~~The comment is edited in place, so GitHub
+          # renders it at its original creation time~~ -- superseded: every
+          # outcome is its own comment now, at its own true time. The line
+          # stays because a thread holds SEVERAL of these at once, and a
+          # reader needs each one to say which commit it describes.
+          . "$RUNNER_TEMP/publish-comment.sh"
+          # Every outcome carries the marker. Only lane=[ABC] is eligible as
+          # a baseline for the next run's comparison -- see
+          # REVIEW_BASELINE_JQ -- and lane=E is not one of them.
           {
             echo "## Claude Code Review"
             echo ""
             echo "**No reviewable changes.** This pull request has no source changes left after applying \`exclude_globs\`, or contains only metadata changes."
             echo ""
-            echo "Reviewed [\`${HEAD_SHA:0:7}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${HEAD_SHA}) at ${REVIEWED_AT}."
+            anchor_line
             if [ -n "${EXCLUDED_SUMMARY:-}" ]; then
               echo ""
               echo "**Not reviewed (dropped by \`exclude_globs\`)**"
@@ -1664,8 +1756,8 @@ jobs:
           } > "$RUNNER_TEMP/body.md"
 
           # Same publish path as the review: a new comment, so an outcome
-          # notice carries its own timestamp too.
-          . "$RUNNER_TEMP/publish-comment.sh"
+          # notice carries its own timestamp too. Already sourced above, for
+          # `anchor_line`.
           publish_comment "$RUNNER_TEMP/body.md" "the skip notice"
 
       - name: Post bot-skip message
@@ -1681,15 +1773,17 @@ jobs:
           # comment: the model is never running when it is posted, so nothing
           # else can emit it and a parser can tell a skip from a clean review.
           #
-          # The anchor line; see review_output.py `anchor()`.
-          REVIEWED_AT=$(date -u +'%Y-%m-%d %H:%M UTC')
+          # The anchor line; see review_output.py `anchor()` and
+          # `anchor_line` in the sourced helper, which applies the same
+          # validation to the head and the repository slug.
+          . "$RUNNER_TEMP/publish-comment.sh"
           STALE_NEEDLE=$(cat "$RUNNER_TEMP/stale_needle.txt" 2>/dev/null || true)
           {
             echo "## Claude Code Review"
             echo ""
             echo "**Skipped** -- this pull request was opened by a bot, and \`review_bot_authors\` is false."
             echo ""
-            echo "Reviewed [\`${HEAD_SHA:0:7}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${HEAD_SHA}) at ${REVIEWED_AT}."
+            anchor_line
             if [ -s "$RUNNER_TEMP/stale_refs.txt" ]; then
               FINDINGS=1
               echo ""
@@ -1707,8 +1801,8 @@ jobs:
           } > "$RUNNER_TEMP/body.md"
 
           # Same publish path as the review: a new comment, so an outcome
-          # notice carries its own timestamp too.
-          . "$RUNNER_TEMP/publish-comment.sh"
+          # notice carries its own timestamp too. Already sourced above, for
+          # `anchor_line`.
           publish_comment "$RUNNER_TEMP/body.md" "the bot-skip notice"
 
       - name: Post review-unavailable message
@@ -1727,14 +1821,18 @@ jobs:
           # turned the job red and posted nothing, which is indistinguishable
           # from the workflow being broken and blocks merges anywhere this is
           # a required check.
-          # The anchor line; see review_output.py `anchor()`.
-          REVIEWED_AT=$(date -u +'%Y-%m-%d %H:%M UTC')
+          # The anchor line; see review_output.py `anchor()` and
+          # `anchor_line` in the sourced helper. THE VALIDATION MATTERS MOST
+          # HERE: this is the one notice that can be reached by a run that
+          # died before `HEAD_SHA` meant anything, and the unvalidated form
+          # rendered that as a dead link under an empty code span.
+          . "$RUNNER_TEMP/publish-comment.sh"
           {
             echo "## Claude Code Review"
             echo ""
             echo "**The code review could not run.**"
             echo ""
-            echo "Reviewed [\`${HEAD_SHA:0:7}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${HEAD_SHA}) at ${REVIEWED_AT}."
+            anchor_line
             echo ""
             echo "Reason: ${REVIEW_ERROR:-a step of the review workflow failed; see the job log}"
             echo ""
@@ -1744,8 +1842,8 @@ jobs:
           } > "$RUNNER_TEMP/unavailable.md"
 
           # Same publish path as the review: a new comment, so the notice
-          # carries its own timestamp.
-          . "$RUNNER_TEMP/publish-comment.sh"
+          # carries its own timestamp. Already sourced above, for
+          # `anchor_line`.
           publish_comment "$RUNNER_TEMP/unavailable.md" "the review-unavailable notice"
 
       # THE INVARIANT UNDER CANCELLATION. `timeout-minutes` above and
@@ -1757,14 +1855,24 @@ jobs:
       # cancelled whatever it posts, so a repository that made this a
       # required check is blocked until it re-runs; that is Actions'
       # semantics and not something a step can undo. Nor is the comment
-      # guaranteed: a cancelled job gets a grace window, and one PATCH fits
-      # inside it where a retry loop would not. The property that IS
-      # guaranteed is the one bought at the top of this job, where a marker
-      # carrying a stale head= is relabelled before any work starts.
+      # guaranteed: a cancelled job gets a grace window, and one POST fits
+      # inside it where a retry loop would not.
       #
-      # A HEAD THAT MOVED means a push superseded this run. The newer run
-      # has already relabelled the comment and will post the real review,
-      # so standing down is correct and avoids racing it.
+      # ~~The property that IS guaranteed is the one bought at the top of
+      # this job, where a marker carrying a stale head= is relabelled before
+      # any work starts.~~ SUPERSEDED: that relabel was deleted with the
+      # edit-in-place design, so no such guarantee is bought any more and
+      # nothing here should be read as resting on one. What replaces it is
+      # weaker and is enough: every comment in the thread already names the
+      # commit it describes in its own anchor line, so a reader can tell a
+      # review of an older head from a review of this one WITHOUT this
+      # notice arriving at all.
+      #
+      # A HEAD THAT MOVED means a push superseded this run. ~~The newer run
+      # has already relabelled the comment~~ -- there is no relabel; the
+      # newer run will post the real review, so standing down is correct and
+      # avoids posting a cancellation notice for a commit nobody is waiting
+      # on.
       - name: Post review-cancelled message
         if: ${{ cancelled() && steps.post_review.conclusion != 'success' && steps.post_empty.conclusion != 'success' && steps.post_bot.conclusion != 'success' && steps.post_unavailable.conclusion != 'success' }}
         env:
@@ -1783,9 +1891,15 @@ jobs:
             exit 0
           fi
 
-          # lane=T, and no `findings=` -- for the reason given where the
-          # superseded marker is written: an absent field is read as "no
-          # comparison", a zero as a review that found nothing.
+          # lane=T, and no `findings=`. ~~For the reason given where the
+          # superseded marker is written~~ -- that block is gone; the reason
+          # is recorded here instead, because this is now the only comment
+          # the workflow writes without the field. An absent `findings=` is
+          # read as "no comparison", a zero as a review that found nothing,
+          # and a cancelled run measured neither. REVIEW_BASELINE_JQ makes
+          # that belt-and-braces: lane=T is not an eligible baseline, so
+          # `previous_stats` is never handed this comment in the first
+          # place.
           {
             echo "## Claude Code Review"
             echo ""
@@ -1797,10 +1911,12 @@ jobs:
           } > "$RUNNER_TEMP/cancelled.md"
 
           # THE ONE PATH THAT CAN OUTRUN ITS OWN HELPER. Everything else
-          # here runs after "Find this reviewer's existing comment", which
+          # here runs after "Find this reviewer's previous review", which
           # writes publish-comment.sh; a job cancelled during that step
           # reaches this one without it. Fall back to a plain post rather
           # than failing the notice that exists to say the job stopped.
+          # This body carries no anchor line, so it needs nothing from the
+          # helper but the post itself.
           if [ -f "$RUNNER_TEMP/publish-comment.sh" ]; then
             . "$RUNNER_TEMP/publish-comment.sh"
             publish_comment "$RUNNER_TEMP/cancelled.md" "the cancellation notice"

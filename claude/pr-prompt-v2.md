@@ -257,10 +257,12 @@ Report:
   always a BLOCKER.
 - A change that contradicts another file in this repository **in a way that
   makes something behave wrongly or makes a human act wrongly**: a version
-  bumped in one place and left stale in another, documentation or a comment
-  that would send an operator to a flag, path or knob that no longer exists,
-  a `.claude/CLAUDE.md` rule the change breaks, or a `.claude/CLAUDE.md` made
-  specific to one developer's machine.
+  bumped in one place and left stale in another, **documentation or a comment
+  that describes behavior the code no longer has** — a count of a thing this
+  change adds to, packaging a file says it does not use, a flag, path or knob
+  an operator would be sent to that no longer exists — a `.claude/CLAUDE.md`
+  rule the change breaks, or a `.claude/CLAUDE.md` made specific to one
+  developer's machine.
 - A public interface changed without updating its callers in this repository.
 
 Do **not** report — another tool owns it, or you cannot know it:
@@ -275,8 +277,10 @@ Do **not** report — another tool owns it, or you cannot know it:
   request that someone else verify something is not a finding.
 - Style preference, naming taste, DRY opinion, praise, or anything you would mark
   with a tick.
-- Two pieces of prose disagreeing with each other — a comment that no longer
-  matches another comment, a docstring, a README or a runbook. See below.
+- Two pieces of prose disagreeing **with each other** — a comment that no
+  longer matches another comment, a docstring or a runbook — **where neither
+  party is the code**. Prose that disagrees with the CODE is the bullet above
+  and IS a finding. See below.
 - Anything the discussion has already answered or settled, per the untrusted-
   context rules above.
 
@@ -304,18 +308,39 @@ opened and says so on the pull request itself, with a reason code, far more
 accurately than you can. Any finding whose text says one of those things is
 removed before posting and counted against this review.
 
-**Two pieces of prose disagreeing is not a defect.** A finding has to be
-something that can change behavior, a control that does not hold, or a
-permission or exposure wider than it looks. A comment that contradicts another
-comment, a docstring, a README or a runbook is none of those: nothing executes
-it, nothing depends on it, and the only thing it can be fixed with is more
-prose. **A whole review whose only finding is of this kind is a failed review**
-— measured 2026-10-29, where the entire output was two boundary comments
-disagreeing with a `SUPERSEDED` note in the same file, and the correct output
-was the clean verdict.
+**Two pieces of prose disagreeing is not a defect — when BOTH parties are
+prose.** A finding has to be something that can change behavior, a control that
+does not hold, or a permission or exposure wider than it looks. A comment that
+contradicts another comment, a docstring or a runbook is none of those: nothing
+executes it, nothing depends on it, and the only thing it can be fixed with is
+more prose. **A whole review whose only finding is of this kind is a failed
+review** — measured 2026-10-29, where the entire output was two boundary
+comments disagreeing with a `SUPERSEDED` note in the same file, and the correct
+output was the clean verdict.
+
+**Name both parties before you drop anything. If either one is the CODE, it is
+a finding.** This rule has already over-fired once, and it cost more than it
+saved: on 2026-10-29 a narrower wording of it took two real findings out of a
+review — a `README` stating a set of alarms exists once per function for all
+four, in a change that made it five, and a file header stating there is no zip
+packaging, in the file that had just added zip packaging. Neither names a flag,
+a path or a knob, so neither survived the narrowing; both are prose against
+CODE, and both were worth reporting.
+
+> **This paragraph and the bullet it qualifies are UNVERIFIED, and knowingly
+> so.** The loss was measured — two consecutive runs of the same model on the
+> same diff, five findings then two — but the remedy is a change to
+> instruction text, and nothing in this repository can execute a prompt. There
+> is no fixture that passes because of these words and failed before them, and
+> the two reconstructed shapes pinned in `claude/test_review_output.sh` are
+> pins, not evidence: they pass identically either way. What IS verified by
+> that suite is the adjudicator's own prose rule, which is code — it was
+> deleting findings of exactly this shape after the model had reported them,
+> and that defect is fixed and tested. Treat the widening here as reasoning
+> about instruction text until two runs on a comparable diff say otherwise.
 
 The line is what a human does with the stale text. A runbook that tells the
-on-call to set an environment variable the image no longer reads, a README
+on-call to set an environment variable the image no longer reads, a `README`
 whose install command points at a branch that is gone, a comment that names the
 wrong bucket — those make somebody act wrongly, and each is a finding. Prose
 against prose, with no wrong action at the end of it, is not. **A finding of

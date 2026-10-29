@@ -30,7 +30,7 @@ docker run --rm \
 ## Key Workflows
 
 - **`linter.yaml`**: Reusable workflow wrapping super-linter v8.7.0
-- **`claude-pull-request-review.yaml`**: Automated Claude Code PR reviews using the prompt at `claude/pr-prompt-v2.md` and eight helper programs in `claude/`, six of them with a fixture suite run by `lint-repo.yaml` (`review_io.py` and `review-note` have none):
+- **`claude-pull-request-review.yaml`**: Automated Claude Code PR reviews using the prompt at `claude/pr-prompt-v2.md` and the helper programs in `claude/`. The fixture suites that cover them are listed in `lint-repo.yaml`; no count is restated here, because a restated count goes stale the next time a suite is added:
   - `filter_diff.py` assembles the review set. Every fact in the manifest comes from Git plumbing over the merge base to the PR head; `pulls/{n}/files` is used only as a second witness to the file list, and a disagreement aborts the run. Binary-ness is read from the blob with `git cat-file`, never from `.gitattributes`, which the PR under review owns
   - `pr_discussion.py` renders the PR's description and comment thread as untrusted context: a run-random fence, a `|` prefix, pipe then space, on every author line, covert channels removed and the removals declared
   - `review_coverage.py` measures which manifest rows the reviewer actually opened, from the run's own `stream-json` transcript rather than from anything the model says about itself
@@ -53,7 +53,29 @@ docker run --rm \
   - `review-git` is the reviewer's only route to Git history: `log`, `show` and `diff`, with the options that write a file or run a program named by the repository's own config refused and every path argument held inside the checkout. A wrapper rather than a `Bash(git log:*)` prefix, which bounds the start of the command string and nothing after it
   - `review-note` is where the reviewer puts what it checked and found clean, so that text reaches the job log and never the comment
   - `review_io.py` holds the file conventions the others share
-- The review **posts a new comment on every run and leaves every earlier one standing**, so each review sits at its own time and thread position and remains the permanent record of the commit it reviewed, which its body names in the anchor line. The previous review is still located -- by the token's runtime-resolved identity (GraphQL `viewer.databaseId`, since `GET /user` 403s for an installation token) plus the marker in the body -- but only so `previous_stats()` can compare this run against it; it is never written to. ~~Superseded: the review used to be ONE comment edited in place with `PATCH`~~, which kept GitHub's `userContentEdits` revision history but made every review render at the original comment's creation time and position, so a review written minutes ago displayed as weeks old above every later comment. ~~A delete-and-repost design was then tried~~ and rejected in turn, because it fixed the timestamp by destroying the record of earlier reviews. The cost of appending is one comment per push on a long-running pull request
+- The review **posts a new comment on every run and leaves every earlier one
+  standing**, so each review sits at its own time and thread position and
+  remains the permanent record of the commit it reviewed, which its body
+  names in the anchor line. The MOST RECENT previous review is still located
+  -- by the token's runtime-resolved identity (GraphQL `viewer.databaseId`,
+  since `GET /user` 403s for an installation token) plus the marker in the
+  body -- but only so `previous_stats()` can compare this run against it; it
+  is never written to. ~~An earlier version of this line said only "the
+  previous review", and the lookup it described took the LOWEST comment
+  id~~: correct while one comment was edited in place, and under append-only
+  it pinned every run on a pull request to the first review ever posted
+  there. Newest id now, and only a comment whose marker carries a review
+  lane (`lane=[ABC]`) -- a skip, error or cancellation notice is not a
+  baseline, because lane=T carries no `findings=` at all and lane=E carries
+  `findings=0`, which deaden the comparison in opposite directions.
+  ~~Superseded: the review used to be ONE comment edited
+  in place with `PATCH`~~, which kept GitHub's `userContentEdits` revision
+  history but made every review render at the original comment's creation
+  time and position, so a review written minutes ago displayed as weeks old
+  above every later comment. ~~A delete-and-repost design was then tried~~
+  and rejected in turn, because it fixed the timestamp by destroying the
+  record of earlier reviews. The cost of appending is one comment per push
+  on a long-running pull request
 - **`lint-repo.yaml`**: This repo's own linting configuration
 
 ## Claude Code Commands

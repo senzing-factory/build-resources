@@ -942,9 +942,11 @@ check "and is not reported as a regression" \
 check "nor annotated as one" \
   '0' "$(printf '%s\n' "$NOMARKER_LOG" | grep -c '^::warning::this review is longer' || true)"
 
-# The comparison the requirement names, made against the comment this run is
-# replacing -- which is where the previous measurement lives now that there
-# is one comment rather than one per push.
+# The comparison the requirement names, made against the MOST RECENT earlier
+# review -- which is where the previous measurement lives. Nothing is
+# replaced: the workflow appends a comment per push and selects the newest
+# `lane=[ABC]` one as the baseline, so what arrives here is always the run
+# immediately before this one.
 {
   printf '<!-- claude-review v3 lane=B findings=9 blockers=5 read=4/4 head=old -->\n'
   rep 200 x
@@ -971,6 +973,32 @@ check "a shorter run with more findings is not flagged" \
 orun main.json body_noprev.md m_noprev.env --previous absent.md > /dev/null
 check "no previous comment is not a regression" \
   '0' "$(metric_of "$REPO/m_noprev.env" REVIEW_REGRESSION)"
+
+# WHY THE WORKFLOW REFUSES A NOTICE AS A BASELINE, measured here rather than
+# asserted there: these two show what `previous_stats` does when handed one.
+# The selection itself is `test_review_workflow.sh`'s; this is the
+# consequence that makes it worth selecting correctly.
+#
+# NEITHER IS A DISCRIMINATING TEST -- both held before the 2026-10-29 fix
+# and after it, because nothing about this function changed. They are the
+# evidence for the eligibility rule, not for the change.
+{
+  printf '**The code review did not finish.**\n'
+  printf '<!-- claude-review v3 lane=T blockers=0 read=0/0 head=old -->\n'
+} > "$REPO/cancelled_previous.md"
+: > "$REPO/m_prev_cancel.env"
+orun main.json body_prev_cancel.md m_prev_cancel.env --previous cancelled_previous.md > /dev/null
+check "a cancellation notice as previous reads as no measurement at all" \
+  '-1' "$(metric_of "$REPO/m_prev_cancel.env" REVIEW_PREV_FINDINGS)"
+
+{
+  printf '**No reviewable changes.**\n'
+  printf '<!-- claude-review v3 lane=E findings=0 blockers=0 read=0/0 head=old -->\n'
+} > "$REPO/skip_previous.md"
+: > "$REPO/m_prev_skip.env"
+orun main.json body_prev_skip.md m_prev_skip.env --previous skip_previous.md > /dev/null
+check "and a skip notice reads as a review that found nothing" \
+  '0' "$(metric_of "$REPO/m_prev_skip.env" REVIEW_PREV_FINDINGS)"
 
 # ---------------------------------------------------------------------------
 # E -- FLAGS. A mistyped flag used to become its default silently, so
@@ -1476,13 +1504,18 @@ check "a corrupt manifest is fatal rather than silently accepted" \
 # Mechanism 13 -- the commit under review is RENDERED, not only marked
 # ---------------------------------------------------------------------------
 #
-# The comment is EDITED IN PLACE on every push, and GitHub renders an edited
-# comment at its ORIGINAL creation position and timestamp. Measured
+# ~~The comment is EDITED IN PLACE on every push~~, and GitHub renders an
+# edited comment at its ORIGINAL creation position and timestamp. Measured
 # 2026-10-29: a live review, updated at 16:13, displayed to every reader as
 # a comment dated sixteen days earlier -- and the commit it described was
 # recorded only inside the state marker, which is an HTML comment and
 # therefore invisible to every human reading the thread. "It doesn't look
 # tied to a commit" was exactly right.
+#
+# THAT IS WHY THE LINE EXISTS; IT IS NOT WHY IT STAYS. The edit-in-place
+# design is gone -- a new comment is posted per run -- so the timestamp is
+# honest now. A thread holds SEVERAL reviews at once instead, and each one
+# has to say which commit it describes.
 
 ANCHOR_SHA=0123456789abcdef0123456789abcdef01234567
 ( cd "$REPO" && python3 "$SCRIPT" --findings main.json --manifest manifest.tsv \
@@ -1567,7 +1600,7 @@ check "a head that is not a SHA is not linked" \
 # finding, so a lower tier that still prints does not answer it.
 
 jf prose.json '{"findings":[
-{"severity":"RISK","path":"src/auth.go","line":12,"message":"The boundary comment on <resource> (and the one near line 40) still says the deploy role reads the init report after deploy, which this PR marks SUPERSEDED at line 55, so the comments now contradict each other; add a one-line superseded note to both."}
+{"severity":"RISK","path":"src/auth.go","line":12,"message":"The boundary comment on <resource> (and the one near line 40) still says the caller reloads its configuration after start-up, which this PR marks SUPERSEDED at line 55, so the comments now contradict each other; add a one-line superseded note to both."}
 ]}'
 : > "$REPO/m_prose.env"
 PROSE_LOG=$(orun prose.json prose.md m_prose.env)
@@ -1675,6 +1708,112 @@ check "the rule does not read across a clause to find its second party" \
 check "and a repo-wide prose finding is judged, not skipped" \
   '0' "$(metric_of "$REPO/m_prose5.env" REVIEW_PROSE_REJECTED)"
 
+# THE TWO SHAPES THAT WERE ACTUALLY LOST. Measured 2026-10-29 on a consumer
+# repository: the same model on the same diff reported five findings at
+# 16:15 UTC and two at 18:01, the only difference between the runs being
+# this repository's own prompt. Two of the three that went missing were
+# documentation contradicted by CODE, and both are reconstructed here --
+# paraphrased, because this repository is public and that one is not, with
+# the grammar the rule actually reads left intact: the prose noun, the
+# disagreement verb or its absence, the second party, the consequence word.
+#
+# THEY WERE NEVER REJECTED HERE -- that run's marker reads `dropped=0`, and
+# `dropped=` carries RECORDED, which includes the prose count. The model did
+# not emit them, because the PROMPT had narrowed "documented behavior the
+# code no longer has" to "a flag, path or knob that no longer exists", and
+# neither of these is a flag, a path or a knob. One is a COUNT the change
+# invalidates; the other is PACKAGING a file denies using.
+#
+# THESE ARE PINS, NOT DISCRIMINATING TESTS, and saying so is the point.
+# Measured by mutation the same day: the first carries no disagreement verb
+# at all -- `still states` is not in DISAGREE -- so no widening of the
+# second-party logic reaches it; the second has one, but its only prose noun
+# opens a clause the rule cannot cross back into, and `wrong` vetoes it
+# besides. Neither could have been rejected here under any plausible edit,
+# which IS the finding: the rule in this file never touched them, and only
+# the prompt could have. They are kept so a future widening has to walk past
+# the shape it would be breaking.
+#
+# SO THEY ARE NOT EVIDENCE THAT THE PROMPT CHANGE WORKS, and must not be
+# read as any. They pass identically before and after it; nothing in this
+# repository can execute a prompt, so no fixture here can measure one. The
+# fixtures that DO discriminate for the 2026-10-29 work are in the block
+# below this one, and they test the REGEX, which is code. What the prompt
+# widening rests on is reasoning about instruction text -- see the same
+# statement in `claude/pr-prompt-v2.md`, next to the words it changed.
+jf prose_measured.json '{"findings":[
+{"severity":"BLOCKER","path":"src/auth.go","line":16,"message":"Adding the new entry creates a fifth set of error, throttle and latency alarms, but the module README still states they exist once per function for all four, and its table lists only the original three. Update that section and its table to cover the new function."},
+{"severity":"RISK","path":"src/auth.go","line":17,"message":"The file header still asserts that both functions here run the same image and that this is why there is no zip packaging, which the zip-packaged function added further down this same file contradicts, so the first thing a reader of this stack sees is wrong about how one of its functions is built. Rewrite the header to cover the exception."}
+]}'
+: > "$REPO/m_prose6.env"
+orun prose_measured.json prose_measured.md m_prose6.env > /dev/null
+check "a README contradicted by a count the change changes is kept" \
+  '2' "$(metric_of "$REPO/m_prose6.env" REVIEW_FINDINGS)"
+check "and neither measured shape is taken for a prose disagreement" \
+  '0' "$(metric_of "$REPO/m_prose6.env" REVIEW_PROSE_REJECTED)"
+
+# ---------------------------------------------------------------------------
+# THE RE-ANCHORING FALSE POSITIVES -- these DISCRIMINATE
+# ---------------------------------------------------------------------------
+#
+# Both were deleted by the rule before PROSE_PAIR became a `fullmatch`, and
+# both reach a clean verdict when they are: REVIEW_FINDINGS=0 with nothing
+# on the pull request saying so, because mechanism 14 is the one drop class
+# that is not disclosed. Run these two against the previous revision of
+# `review_output.py` and they report 0 findings and 2 prose rejections.
+#
+# WHY THEY MATCHED. `CLAUSE` bounds ONE match; it does not stop `re.search`
+# re-anchoring after a `;` or a `,` and matching a trailing prose-versus-
+# prose clause while the sentence's primary claim is about the code. The
+# first sentence's claim is a COUNT the change invalidates -- the shape
+# `pr-prompt-v2.md` promotes to a must-report finding -- and the trailing
+# "so the README is inconsistent with the inline documentation too" is what
+# the regex found. The second IS that file's canonical example of a finding
+# (`pr-prompt-v2.md`, "a flag, path or knob an operator would be sent to
+# that no longer exists"), and its consequence clause carries neither
+# `mislead` nor `wrong`, so PROSE_CONSEQUENCE did not save it.
+#
+# NEITHER IS FIXED BY VOCABULARY, which is why the fix is positional. A
+# third veto word would have covered these two sentences and not the next
+# two.
+jf prose_trailing.json '{"findings":[
+{"severity":"RISK","path":"src/auth.go","line":18,"message":"The README'"'"'s table lists three functions; the code adds a fourth, so the README is inconsistent with the inline documentation too."},
+{"severity":"RISK","path":"src/auth.go","line":19,"message":"The inline comment contradicts the docstring, which would send an operator to a flag that no longer exists."}
+]}'
+: > "$REPO/m_prose7.env"
+orun prose_trailing.json prose_trailing.md m_prose7.env > /dev/null
+check "a prose clause trailing a claim about code does not delete the finding" \
+  '2' "$(metric_of "$REPO/m_prose7.env" REVIEW_FINDINGS)"
+check "and neither is counted as a prose-only disagreement" \
+  '0' "$(metric_of "$REPO/m_prose7.env" REVIEW_PROSE_REJECTED)"
+# The half that would be invisible if it regressed: this class is NOT
+# disclosed, so a re-broken rule shows up on the pull request as a clean
+# verdict and nowhere else.
+check "and the comment names them rather than rendering clean" \
+  '2' "$(grep -c '^- ⚠️ \*\*RISK\*\* ' "$REPO/prose_trailing.md")"
+
+# ---------------------------------------------------------------------------
+# AND BRANCH 1 IS NARROWED, NOT SWITCHED OFF
+# ---------------------------------------------------------------------------
+#
+# The named-pair branch still drops when the disagreement IS the message --
+# no code party, no consequence, nowhere for either to be. Without this the
+# `fullmatch` could be replaced by `return False` and every assertion above
+# would still pass.
+#
+# NOT A DISCRIMINATING TEST, and it is here for coverage rather than as
+# evidence: it drops before the change as well as after. The two above are
+# the discriminating pair.
+jf prose_bare.json '{"findings":[
+{"severity":"RISK","path":"src/auth.go","line":20,"message":"The inline comment contradicts the docstring."}
+]}'
+: > "$REPO/m_prose8.env"
+orun prose_bare.json prose_bare.md m_prose8.env > /dev/null
+check "a message that is nothing but two pieces of prose disagreeing is dropped" \
+  '0' "$(metric_of "$REPO/m_prose8.env" REVIEW_FINDINGS)"
+check "and counted as one" \
+  '1' "$(metric_of "$REPO/m_prose8.env" REVIEW_PROSE_REJECTED)"
+
 # THE SEVERITY FLOOR, which is defence in depth and not the fix: a sentence
 # this rule WOULD drop keeps its finding when the model called it a BLOCKER.
 # The two errors are not symmetrical -- a prose nit called a BLOCKER is one
@@ -1682,7 +1821,7 @@ check "and a repo-wide prose finding is judged, not skipped" \
 # invisible. The message is the verbatim drop case above, which the
 # assertions at the top of this block prove the rule matches.
 jf prose_floor.json '{"findings":[
-{"severity":"BLOCKER","path":"src/auth.go","line":12,"message":"The boundary comment on <resource> (and the one near line 40) still says the deploy role reads the init report after deploy, which this PR marks SUPERSEDED at line 55, so the comments now contradict each other; add a one-line superseded note to both."}
+{"severity":"BLOCKER","path":"src/auth.go","line":12,"message":"The boundary comment on <resource> (and the one near line 40) still says the caller reloads its configuration after start-up, which this PR marks SUPERSEDED at line 55, so the comments now contradict each other; add a one-line superseded note to both."}
 ]}'
 : > "$REPO/m_prose4.env"
 orun prose_floor.json prose_floor.md m_prose4.env > /dev/null
