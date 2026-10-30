@@ -54,11 +54,13 @@
     "fpath",
     "frozenset",
     "fsmonitor",
+    "fullmatch",
     "ghaction",
     "gitignore",
     "gitlink",
     "gitlink's",
     "gitmodules",
+    "gmtime",
     "gofmt",
     "gpgsign",
     "ICLA",
@@ -81,6 +83,7 @@
     "mylib",
     "MYPY",
     "noblocks",
+    "nohead",
     "nolist",
     "nomarker",
     "nonobject",
@@ -141,7 +144,8 @@
     "unopenable",
     "unparseable",
     "urandom",
-    "vladopajic"
+    "vladopajic",
+    "zizmor"
   ],
   "ignorePaths": [".git/**"]
 }

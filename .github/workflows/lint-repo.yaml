@@ -27,7 +27,14 @@ jobs:
   # driver does not fire, not that a flag is spelled correctly.
   claude-helper-tests:
     runs-on: ubuntu-latest
-    # Six shell suites over local fixtures, no network: seconds in practice.
+    # Shell suites over local fixtures, no network: seconds in practice.
+    # NO COUNT HERE, DELIBERATELY. It said "Six" while the list below ran
+    # seven, which is the count-invalidation shape `claude/pr-prompt-v2.md`
+    # names as a must-report finding -- and it went stale in the same pull
+    # request that added the seventh. A sentence that has to be edited when
+    # a line is added below it will not be; the list IS the count, and
+    # `test_review_workflow.sh` reads that list off this file rather than
+    # restating it.
     timeout-minutes: 10
     permissions:
       contents: read
@@ -44,6 +51,7 @@ jobs:
           ./claude/test_review_git.sh
           ./claude/test_review_output.sh
           ./claude/test_review_text.sh
+          ./claude/test_review_workflow.sh
 
   lint-code-base:
     permissions:

@@ -1,0 +1,50 @@
+# actionlint configuration, read by super-linter as
+# `.github/linters/actionlint.yml`.
+#
+# THE EXTENSION MUST BE `.yml`. super-linter resolves this file as
+# `${LINTER_RULES_PATH}/${GITHUB_ACTIONS_CONFIG_FILE}`, and
+# `GITHUB_ACTIONS_CONFIG_FILE` defaults to `actionlint.yml` --
+# see `lib/globals/linterRules.sh` at tag `v8.7.0`. When the name does not
+# match, `GetLinterRules` does not fail: it falls back to the stock config
+# baked into the image, logs the fallback at DEBUG only, and actionlint runs
+# with none of the ignores below. The job then fails on the very errors this
+# file exists to suppress, while the file sits in the tree looking applied.
+# That is exactly what happened at `b1e9e3ff`, where this was `actionlint.yaml`.
+#
+# Note the sibling `zizmor.yaml` is spelled `.yaml` and is correct:
+# `GITHUB_ACTIONS_ZIZMOR_CONFIG_FILE` defaults to `zizmor.yaml`. The two
+# linters genuinely disagree about the extension. Do not "tidy" them to match.
+
+# SCOPED TO ONE FILE AND ONE MESSAGE, deliberately. The blanket form -- a
+# disabled `expression` rule, or `ignore` at the top level -- would also hide
+# every real typo'd context property in every other workflow here, and a
+# typo'd property evaluates to the empty string exactly like the defect this
+# entry exists for.
+paths:
+  .github/workflows/claude-pull-request-review.yaml:
+    ignore:
+      # actionlint 1.7.12 -- the version super-linter v8.7.0 pins -- PREDATES
+      # the `job` context's workflow-identity properties. Its `job` type is
+      # `{check_run_id, container, services, status}`, so it reports
+      # `job.workflow_sha` and `job.workflow_repository` as undefined. Both
+      # are real and documented; `job.workflow_sha` is the commit of the
+      # workflow file defining the job, which for a called reusable workflow
+      # is that workflow's own commit -- the one value that can pin the
+      # reviewer's helpers to the ref each caller asked for.
+      #
+      # READ THIS BEFORE WIDENING IT. The earlier attempt reached for
+      # `job_workflow_sha` on the GITHUB context, where it has never existed
+      # -- it is an OIDC claim, and the names collide. actionlint rejected
+      # that correctly, and it was silenced by laundering the property
+      # through `fromJSON(toJSON(github))`, which types as `any`. The
+      # expression then evaluated to the EMPTY STRING, `actions/checkout`
+      # omitted `ref:`, and the reviewer ran build-resources' default branch
+      # instead of the pinned ref -- measured 2026-10-29 across five runs at
+      # `@330-skern`, none of which executed the branch's helpers. An
+      # indirection hides a wrong name; this ignore does not, because it
+      # names the exact property it permits.
+      #
+      # Remove this file when super-linter ships an actionlint that knows
+      # the `job` context.
+      - 'property "workflow_sha" is not defined in object type'
+      - 'property "workflow_repository" is not defined in object type'

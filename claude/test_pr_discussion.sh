@@ -200,7 +200,38 @@ else
 
   check "the reviewer's own review is dropped from the thread" \
     '2,3,4' "$(kept 42)"
-  check "the same predicate finds the comment to edit" '1' "$(found 42)"
+  check "the same predicate matches the comment the fetch must drop" \
+    '1' "$(found 42)"
+
+  # THE BASELINE PREDICATE IS A STRICT SUBSET OF THIS ONE, and the two are
+  # not interchangeable. This file's subject is the WIDE predicate, because
+  # the fetch negates it and must drop every comment this reviewer ever
+  # writes -- skip, error and cancellation notices included, or the reviewer
+  # reads its own notices as third-party context. The lookup takes the
+  # narrow one, which admits only a review. Asserted together so a future
+  # edit that collapses them fails here as well as in
+  # `test_review_workflow.sh`.
+  BASELINE=$(sed -n "s/^ *REVIEW_BASELINE_JQ: '\(.*\)'\$/\1/p" "$WORKFLOW")
+  check "the baseline predicate is defined in the workflow" \
+    '1' "$([ -n "$BASELINE" ] && echo 1 || echo 0)"
+  baseline_found() { # baseline_found <viewer_id> -> the ids it matches
+    VIEWER_ID="$1" jq -r ".[] | select(${BASELINE}) | .id" \
+      "$WORK/comments.json" | paste -sd, -
+  }
+  check "and matches the review" '1' "$(baseline_found 42)"
+  # The notice lanes, which the fetch must still drop and the baseline must
+  # not take. Same author, same marker, different lane.
+  printf '%s\n' '[
+    {"id":1,"user":{"id":42},"body":"findings\n<!-- claude-review v3 lane=B findings=2 -->"},
+    {"id":5,"user":{"id":42},"body":"<!-- claude-review v3 lane=E findings=0 -->"},
+    {"id":6,"user":{"id":42},"body":"<!-- claude-review v3 lane=T blockers=0 -->"}
+  ]' > "$WORK/notices.json"
+  check "the fetch drops the reviewer's notices as well as its review" \
+    '' "$(VIEWER_ID=42 jq -r ".[] | select((${PREDICATE}) | not) | .id" \
+      "$WORK/notices.json" | paste -sd, -)"
+  check "and the baseline takes the review and neither notice" \
+    '1' "$(VIEWER_ID=42 jq -r ".[] | select(${BASELINE}) | .id" \
+      "$WORK/notices.json" | paste -sd, -)"
 
   # AN UNRESOLVED IDENTITY IS THE CASE THAT WAS BACKWARDS. With the leading
   # `VIEWER_ID != "" and` guard the predicate was false for every comment, so
@@ -220,7 +251,7 @@ else
       > /dev/null 2>&1 && echo 1 || echo 0)"
 
   # THE LOOKUP'S GUARD IS IN SHELL, not in the predicate, because a body
-  # can be forged and the comment-to-EDIT search must not run at
+  # can be forged and the baseline search must not run at
   # all on an unresolved identity. The predicate alone WOULD match by body --
   # asserted here so that what the suite depends on is the guard, not a
   # property of the expression.
@@ -228,7 +259,7 @@ else
     '1,3' "$(found '')"
   # SC2016: the pattern is the workflow's literal shell, not an expansion.
   # shellcheck disable=SC2016
-  LOOKUP_LINE=$(grep -n 'REVIEW_COMMENT_JQ}) | .id' "$WORKFLOW" | cut -d: -f1)
+  LOOKUP_LINE=$(grep -n 'REVIEW_BASELINE_JQ}) | .id' "$WORKFLOW" | cut -d: -f1)
   # Guarded because the window below is `$((LOOKUP_LINE - 8))`: an empty
   # LOOKUP_LINE makes that `-8`, and sed errors out instead of the check
   # failing with something a reader can act on. The -8 is tied to the

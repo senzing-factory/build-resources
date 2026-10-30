@@ -56,6 +56,15 @@
 # shellcheck disable=SC2016
 set -euo pipefail
 
+# HERMETIC AGAINST THE ONE VARIABLE THAT CHANGES THE OUTPUT. `anchor` reads
+# `GITHUB_REPOSITORY` to decide whether the commit renders as a link, and a
+# GitHub runner sets it on every job while a developer's shell does not. Left
+# inherited, four Mechanism 13 assertions pass locally and fail in CI against
+# a correct program -- measured on this suite, 2026-10-29. The fixtures that
+# want the link set it themselves; everything else must see it absent, so the
+# absence is declared here rather than assumed.
+unset GITHUB_REPOSITORY
+
 HERE=$(cd "$(dirname "$0")" && pwd)
 SCRIPT="$HERE/review_output.py"
 SCHEMA="$HERE/review-schema.json"
@@ -230,9 +239,9 @@ check "and it is logged with a reason code from the manifest row" \
 check "a line past the end of the file loses its line number" \
   '0' "$(grep -c 'src/auth.go:9999' "$BODY" || true)"
 check "and its severity drops to RISK" \
-  '1' "$(grep -c '^- \*\*RISK\*\* `src/auth.go` — Possible nil dereference' "$BODY")"
+  '1' "$(grep -c '^- ⚠️ \*\*RISK\*\* `src/auth.go` — Possible nil dereference' "$BODY")"
 check "a resolvable anchor keeps BLOCKER and its line" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/auth.go:12` — Unvalidated input' "$BODY")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/auth.go:12` — Unvalidated input' "$BODY")"
 check "the downgrade is counted" \
   '1' "$(metric_of "$REPO/metrics.env" REVIEW_ANCHOR_DOWNGRADED)"
 
@@ -306,7 +315,7 @@ jf collide.json '{"findings":[
 : > "$REPO/m_collide.env"
 orun collide.json collide.md m_collide.env > /dev/null
 check "a finding about what the CODE cannot see is not blindness" \
-  '2' "$(grep -c '^- \*\*BLOCKER\*\*' "$REPO/collide.md")"
+  '2' "$(grep -c '^- ❌ \*\*BLOCKER\*\*' "$REPO/collide.md")"
 check "and nothing is rerouted to coverage" \
   '0' "$(metric_of "$REPO/m_collide.env" REVIEW_BLIND_REROUTED)"
 
@@ -331,7 +340,7 @@ jf symptom.json '{"findings":[
 : > "$REPO/m_symptom.env"
 orun symptom.json symptom.md m_symptom.env > /dev/null
 check "a subject-less defect report is not blindness" \
-  '2' "$(grep -c '^- \*\*BLOCKER\*\*' "$REPO/symptom.md")"
+  '2' "$(grep -c '^- ❌ \*\*BLOCKER\*\*' "$REPO/symptom.md")"
 check "and neither is rerouted to coverage" \
   '0' "$(metric_of "$REPO/m_symptom.env" REVIEW_BLIND_REROUTED)"
 
@@ -388,7 +397,7 @@ jf pair.json '{"findings":[
 : > "$REPO/m_pair.env"
 orun pair.json pair.md m_pair.env > /dev/null
 check "both halves of the pair reach the comment" \
-  '2' "$(grep -c '^- \*\*RISK\*\* `src/missing.go` ' "$REPO/pair.md")"
+  '2' "$(grep -c '^- ⚠️ \*\*RISK\*\* `src/missing.go` ' "$REPO/pair.md")"
 check "neither is dropped as padding" \
   '0' "$(metric_of "$REPO/m_pair.env" REVIEW_PADDING_REJECTED)"
 check "both are downgraded by the anchor rule instead" \
@@ -412,7 +421,7 @@ jf scope.json '{"findings":[
 : > "$REPO/m_scope.env"
 orun scope.json scope.md m_scope.env > /dev/null
 check "a defect worded 'should be updated' survives, downgraded not deleted" \
-  '1' "$(grep -c '^- \*\*RISK\*\* `src/missing.go` — The timeout should be updated' "$REPO/scope.md")"
+  '1' "$(grep -c '^- ⚠️ \*\*RISK\*\* `src/missing.go` — The timeout should be updated' "$REPO/scope.md")"
 check "the same wording about an artefact still is padding" \
   '0' "$(grep -c 'CHANGELOG' "$REPO/scope.md" || true)"
 check "so exactly one of the pair is rejected as padding" \
@@ -429,7 +438,7 @@ jf added.json '{"findings":[
 : > "$REPO/m_added.env"
 orun added.json added.md m_added.env > /dev/null
 check "a convention finding about a file this pull request adds survives" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/new.go`' "$REPO/added.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/new.go`' "$REPO/added.md")"
 check "and nothing about it is counted as padding" \
   '0' "$(metric_of "$REPO/m_added.env" REVIEW_PADDING_REJECTED)"
 
@@ -451,11 +460,11 @@ jf dotfile.json '{"findings":[
 : > "$REPO/m_dot.env"
 orun dotfile.json dotfile.md m_dot.env > /dev/null
 check "a dotfile anchor keeps BLOCKER, its leading dot and its line number" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `\.github/workflows/ci\.yaml:2` ' "$REPO/dotfile.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `\.github/workflows/ci\.yaml:2` ' "$REPO/dotfile.md")"
 check "the mangled path never reaches the comment" \
   '0' "$(grep -c '`github/workflows' "$REPO/dotfile.md" || true)"
 check "an extensionless dotfile keeps its dot, and its severity" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `\.gitignore` ' "$REPO/dotfile.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `\.gitignore` ' "$REPO/dotfile.md")"
 check "and neither is downgraded" \
   '0' "$(metric_of "$REPO/m_dot.env" REVIEW_ANCHOR_DOWNGRADED)"
 
@@ -513,9 +522,9 @@ orun a1.json a1.md m_a1.env > /dev/null
 check "a newline in a message does not cost the finding" \
   '1' "$(metric_of "$REPO/m_a1.env" REVIEW_FINDINGS)"
 check "the newline renders as a single space on one bullet" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/auth.go:12` — The query builder takes unvalidated input\. Validate it before the call\.$' "$REPO/a1.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/auth.go:12` — The query builder takes unvalidated input\. Validate it before the call\.$' "$REPO/a1.md")"
 check "and the body carries exactly that one bullet" \
-  '1' "$(grep -c '^- \*\*' "$REPO/a1.md")"
+  '1' "$(grep -c '^- [^ ]* \*\*' "$REPO/a1.md")"
 check "the collapse is counted" \
   '1' "$(metric_of "$REPO/m_a1.env" REVIEW_MESSAGE_NORMALISED)"
 check "collapsing is not a refusal" \
@@ -530,7 +539,7 @@ jf a2.json '{"findings":[
 : > "$REPO/m_a2.env"
 orun a2.json a2.md m_a2.env > /dev/null
 check "a carriage return, a tab and a NUL are collapsed, not refused" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/auth.go:12` — carriage return tab nul and runs collapse\.$' "$REPO/a2.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/auth.go:12` — carriage return tab nul and runs collapse\.$' "$REPO/a2.md")"
 check "that collapse is counted too" \
   '1' "$(metric_of "$REPO/m_a2.env" REVIEW_MESSAGE_NORMALISED)"
 check "and it is still not a refusal" \
@@ -550,7 +559,7 @@ check "a message of nothing but control characters is rejected by the schema che
 check "and is NOT counted as unsafe text" \
   '0' "$(metric_of "$REPO/m_a3.env" REVIEW_UNSAFE_REJECTED)"
 check "nothing of it reaches the comment" \
-  '0' "$(grep -c '^- \*\*' "$REPO/a3.md" || true)"
+  '0' "$(grep -c '^- [^ ]* \*\*' "$REPO/a3.md" || true)"
 
 # A4. THE ATTACK DOES NOT NEED A NEWLINE. The state marker is an HTML
 # comment and `previous_stats` parses it, so a marker forged inline in a
@@ -607,7 +616,7 @@ orun a7.json a7.md m_a7.env > /dev/null
 check "a newline in the path refuses the finding" \
   '1' "$(metric_of "$REPO/m_a7.env" REVIEW_UNSAFE_REJECTED)"
 check "and the comment carries no bullet for it" \
-  '0' "$(grep -c '^- \*\*' "$REPO/a7.md" || true)"
+  '0' "$(grep -c '^- [^ ]* \*\*' "$REPO/a7.md" || true)"
 
 # A8. THE BULLET-INJECTION DOCUMENT, which is what the newline collapse is
 # bought against. A cold review used one newline to add a sixth
@@ -620,7 +629,7 @@ jf a8.json '{"findings":[
 ]}'
 : > "$REPO/m_a8.env"
 orun a8.json a8.md m_a8.env > /dev/null
-A8_BULLETS=$(grep -c '^- \*\*' "$REPO/a8.md")
+A8_BULLETS=$(grep -c '^- [^ ]* \*\*' "$REPO/a8.md")
 check "the forged bullet does not become a bullet" '2' "$A8_BULLETS"
 check "the header counts exactly the bullets in the body" \
   "$A8_BULLETS" "$(sed -n 's/^\*\*\([0-9]*\) finding.*/\1/p' "$REPO/a8.md")"
@@ -629,7 +638,7 @@ check "the marker counts exactly the bullets in the body" \
 check "and REVIEW_FINDINGS agrees with both" \
   "$A8_BULLETS" "$(metric_of "$REPO/m_a8.env" REVIEW_FINDINGS)"
 check "the forged bullet survives as text inside the real one" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/auth.go:12` — real\. - \*\*BLOCKER\*\* `x` — forged more$' "$REPO/a8.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/auth.go:12` — real\. - \*\*BLOCKER\*\* `x` — forged more$' "$REPO/a8.md")"
 
 # A9/A10/A11. The mixed document: three findings the reviewer meant, two
 # that would forge the comment's structure. The refusals must be DISCLOSED
@@ -646,7 +655,7 @@ jf mixed.json '{"findings":[
 : > "$REPO/m_mixed.env"
 orun mixed.json mixed.md m_mixed.env > /dev/null
 check "only the findings that were not refused reach the comment" \
-  '3' "$(grep -c '^- \*\*' "$REPO/mixed.md")"
+  '3' "$(grep -c '^- [^ ]* \*\*' "$REPO/mixed.md")"
 check "the header says three, not five" \
   '1' "$(grep -c '^\*\*3 findings in the 4 of 4 files opened\*\* — 1 blocker, 2 risks\.$' "$REPO/mixed.md")"
 check "both refusals are counted" \
@@ -750,7 +759,7 @@ jf c_last.json '{"findings":[
 : > "$REPO/m_clast.env"
 crun c_last.json c_last.md m_clast.env > /dev/null
 check "the last line of a newline-terminated file is a valid anchor" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/three.txt:3` ' "$REPO/c_last.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/three.txt:3` ' "$REPO/c_last.md")"
 check "and nothing is downgraded" \
   '0' "$(metric_of "$REPO/m_clast.env" REVIEW_ANCHOR_DOWNGRADED)"
 
@@ -760,7 +769,7 @@ jf c_past.json '{"findings":[
 : > "$REPO/m_cpast.env"
 crun c_past.json c_past.md m_cpast.env > /dev/null
 check "the phantom line after the terminator is not a valid anchor" \
-  '1' "$(grep -c '^- \*\*RISK\*\* `src/three.txt` ' "$REPO/c_past.md")"
+  '1' "$(grep -c '^- ⚠️ \*\*RISK\*\* `src/three.txt` ' "$REPO/c_past.md")"
 check "the downgrade drops the number as well as the severity" \
   '0' "$(grep -c 'src/three.txt:' "$REPO/c_past.md" || true)"
 check "and it is counted" \
@@ -775,7 +784,7 @@ jf c_nt.json '{"findings":[
 : > "$REPO/m_cnt.env"
 crun c_nt.json c_nt.md m_cnt.env > /dev/null
 check "an unterminated last line is still a line" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/notrail.txt:3` ' "$REPO/c_nt.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/notrail.txt:3` ' "$REPO/c_nt.md")"
 check "and nothing is downgraded for it" \
   '0' "$(metric_of "$REPO/m_cnt.env" REVIEW_ANCHOR_DOWNGRADED)"
 
@@ -797,7 +806,7 @@ crun c_empty.json c_empty.md m_cempty.env > /dev/null
 check "line 1 of an empty file is not a valid anchor" \
   '1' "$(metric_of "$REPO/m_cempty.env" REVIEW_ANCHOR_DOWNGRADED)"
 check "and the finding posts as a RISK with no line" \
-  '1' "$(grep -c '^- \*\*RISK\*\* `src/empty.txt` ' "$REPO/c_empty.md")"
+  '1' "$(grep -c '^- ⚠️ \*\*RISK\*\* `src/empty.txt` ' "$REPO/c_empty.md")"
 
 # C19 -- `line: 0` is the schema's "not line-specific", so there is no
 # anchor to resolve and nothing to downgrade. Treating it as unresolvable
@@ -808,7 +817,7 @@ jf c_zero.json '{"findings":[
 : > "$REPO/m_czero.env"
 crun c_zero.json c_zero.md m_czero.env > /dev/null
 check "line 0 keeps BLOCKER even where no line could resolve" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/empty.txt` ' "$REPO/c_zero.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/empty.txt` ' "$REPO/c_zero.md")"
 check "and is not counted as an unresolvable anchor" \
   '0' "$(metric_of "$REPO/m_czero.env" REVIEW_ANCHOR_DOWNGRADED)"
 
@@ -822,7 +831,7 @@ crun c_gone.json c_gone.md m_cgone.env > /dev/null
 check "an anchor in a file that cannot be read is downgraded" \
   '1' "$(metric_of "$REPO/m_cgone.env" REVIEW_ANCHOR_DOWNGRADED)"
 check "and posts as a RISK with no line number" \
-  '1' "$(grep -c '^- \*\*RISK\*\* `src/gone.go` ' "$REPO/c_gone.md")"
+  '1' "$(grep -c '^- ⚠️ \*\*RISK\*\* `src/gone.go` ' "$REPO/c_gone.md")"
 
 # The traversal guard is explicit rather than an accident of the dots being
 # eaten. `known` already bounds the caller to manifest and base paths; this
@@ -876,7 +885,7 @@ jf c_link.json '{"findings":[
   --head abc --lane B --coverage-read 3 --coverage-total 3 ) > /dev/null \
   || printf 'the adjudicator did not finish\n' > "$REPO/c_link.md"
 check "a finding on a symlink posts as a RISK with no line number" \
-  '1' "$(grep -c '^- \*\*RISK\*\* `src/alias.txt` — The alias points at the retired path' "$REPO/c_link.md" || true)"
+  '1' "$(grep -c '^- ⚠️ \*\*RISK\*\* `src/alias.txt` — The alias points at the retired path' "$REPO/c_link.md" || true)"
 check "and is counted as an unresolvable anchor" \
   '1' "$(metric_of "$REPO/m_clink.env" REVIEW_ANCHOR_DOWNGRADED || true)"
 
@@ -895,7 +904,7 @@ jf wide.json '{"findings":[
 : > "$REPO/m_wide.env"
 orun wide.json wide.md m_wide.env > /dev/null
 check "a repo-wide finding keeps BLOCKER" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `-` ' "$REPO/wide.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `-` ' "$REPO/wide.md")"
 check "and is not counted as an unresolvable anchor" \
   '0' "$(metric_of "$REPO/m_wide.env" REVIEW_ANCHOR_DOWNGRADED)"
 
@@ -933,9 +942,11 @@ check "and is not reported as a regression" \
 check "nor annotated as one" \
   '0' "$(printf '%s\n' "$NOMARKER_LOG" | grep -c '^::warning::this review is longer' || true)"
 
-# The comparison the requirement names, made against the comment this run is
-# replacing -- which is where the previous measurement lives now that there
-# is one comment rather than one per push.
+# The comparison the requirement names, made against the MOST RECENT earlier
+# review -- which is where the previous measurement lives. Nothing is
+# replaced: the workflow appends a comment per push and selects the newest
+# `lane=[ABC]` one as the baseline, so what arrives here is always the run
+# immediately before this one.
 {
   printf '<!-- claude-review v3 lane=B findings=9 blockers=5 read=4/4 head=old -->\n'
   rep 200 x
@@ -962,6 +973,32 @@ check "a shorter run with more findings is not flagged" \
 orun main.json body_noprev.md m_noprev.env --previous absent.md > /dev/null
 check "no previous comment is not a regression" \
   '0' "$(metric_of "$REPO/m_noprev.env" REVIEW_REGRESSION)"
+
+# WHY THE WORKFLOW REFUSES A NOTICE AS A BASELINE, measured here rather than
+# asserted there: these two show what `previous_stats` does when handed one.
+# The selection itself is `test_review_workflow.sh`'s; this is the
+# consequence that makes it worth selecting correctly.
+#
+# NEITHER IS A DISCRIMINATING TEST -- both held before the 2026-10-29 fix
+# and after it, because nothing about this function changed. They are the
+# evidence for the eligibility rule, not for the change.
+{
+  printf '**The code review did not finish.**\n'
+  printf '<!-- claude-review v3 lane=T blockers=0 read=0/0 head=old -->\n'
+} > "$REPO/cancelled_previous.md"
+: > "$REPO/m_prev_cancel.env"
+orun main.json body_prev_cancel.md m_prev_cancel.env --previous cancelled_previous.md > /dev/null
+check "a cancellation notice as previous reads as no measurement at all" \
+  '-1' "$(metric_of "$REPO/m_prev_cancel.env" REVIEW_PREV_FINDINGS)"
+
+{
+  printf '**No reviewable changes.**\n'
+  printf '<!-- claude-review v3 lane=E findings=0 blockers=0 read=0/0 head=old -->\n'
+} > "$REPO/skip_previous.md"
+: > "$REPO/m_prev_skip.env"
+orun main.json body_prev_skip.md m_prev_skip.env --previous skip_previous.md > /dev/null
+check "and a skip notice reads as a review that found nothing" \
+  '0' "$(metric_of "$REPO/m_prev_skip.env" REVIEW_PREV_FINDINGS)"
 
 # ---------------------------------------------------------------------------
 # E -- FLAGS. A mistyped flag used to become its default silently, so
@@ -1047,7 +1084,7 @@ jf clean.json '{"findings":[]}'
 : > "$REPO/m_clean.env"
 orun clean.json clean.md m_clean.env --summary '4 files, +41/-0.' > /dev/null
 check "an empty findings array is the clean verdict" \
-  '1' "$(grep -c '^\*\*No blocking findings in the 4 of 4 files opened\.\*\* 4 files, +41/-0\.$' "$REPO/clean.md")"
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 4 of 4 files opened\.\*\* 4 files, +41/-0\.$' "$REPO/clean.md")"
 check "a clean review still carries a marker" \
   '1' "$(grep -c 'findings=0 blockers=0' "$REPO/clean.md")"
 check "an explicit clean verdict is not flagged as missing" \
@@ -1060,8 +1097,8 @@ check "REVIEW_UNSAFE_REJECTED is written on a clean run" \
   '1' "$(grep -c '^REVIEW_UNSAFE_REJECTED=0$' "$REPO/m_clean.env")"
 check "REVIEW_MESSAGE_NORMALISED is written on a clean run" \
   '1' "$(grep -c '^REVIEW_MESSAGE_NORMALISED=0$' "$REPO/m_clean.env")"
-check "and so is every other one, eighteen in all" \
-  '18' "$(grep -c '^REVIEW_' "$REPO/m_clean.env")"
+check "and so is every other one, nineteen in all" \
+  '19' "$(grep -c '^REVIEW_' "$REPO/m_clean.env")"
 
 # A findings file that is not there at all. `load`'s early returns all carry
 # the same three-element shape; one of them returning a bare 0 for the count
@@ -1134,7 +1171,7 @@ check "and the document was adjudicated, so it is not a missing verdict" \
   --base "$BASE" --out thin.md --head abc --lane C \
   --coverage-read 2 --coverage-total 40 --summary '40 files, +6654/-724.' > /dev/null )
 check "the clean headline names how much was opened" \
-  '1' "$(grep -c '^\*\*No blocking findings in the 2 of 40 files opened\.\*\* 40 files, +6654/-724\.$' "$REPO/thin.md")"
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 2 of 40 files opened\.\*\* 40 files, +6654/-724\.$' "$REPO/thin.md")"
 check "and the marker carries the same measurement" \
   '1' "$(grep -c 'findings=0 blockers=0 dropped=0 read=2/40 ' "$REPO/thin.md")"
 
@@ -1146,7 +1183,7 @@ check "and the marker carries the same measurement" \
   --coverage-read unmeasured --coverage-total unmeasured \
   --summary '40 files, +6654/-724.' > /dev/null )
 check "the unmeasured token does not render as a count" \
-  '1' "$(grep -c '^\*\*No blocking findings (review coverage unmeasured)\.\*\* 40 files, +6654/-724\.$' "$REPO/unmeasured.md")"
+  '1' "$(grep -c '^✅ \*\*No blocking findings (review coverage unmeasured)\.\*\* 40 files, +6654/-724\.$' "$REPO/unmeasured.md")"
 check "and it reaches the marker unchanged" \
   '1' "$(grep -c 'read=unmeasured/unmeasured ' "$REPO/unmeasured.md")"
 
@@ -1170,9 +1207,9 @@ check "and it reaches the marker unchanged" \
 : > "$REPO/m_many.env"
 orun many.json many.md m_many.env > /dev/null
 check "at most five findings reach the comment" \
-  '5' "$(grep -c '^- \*\*' "$REPO/many.md")"
+  '5' "$(grep -c '^- [^ ]* \*\*' "$REPO/many.md")"
 check "blockers are kept before risks" \
-  '4' "$(grep -c '^- \*\*BLOCKER\*\*' "$REPO/many.md")"
+  '4' "$(grep -c '^- ❌ \*\*BLOCKER\*\*' "$REPO/many.md")"
 # The FINDING_LIMIT overflow. `rank` discarded findings 6..N with no number
 # anywhere: the comment, the header and the metrics all said five.
 check "the findings past the cap are counted" \
@@ -1198,7 +1235,7 @@ printf 'Files the reviewer did not open\t%s\n' "$(rep 1900 f)" \
   > "$REPO/big_sections.tsv"
 : > "$REPO/m_fat.env"
 orun fat.json trim.md m_fat.env --sections big_sections.tsv > /dev/null
-TRIM_LINES=$(grep -c '^- \*\*' "$REPO/trim.md")
+TRIM_LINES=$(grep -c '^- [^ ]* \*\*' "$REPO/trim.md")
 check "the body limit bit, so this fixture tests what it says it does" \
   '1' "$([ "$TRIM_LINES" -lt 5 ] && echo 1 || echo 0)"
 check "the comment is inside the body limit" \
@@ -1252,14 +1289,14 @@ jf dup.json '{"findings":[
 : > "$REPO/m_dup.env"
 orun dup.json dup.md m_dup.env > /dev/null
 check "the same sentence twice reaches the comment once" \
-  '1' "$(grep -c '^- \*\*' "$REPO/dup.md")"
+  '1' "$(grep -c '^- [^ ]* \*\*' "$REPO/dup.md")"
 check "and the collapse is counted" \
   '1' "$(metric_of "$REPO/m_dup.env" REVIEW_DUPLICATES)"
 # HIGHEST severity, not the first one seen: the RISK is the representative
 # here, so a collapse that kept its severity would turn a BLOCKER into a
 # RISK -- the one direction this program must never move a finding.
 check "the group keeps the highest severity of its members" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `README.md` ' "$REPO/dup.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `README.md` ' "$REPO/dup.md")"
 # A COLLAPSE IS NOT A DROP. The surviving copy carries the text, so the drop
 # row must not claim a withholding and the marker must not count one.
 check "the collapse is disclosed as a duplicate, not as a drop" \
@@ -1280,7 +1317,7 @@ jf distinct.json '{"findings":[
 : > "$REPO/m_distinct.env"
 orun distinct.json distinct.md m_distinct.env > /dev/null
 check "two distinct findings about one file are not collapsed" \
-  '2' "$(grep -c '^- \*\*BLOCKER\*\*' "$REPO/distinct.md")"
+  '2' "$(grep -c '^- ❌ \*\*BLOCKER\*\*' "$REPO/distinct.md")"
 check "and nothing is counted as a duplicate" \
   '0' "$(metric_of "$REPO/m_distinct.env" REVIEW_DUPLICATES)"
 
@@ -1295,7 +1332,7 @@ jf lines.json '{"findings":[
 : > "$REPO/m_lines.env"
 orun lines.json lines2.md m_lines.env > /dev/null
 check "identical wording at two different lines stays two findings" \
-  '2' "$(grep -c '^- \*\*BLOCKER\*\*' "$REPO/lines2.md")"
+  '2' "$(grep -c '^- ❌ \*\*BLOCKER\*\*' "$REPO/lines2.md")"
 check "and neither is counted as a duplicate" \
   '0' "$(metric_of "$REPO/m_lines.env" REVIEW_DUPLICATES)"
 
@@ -1306,7 +1343,7 @@ jf downgraded_pair.json '{"findings":[
 : > "$REPO/m_dpair.env"
 orun downgraded_pair.json dpair.md m_dpair.env > /dev/null
 check "two downgraded findings at different lines are still two" \
-  '2' "$(grep -c '^- \*\*RISK\*\*' "$REPO/dpair.md")"
+  '2' "$(grep -c '^- ⚠️ \*\*RISK\*\*' "$REPO/dpair.md")"
 check "zeroing the rendered line does not make them duplicates" \
   '0' "$(metric_of "$REPO/m_dpair.env" REVIEW_DUPLICATES)"
 
@@ -1319,7 +1356,7 @@ jf wide2.json '{"findings":[
 : > "$REPO/m_wide2.env"
 orun wide2.json wide2.md m_wide2.env > /dev/null
 check "two repo-wide findings are not collapsed into one" \
-  '2' "$(grep -c '^- \*\*BLOCKER\*\* `-`' "$REPO/wide2.md")"
+  '2' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `-`' "$REPO/wide2.md")"
 
 # DE-DUPLICATION MUST NEVER EMPTY THE LIST. Three copies of one claim
 # collapse to ONE, never to none, and the comment must not become a clean
@@ -1332,7 +1369,7 @@ jf triple.json '{"findings":[
 : > "$REPO/m_triple.env"
 orun triple.json triple.md m_triple.env --summary '4 files, +41/-0.' > /dev/null
 check "three copies of one claim collapse to exactly one" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\*' "$REPO/triple.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\*' "$REPO/triple.md")"
 check "two collapses are counted, not three" \
   '2' "$(metric_of "$REPO/m_triple.env" REVIEW_DUPLICATES)"
 check "and the comment is not a clean verdict" \
@@ -1361,7 +1398,7 @@ check "it is counted under its own reason code" \
 check "and the drop reaches the pull request with that reason" \
   '1' "$(grep -c "^1 self-disclaiming (its own text says there is nothing to flag)$" "$REPO/disclaim.md")"
 check "a real finding built on a negation is not eaten with it" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/auth.go:12` — This does not validate the input' "$REPO/disclaim.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/auth.go:12` — This does not validate the input' "$REPO/disclaim.md")"
 check "so exactly one of the pair survives" \
   '1' "$(metric_of "$REPO/m_disclaim.env" REVIEW_FINDINGS)"
 
@@ -1375,7 +1412,7 @@ jf disclaim2.json '{"findings":[
 : > "$REPO/m_disclaim2.env"
 orun disclaim2.json disclaim2.md m_disclaim2.env > /dev/null
 check "a finding whose subject is the code keeps its generic verb" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `src/auth.go:12` — The retry loop has nothing to change' "$REPO/disclaim2.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/auth.go:12` — The retry loop has nothing to change' "$REPO/disclaim2.md")"
 check "the same verb about the review is still dropped" \
   '0' "$(grep -c 'I read the whole file' "$REPO/disclaim2.md" || true)"
 check "exactly one of that pair survives too" \
@@ -1418,13 +1455,13 @@ rrun() { # rrun <out> <metrics> [extra args...] -> stdout, against restored.tsv
 : > "$REPO/m_norestore.env"
 rrun norestore.md m_norestore.env > /dev/null
 check "without --restored the finding is demoted, which is the defect" \
-  '1' "$(grep -c '^- \*\*RISK\*\* `\.claude/agents/x\.md` ' "$REPO/norestore.md")"
+  '1' "$(grep -c '^- ⚠️ \*\*RISK\*\* `\.claude/agents/x\.md` ' "$REPO/norestore.md")"
 
 : > "$REPO/m_restored.env"
 rrun restored.md m_restored.env \
   --restored '.claude CLAUDE.md .ripgreprc .gitmodules .husky' > /dev/null
 check "a finding in a restored path keeps BLOCKER" \
-  '1' "$(grep -c '^- \*\*BLOCKER\*\* `\.claude/agents/x\.md:40` ' "$REPO/restored.md")"
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `\.claude/agents/x\.md:40` ' "$REPO/restored.md")"
 check "and is not counted as an unresolvable anchor" \
   '0' "$(metric_of "$REPO/m_restored.env" REVIEW_ANCHOR_DOWNGRADED)"
 check "the unchecked anchor is counted instead" \
@@ -1462,6 +1499,383 @@ BAD_STATUS=$?
 set -e
 check "a corrupt manifest is fatal rather than silently accepted" \
   '1' "$([ "$BAD_STATUS" -ne 0 ] && echo 1 || echo 0)"
+
+# ---------------------------------------------------------------------------
+# Mechanism 13 -- the commit under review is RENDERED, not only marked
+# ---------------------------------------------------------------------------
+#
+# ~~The comment is EDITED IN PLACE on every push~~, and GitHub renders an
+# edited comment at its ORIGINAL creation position and timestamp. Measured
+# 2026-10-29: a live review, updated at 16:13, displayed to every reader as
+# a comment dated sixteen days earlier -- and the commit it described was
+# recorded only inside the state marker, which is an HTML comment and
+# therefore invisible to every human reading the thread. "It doesn't look
+# tied to a commit" was exactly right.
+#
+# THAT IS WHY THE LINE EXISTS; IT IS NOT WHY IT STAYS. The edit-in-place
+# design is gone -- a new comment is posted per run -- so the timestamp is
+# honest now. A thread holds SEVERAL reviews at once instead, and each one
+# has to say which commit it describes.
+
+ANCHOR_SHA=0123456789abcdef0123456789abcdef01234567
+( cd "$REPO" && python3 "$SCRIPT" --findings main.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored.md --head "$ANCHOR_SHA" --lane B \
+  --coverage-read 3 --coverage-total 4 > /dev/null )
+check "the rendered body names the commit the review describes" \
+  '1' "$(grep -c '^Reviewed `0123456` at ' "$REPO/anchored.md")"
+check "the anchor carries a UTC timestamp to the minute" \
+  '1' "$(grep -c '^Reviewed `[0-9a-f]\{7\}` at [0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\} [0-9]\{2\}:[0-9]\{2\} UTC\.$' \
+    "$REPO/anchored.md")"
+
+# ONE SOURCE, TWO RENDERINGS. If the visible line and the marker could be
+# resolved separately they could disagree, and the invisible one is the one
+# that would stay right.
+ANCHOR_VISIBLE=$(sed -n 's/^Reviewed .*`\([0-9a-f]*\)`.* at .*/\1/p' "$REPO/anchored.md")
+ANCHOR_MARKED=$(sed -n 's/.*head=\([0-9a-f]*\) -->.*/\1/p' "$REPO/anchored.md")
+check "the visible commit is the marker's head, truncated to seven" \
+  '0123456 0123456' \
+  "$ANCHOR_VISIBLE $(printf '%s' "$ANCHOR_MARKED" | cut -c1-7)"
+
+# Directly beneath the headline, not at the foot: it answers the first
+# question a reader of an edited comment has, and an answer below five
+# findings and three disclosure sections is one they reach after deciding
+# whether to trust them.
+check "the anchor sits directly beneath the headline" \
+  '1' "$(sed -n '5p' "$REPO/anchored.md" | grep -c '^Reviewed ')"
+
+# The thin clean review is the one most likely to be mistaken for an old
+# comment, because it says the least.
+( cd "$REPO" && python3 "$SCRIPT" --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored_clean.md --head "$ANCHOR_SHA" --lane B \
+  --coverage-read 4 --coverage-total 4 > /dev/null )
+check "a clean verdict is anchored to its commit too" \
+  '1' "$(grep -c '^Reviewed `0123456` at ' "$REPO/anchored_clean.md")"
+
+# THE LINK IS AN ADDITION, NEVER A SUBSTITUTION. `GITHUB_REPOSITORY` is the
+# runner's own value and nothing plumbs it, so the line has to render
+# correctly with it, without it, and with a value that is not a repository.
+( cd "$REPO" && GITHUB_REPOSITORY=senzing-factory/build-resources python3 "$SCRIPT" \
+  --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored_link.md --head "$ANCHOR_SHA" --lane B \
+  --coverage-read 4 --coverage-total 4 > /dev/null )
+check "the commit links to itself when the runner named the repository" \
+  '1' "$(grep -c '^Reviewed \[`0123456`\](https://github.com/senzing-factory/build-resources/commit/0123456789abcdef0123456789abcdef01234567) at ' \
+    "$REPO/anchored_link.md")"
+# Its own run with the variable explicitly empty, rather than a reread of
+# `anchored_clean.md`: the subject of this assertion IS the absence, so it
+# must not be the one case that depends on the environment the suite happens
+# to have been started in.
+( cd "$REPO" && GITHUB_REPOSITORY='' python3 "$SCRIPT" \
+  --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored_plain.md --head "$ANCHOR_SHA" --lane B \
+  --coverage-read 4 --coverage-total 4 > /dev/null )
+check "and with no repository the same line renders unlinked" \
+  '1' "$(grep -c '^Reviewed `0123456` at ' "$REPO/anchored_plain.md")"
+
+# A value that is not `owner/repo` must lose the link, not reach the markdown.
+( cd "$REPO" && GITHUB_REPOSITORY='x)](javascript:alert(1)' python3 "$SCRIPT" \
+  --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored_bad.md --head "$ANCHOR_SHA" --lane B \
+  --coverage-read 4 --coverage-total 4 > /dev/null )
+check "a repository value of the wrong shape is refused the link" \
+  '1' "$(grep -c '^Reviewed `0123456` at ' "$REPO/anchored_bad.md")"
+
+# `--head` is not always a SHA: it defaults to the literal `unknown`, and a
+# link built from that would 404 while looking authoritative.
+( cd "$REPO" && GITHUB_REPOSITORY=senzing-factory/build-resources python3 "$SCRIPT" \
+  --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out anchored_nohead.md --lane B \
+  --coverage-read 4 --coverage-total 4 > /dev/null )
+check "a head that is not a SHA is not linked" \
+  '1' "$(grep -c '^Reviewed `unknown` at ' "$REPO/anchored_nohead.md")"
+
+# ---------------------------------------------------------------------------
+# Mechanism 14 -- a disagreement between two pieces of prose is not a finding
+# ---------------------------------------------------------------------------
+#
+# A measured message, 2026-10-29, and it was the WHOLE review. Two code
+# comments disagreeing: nothing executes them, no behaviour changes, no
+# control stops holding, no permission widens, and the only thing either can
+# be fixed with is more prose. There is no severity under which that is a
+# finding, so a lower tier that still prints does not answer it.
+
+jf prose.json '{"findings":[
+{"severity":"RISK","path":"src/auth.go","line":12,"message":"The boundary comment on <resource> (and the one near line 40) still says the caller reloads its configuration after start-up, which this PR marks SUPERSEDED at line 55, so the comments now contradict each other; add a one-line superseded note to both."}
+]}'
+: > "$REPO/m_prose.env"
+PROSE_LOG=$(orun prose.json prose.md m_prose.env)
+check "a comment contradicting another comment reaches nobody" \
+  '0' "$(metric_of "$REPO/m_prose.env" REVIEW_FINDINGS)"
+check "and the drop is counted" \
+  '1' "$(metric_of "$REPO/m_prose.env" REVIEW_PROSE_REJECTED)"
+
+# THE ONE EXCEPTION TO MECHANISM 7, and the reason for it. Every other
+# rejection class is disclosed on the pull request, because every other one
+# might have been a finding. This one was never a finding, so disclosing it
+# posts "1 finding dropped before posting" over a pull request whose correct
+# output is the clean verdict -- which reads as the reviewer concealing
+# something, and is the complaint the whole mechanism answers.
+check "nothing on the pull request says a finding was dropped" \
+  '0' "$(grep -c 'Findings dropped before posting' "$REPO/prose.md" || true)"
+check "and the rejection's wording is nowhere in the comment" \
+  '0' "$(grep -c 'prose-only' "$REPO/prose.md" || true)"
+
+# INVISIBLE TO THE PULL REQUEST, NOT INVISIBLE. This is the ONLY channel the
+# drop has, so it carries the message IN FULL and as an annotation: the
+# 120-character truncation every other class uses cut the measured BLOCKER
+# mid-clause at "...whether the token is", losing the half that proved the
+# drop was wrong.
+check "the job log names the rejection as an annotation" \
+  '1' "$(printf '%s\n' "$PROSE_LOG" | grep -c '^::warning::prose-only disagreement rejected')"
+check "and carries the whole message, not a truncation" \
+  '1' "$(printf '%s\n' "$PROSE_LOG" | grep -c 'add a one-line superseded note to both\.$')"
+check "and the summary line still counts it" \
+  '1' "$(printf '%s\n' "$PROSE_LOG" | grep -c '1 prose-only disagreement(s) dropped')"
+
+# The marker is an HTML comment, parsed by `previous_stats` and read by no
+# human, so it loses nothing: `dropped=` stays the complete count. That is
+# why the byte-identity below is asserted over the body WITHOUT its marker
+# line -- the rendered comment is identical, the machine record is not, and
+# both of those are deliberate.
+check "the marker still records the drop for tooling" \
+  '1' "$(grep -c 'findings=0 blockers=0 dropped=1 read=4/4 ' "$REPO/prose.md")"
+
+# A PULL REQUEST WHOSE ONLY FINDING WAS A PROSE-ONLY DROP IS A CLEAN ONE.
+# Not nearly clean, not clean with a footnote: the same bytes, denominator
+# and all, as a run that produced no findings at all.
+jf prose_none.json '{"findings":[]}'
+: > "$REPO/m_prose2.env"
+orun prose_none.json prose_none.md m_prose2.env > /dev/null
+sed '/^<!-- claude-review /d' "$REPO/prose.md" > "$REPO/prose.visible"
+sed '/^<!-- claude-review /d' "$REPO/prose_none.md" > "$REPO/prose_none.visible"
+check "the rendered comment is byte-identical to one with no findings at all" \
+  'same' \
+  "$(cmp -s "$REPO/prose.visible" "$REPO/prose_none.visible" && echo same || echo differs)"
+check "and that comment is the ordinary clean verdict with its denominator" \
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 4 of 4 files opened\.\*\*$' \
+    "$REPO/prose.visible")"
+
+# DO NOT GENERALISE THIS. Every other drop class keeps its disclosure, and
+# `solo_pad` above is the live proof for padding; this re-asserts it beside
+# the exception so the two cannot be confused when one of them is edited.
+check "another drop class is still disclosed on the pull request" \
+  '1' "$(grep -c 'Findings dropped before posting' "$REPO/solo_pad.md")"
+
+# THE BOUNDARY, and it is the half that matters: this branch DROPS, so a
+# wrong match deletes a real finding where nobody can see it went.
+#
+# THE FIRST FOUR ARE THE SHAPE MEASURED DELETED -- documentation against
+# code, README against workflow, comment against implementation, docstring
+# against signature. Every one says `contradict each other`, which an
+# earlier version of this rule accepted as the second party; `each other`
+# names nothing, so only the left side was ever checked, and the first of
+# these went out as REVIEW_FINDINGS=0 and a clean verdict while naming an
+# open admin route. The last two name the code, and a dead knob an operator
+# is told to set.
+jf prose_keep.json '{"findings":[
+{"severity":"RISK","path":"src/auth.go","line":12,"message":"The documentation and the code contradict each other about whether the token is validated: the docs say every request is checked, the handler skips validation when the header is absent, so a caller with no token reaches the admin route."},
+{"severity":"RISK","path":"src/auth.go","line":13,"message":"The README and the workflow contradict each other about which branch publishes, so a release cut from main never reaches the registry."},
+{"severity":"RISK","path":"src/auth.go","line":14,"message":"The comment and the implementation contradict each other about the lock ordering, and the implementation is the one that deadlocks."},
+{"severity":"RISK","path":"src/new.go","line":1,"message":"The docstring and the signature contradict each other: the docstring says the timeout is seconds, the parameter is milliseconds."},
+{"severity":"RISK","path":"README.md","line":1,"message":"The runbook tells the on-call to set INIT_BUDGET_MS, which the image no longer reads, so the documented recovery step does nothing. Remove it."}
+]}'
+: > "$REPO/m_prose3.env"
+orun prose_keep.json prose_keep.md m_prose3.env > /dev/null
+# FIVE, not six: FINDING_LIMIT is 5, so a sixth would be withheld for space
+# and this assertion would be measuring the cap instead of the rule.
+check "every docs-against-code finding survives the prose rule" \
+  '5' "$(metric_of "$REPO/m_prose3.env" REVIEW_FINDINGS)"
+check "and not one of them was taken for a prose-only disagreement" \
+  '0' "$(metric_of "$REPO/m_prose3.env" REVIEW_PROSE_REJECTED)"
+
+# Two more that must survive, in their own file to stay under the cap.
+#
+# A prose noun on the FAR SIDE of a second party is not the second party:
+# "the comment says the retry count is 3 but the loop runs 5 times, which
+# contradicts the documentation" is a finding about the LOOP, and reading
+# across the comma to `documentation` deleted it.
+#
+# And the repo-wide spelling, which reaches the prose rule before the
+# empty-path shortcut and so has to be tested there rather than assumed.
+jf prose_across.json '{"findings":[
+{"severity":"RISK","path":"src/auth.go","line":15,"message":"The comment says the retry count is 3 but the loop runs 5 times, which contradicts the documentation."},
+{"severity":"RISK","path":"","line":0,"message":"The documentation contradicts the behaviour this change ships: the install command points at a branch that no longer exists. Update it."}
+]}'
+: > "$REPO/m_prose5.env"
+orun prose_across.json prose_across.md m_prose5.env > /dev/null
+check "the rule does not read across a clause to find its second party" \
+  '2' "$(metric_of "$REPO/m_prose5.env" REVIEW_FINDINGS)"
+check "and a repo-wide prose finding is judged, not skipped" \
+  '0' "$(metric_of "$REPO/m_prose5.env" REVIEW_PROSE_REJECTED)"
+
+# THE TWO SHAPES THAT WERE ACTUALLY LOST. Measured 2026-10-29 on a consumer
+# repository: the same model on the same diff reported five findings at
+# 16:15 UTC and two at 18:01, the only difference between the runs being
+# this repository's own prompt. Two of the three that went missing were
+# documentation contradicted by CODE, and both are reconstructed here --
+# paraphrased, because this repository is public and that one is not, with
+# the grammar the rule actually reads left intact: the prose noun, the
+# disagreement verb or its absence, the second party, the consequence word.
+#
+# THEY WERE NEVER REJECTED HERE -- that run's marker reads `dropped=0`, and
+# `dropped=` carries RECORDED, which includes the prose count. The model did
+# not emit them, because the PROMPT had narrowed "documented behavior the
+# code no longer has" to "a flag, path or knob that no longer exists", and
+# neither of these is a flag, a path or a knob. One is a COUNT the change
+# invalidates; the other is PACKAGING a file denies using.
+#
+# THESE ARE PINS, NOT DISCRIMINATING TESTS, and saying so is the point.
+# Measured by mutation the same day: the first carries no disagreement verb
+# at all -- `still states` is not in DISAGREE -- so no widening of the
+# second-party logic reaches it; the second has one, but its only prose noun
+# opens a clause the rule cannot cross back into, and `wrong` vetoes it
+# besides. Neither could have been rejected here under any plausible edit,
+# which IS the finding: the rule in this file never touched them, and only
+# the prompt could have. They are kept so a future widening has to walk past
+# the shape it would be breaking.
+#
+# SO THEY ARE NOT EVIDENCE THAT THE PROMPT CHANGE WORKS, and must not be
+# read as any. They pass identically before and after it; nothing in this
+# repository can execute a prompt, so no fixture here can measure one. The
+# fixtures that DO discriminate for the 2026-10-29 work are in the block
+# below this one, and they test the REGEX, which is code. What the prompt
+# widening rests on is reasoning about instruction text -- see the same
+# statement in `claude/pr-prompt-v2.md`, next to the words it changed.
+jf prose_measured.json '{"findings":[
+{"severity":"BLOCKER","path":"src/auth.go","line":16,"message":"Adding the new entry creates a fifth set of error, throttle and latency alarms, but the module README still states they exist once per function for all four, and its table lists only the original three. Update that section and its table to cover the new function."},
+{"severity":"RISK","path":"src/auth.go","line":17,"message":"The file header still asserts that both functions here run the same image and that this is why there is no zip packaging, which the zip-packaged function added further down this same file contradicts, so the first thing a reader of this stack sees is wrong about how one of its functions is built. Rewrite the header to cover the exception."}
+]}'
+: > "$REPO/m_prose6.env"
+orun prose_measured.json prose_measured.md m_prose6.env > /dev/null
+check "a README contradicted by a count the change changes is kept" \
+  '2' "$(metric_of "$REPO/m_prose6.env" REVIEW_FINDINGS)"
+check "and neither measured shape is taken for a prose disagreement" \
+  '0' "$(metric_of "$REPO/m_prose6.env" REVIEW_PROSE_REJECTED)"
+
+# ---------------------------------------------------------------------------
+# THE RE-ANCHORING FALSE POSITIVES -- these DISCRIMINATE
+# ---------------------------------------------------------------------------
+#
+# Both were deleted by the rule before PROSE_PAIR became a `fullmatch`, and
+# both reach a clean verdict when they are: REVIEW_FINDINGS=0 with nothing
+# on the pull request saying so, because mechanism 14 is the one drop class
+# that is not disclosed. Run these two against the previous revision of
+# `review_output.py` and they report 0 findings and 2 prose rejections.
+#
+# WHY THEY MATCHED. `CLAUSE` bounds ONE match; it does not stop `re.search`
+# re-anchoring after a `;` or a `,` and matching a trailing prose-versus-
+# prose clause while the sentence's primary claim is about the code. The
+# first sentence's claim is a COUNT the change invalidates -- the shape
+# `pr-prompt-v2.md` promotes to a must-report finding -- and the trailing
+# "so the README is inconsistent with the inline documentation too" is what
+# the regex found. The second IS that file's canonical example of a finding
+# (`pr-prompt-v2.md`, "a flag, path or knob an operator would be sent to
+# that no longer exists"), and its consequence clause carries neither
+# `mislead` nor `wrong`, so PROSE_CONSEQUENCE did not save it.
+#
+# NEITHER IS FIXED BY VOCABULARY, which is why the fix is positional. A
+# third veto word would have covered these two sentences and not the next
+# two.
+jf prose_trailing.json '{"findings":[
+{"severity":"RISK","path":"src/auth.go","line":18,"message":"The README'"'"'s table lists three functions; the code adds a fourth, so the README is inconsistent with the inline documentation too."},
+{"severity":"RISK","path":"src/auth.go","line":19,"message":"The inline comment contradicts the docstring, which would send an operator to a flag that no longer exists."}
+]}'
+: > "$REPO/m_prose7.env"
+orun prose_trailing.json prose_trailing.md m_prose7.env > /dev/null
+check "a prose clause trailing a claim about code does not delete the finding" \
+  '2' "$(metric_of "$REPO/m_prose7.env" REVIEW_FINDINGS)"
+check "and neither is counted as a prose-only disagreement" \
+  '0' "$(metric_of "$REPO/m_prose7.env" REVIEW_PROSE_REJECTED)"
+# The half that would be invisible if it regressed: this class is NOT
+# disclosed, so a re-broken rule shows up on the pull request as a clean
+# verdict and nowhere else.
+check "and the comment names them rather than rendering clean" \
+  '2' "$(grep -c '^- ⚠️ \*\*RISK\*\* ' "$REPO/prose_trailing.md")"
+
+# ---------------------------------------------------------------------------
+# AND BRANCH 1 IS NARROWED, NOT SWITCHED OFF
+# ---------------------------------------------------------------------------
+#
+# The named-pair branch still drops when the disagreement IS the message --
+# no code party, no consequence, nowhere for either to be. Without this the
+# `fullmatch` could be replaced by `return False` and every assertion above
+# would still pass.
+#
+# NOT A DISCRIMINATING TEST, and it is here for coverage rather than as
+# evidence: it drops before the change as well as after. The two above are
+# the discriminating pair.
+jf prose_bare.json '{"findings":[
+{"severity":"RISK","path":"src/auth.go","line":20,"message":"The inline comment contradicts the docstring."}
+]}'
+: > "$REPO/m_prose8.env"
+orun prose_bare.json prose_bare.md m_prose8.env > /dev/null
+check "a message that is nothing but two pieces of prose disagreeing is dropped" \
+  '0' "$(metric_of "$REPO/m_prose8.env" REVIEW_FINDINGS)"
+check "and counted as one" \
+  '1' "$(metric_of "$REPO/m_prose8.env" REVIEW_PROSE_REJECTED)"
+
+# THE SEVERITY FLOOR, which is defence in depth and not the fix: a sentence
+# this rule WOULD drop keeps its finding when the model called it a BLOCKER.
+# The two errors are not symmetrical -- a prose nit called a BLOCKER is one
+# visible line somebody can argue with, a real BLOCKER deleted by a regex is
+# invisible. The message is the verbatim drop case above, which the
+# assertions at the top of this block prove the rule matches.
+jf prose_floor.json '{"findings":[
+{"severity":"BLOCKER","path":"src/auth.go","line":12,"message":"The boundary comment on <resource> (and the one near line 40) still says the caller reloads its configuration after start-up, which this PR marks SUPERSEDED at line 55, so the comments now contradict each other; add a one-line superseded note to both."}
+]}'
+: > "$REPO/m_prose4.env"
+orun prose_floor.json prose_floor.md m_prose4.env > /dev/null
+check "a BLOCKER is never dropped as prose, whatever the sentence says" \
+  '1' "$(metric_of "$REPO/m_prose4.env" REVIEW_BLOCKERS)"
+check "and the prose rule records no drop for it" \
+  '0' "$(metric_of "$REPO/m_prose4.env" REVIEW_PROSE_REJECTED)"
+
+# ---------------------------------------------------------------------------
+# Mechanism 15 -- a severity marker per finding, and NOT a tick per check
+# ---------------------------------------------------------------------------
+#
+# The 4.8.0 work removed the per-check tick lines because they were filler:
+# 29 to 32 of them in one measured pair of reviews, each restating that
+# something was fine, none of them actionable. Sorting a comment into issues
+# and non-issues at a glance is a DIFFERENT need, and it is answered by one
+# character on a line that already exists rather than by a line of its own.
+#
+# The assertions throughout this file already pin the exact rendered form of
+# every bullet. What this block adds is the property that cannot be read off
+# any single one of them: that the markers did not bring the filler back.
+
+( cd "$REPO" && python3 "$SCRIPT" --findings main.json --manifest manifest.tsv \
+  --base "$BASE" --out marks.md --head "$ANCHOR_SHA" --lane B \
+  --coverage-read 3 --coverage-total 4 > /dev/null )
+
+# ONE MARKER PER FINDING, AND NO LINE OF ITS OWN: as many marked bullets as
+# there are bullets, so no finding is unmarked and no marker arrived on a
+# line that is not a finding.
+check "every finding bullet carries a severity marker" \
+  "$(grep -c '^- ' "$REPO/marks.md")" \
+  "$(grep -cE '^- (❌|⚠️) \*\*(BLOCKER|RISK)\*\* ' "$REPO/marks.md")"
+
+# THE SEVERITY WORD SURVIVES BESIDE THE MARKER. It is what a screen reader
+# announces and what `rg '\*\*BLOCKER\*\*'` matches; the marker is for the
+# eye. A marker that REPLACED the word would pass a scanning test and lose
+# both of those readers.
+check "and the severity word beside it, for grep and for a screen reader" \
+  '1' "$(grep -c '^- ❌ \*\*BLOCKER\*\* `src/auth.go:12`' "$REPO/marks.md")"
+
+# THE FILLER REGRESSION, which is the one worth a standing guard. A tick is
+# the CLEAN VERDICT's marker and nothing else: a body carrying findings must
+# not carry one anywhere, or the per-check ticks are back by another route.
+check "no tick appears anywhere in a comment that has findings" \
+  '0' "$(grep -c '✅' "$REPO/marks.md")"
+
+# And the converse: the clean verdict is marked, so "nothing to do here" is
+# as scannable as a blocker is.
+check "the clean verdict carries the tick" \
+  '1' "$(grep -c '^✅ \*\*No blocking findings' "$REPO/clean.md")"
+
+# A clean verdict is not a finding, so it must not carry a severity marker.
+check "and no severity marker" \
+  '0' "$(grep -cE '❌|⚠' "$REPO/clean.md")"
 
 # ---------------------------------------------------------------------------
 # review-note -- the wrapper that gives the scratchpad somewhere to be
