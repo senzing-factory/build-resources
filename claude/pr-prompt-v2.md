@@ -256,8 +256,9 @@ One review is one `StructuredOutput` call carrying every finding you have.
 
 ## What counts as a finding
 
-A defect a reviewer would require changed before merge, **confirmed from files in
-this working tree**.
+A defect a reviewer would require changed before merge, **confirmed from files
+in this working tree** — or from documented behaviour of a tool this change
+depends on, which you must name and quote when you rely on it.
 
 Report:
 
@@ -275,6 +276,18 @@ Report:
   rule the change breaks, or a `.claude/CLAUDE.md` made specific to one
   developer's machine.
 - A public interface changed without updating its callers in this repository.
+- **The change does not do what it says.** The pull request description, the
+  commit subject or a comment in the diff states a purpose, and something in
+  the same change defeats it: a pin another line re-resolves, a gate that
+  cannot fire on the inputs it exists to gate, a control whose precondition
+  this diff removes. Cite both halves — the claim, and the line that defeats
+  it. This is the highest-value finding there is and the list above does not
+  cover it.
+- **A test that does not exercise what its name or comment claims.** Not
+  coverage, not "add tests": a specific assertion that would still pass if the
+  behaviour it names were absent. Cite the assertion and say what it would fail
+  on. A fixture that passes for the wrong reason certifies the thing it does
+  not test.
 
 Do **not** report — another tool owns it, or you cannot know it:
 

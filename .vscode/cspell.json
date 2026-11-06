@@ -68,7 +68,6 @@
     "ISORT",
     "isprintable",
     "keepachangelog",
-    "keepends",
     "kernelsam",
     "kwargs",
     "libpostal",

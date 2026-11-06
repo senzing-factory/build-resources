@@ -62,93 +62,42 @@ not supplied is honest; splitting the PR into chunks that cannot see each
 other is not.
 
 MAX_FILE_BYTES caps ONE FILE'S patch, and is a different control from the
-one above rather than a tuning of it. The total budget is collective and
-order-dependent: it fires only once the SUM is exceeded and then takes the
-largest patches whole, so a change that is individually lumpy and
-collectively small -- one 1,205-line pinned `requirements.txt` beside twenty
-short YAML files -- passes it untouched, which is what happened. The
-per-file cap says the other thing: THIS ONE PATCH is large enough to look
-at on its own.
+one above rather than a tuning of it: the total budget fires only once the
+SUM of all patches is exceeded, so a change that is lumpy but collectively
+small passes it untouched.
 
 IT IS A TRIGGER, NOT A CEILING. An over-cap patch is cut to whole hunks and
-a marker is appended naming the original size, the supplied size and where
-the rest is -- but the output can exceed the number, and often nothing is
-cut at all. A SINGLE-HUNK PATCH IS NEVER CUT: its one hunk has to survive
-(see `_truncate_patch`) and the marker only adds bytes, so the no-growth
-rule declines. Measured: a 10,691-byte single-hunk patch at cap 2000 is
+gains a `*** TRUNCATED:` marker, but the result can exceed the cap and often
+nothing is cut at all. A SINGLE-HUNK PATCH IS NEVER CUT -- its one hunk has
+to survive and the marker only adds bytes, so the no-growth rule hands the
+patch back. Measured: a 10,691-byte single-hunk patch at cap 2000 is
 supplied whole, and at cap 1 a truncated patch still came out at 2,812
-bytes.
+bytes. A regenerated lockfile is one hunk, so the cap does not cut it; what
+it buys is multi-hunk patches trimmed. See `_truncate_patch`.
 
-So the lockfile case that motivated this is NOT handled by cutting -- a
-regenerated lockfile is one hunk and arrives whole. What the cap buys is
-multi-hunk patches trimmed; the honest lever for a wholesale rewrite is
-diff context, not this.
-
-IT TRUNCATES; IT DOES NOT WITHHOLD, and the row keeps a real
-`pr-files/NNNN.patch` token. That is not a presentation choice, it is the
-thing that makes the control safe, and the first two designs of it were
-unsafe in the same way twice.
-`review_coverage.openable` credits a row with NO patch only when the working
-tree can answer for it -- which it cannot for a `removed` row, whose file is
-gone, and cannot for a row under a `--restored` prefix, where the tree holds
-the BASE's content. Either of those, withheld, left the coverage denominator
-as exempt: the cap could take a change out of review entirely and
-`coverage_enforcement: fail` would have no opinion about it. A guard on
-`status != "removed"` closed one branch and could not reach the other, since
-the restored set is the caller's `--restored` list and this program is never
-told it. Truncation closes both at once and needs to know neither, because
-`openable` returns True on its first branch for any row that has a patch.
-
-It is also deliberately not a glob. `exclude_globs` excludes by NAME, so a
-three-line lockfile change is skipped and a hand-written two-thousand-line
-file is not; and the names worth capping are the ambiguous ones --
-`requirements.txt` is a generated lock in one repository and a hand-written
-manifest in the next -- which is exactly why no fleet-wide glob can claim
-them. A size threshold does not have to know which.
-
-WHAT THE REVIEWER OWES FOR A TRUNCATED ROW: reading the patch it was given.
-A truncated patch is a patch, so opening it satisfies coverage, and the
-marker tells the reviewer the remainder is in the working tree and to go
-there if what it has seen suggests it matters. Requiring the whole file
-instead would make a capped row MORE expensive to clear than an uncapped
-one -- the working-tree read is the entire file, not the diff -- which is
-the trap the withholding design fell into and is not worth re-entering for
-a control whose point is to spend less.
-
-That does mean a cap set low enough can leave real changed lines unread, and
-the honest statement of the residual is the same one the total budget
-carries: the path is named on the pull request, the marker is inside the
-patch the reviewer opened, and the byte counts in it say how much is
-missing. A change can only cross the cap by genuinely being that large --
-the measurement is this program's own output, not anything the pull request
-can assert about its files, which is the same rule `sniff_binary` follows
-and for the same reason.
+IT TRUNCATES; IT DOES NOT WITHHOLD. A truncated patch is a patch, so
+`review_coverage.openable` keeps the row in the coverage denominator;
+withholding took `removed` and `--restored` rows out of it altogether. See
+`_truncate_oversize`. What the reviewer owes for such a row is in
+`pr-prompt-v2.md`: read the patch, and go to the working tree if what it
+shows suggests the rest matters.
 
 ONE GAP REMAINS AND IT IS NOT THIS CONTROL'S. `_fit_patches` applies the
-TOTAL budget by dropping whole patches with no status test, so a large
-deletion it drops still leaves the denominator as exempt `[DELETED]` with
-its content nowhere. That predates the per-file cap, `MAX_REVIEW_BYTES`
-defaults to a non-zero value so any change to it reaches every caller that
-passes nothing, and truncating there instead would be proportional
-allocation by another name -- an open design question. Recorded here because
-this is where a reader comes looking.
+TOTAL budget with no status test, so a large deletion it drops still leaves
+the denominator as exempt `[DELETED]` with its content nowhere. Open design
+question; see issue #330.
 
-A cap of 0 disables it and is the default, so a caller that sets nothing
-gets byte-identical behaviour to before this existed.
+A cap of 0 disables it and is the default.
 
 Manifest mode prints FIVE reports, and the workflow turns each into its own
 section of the PR comment: `Excluded` for paths an exclude glob removed,
 `Omitted` for patches the total byte budget dropped, `Truncated` for patches
 the per-file cap CUT SHORT, `Binary` for files whose blob content is binary,
-and `Unpatched` for a path `git diff` rendered no section for. Naming all
-five on the pull request is the disclosure that was missing on 2026-10-21.
-
-Four of the five are drops; `Truncated` is not. Its rows carry a real patch
-path and real hunks, which is why they stay in the coverage denominator
-whatever their status. Of the rest, an `Unpatched` or `Omitted` row can
-still be opened in the working tree -- unless it was deleted or sits under a
-restored path, where nothing can answer for it -- while a `Binary` row
-cannot be opened by anything.
+and `Unpatched` for a path `git diff` rendered no section for. Four of the
+five are drops; `Truncated` is not, and its rows stay in the coverage
+denominator because they carry a real patch. An `Unpatched` or `Omitted` row
+can still be opened in the working tree unless it was deleted or sits under
+a restored path; a `Binary` row cannot be opened by anything.
 
 The diff is read and written as BYTES, so a file in any encoding (or with
 invalid UTF-8) reaches the model unaltered. Only the header lines needed for
@@ -186,29 +135,23 @@ GIT_DIFF_FLAGS = ("--no-ext-diff", "--no-textconv", "--find-renames")
 GIT_CONFIG_FLAGS = ("-c", "core.quotePath=false")
 
 
-# A unified diff's line terminator is `\n` and ONLY `\n`. Everything else
-# that `bytes.splitlines` treats as a break -- a bare `\r`, and the Unicode
-# separators it also honours in some forms -- is CONTENT to git, which emits
-# a CR inside a line as a CR inside a line. Splitting on them is how a
-# fragment of a content line came to be read as a `@@ ` header.
+# A unified diff's line terminator is `\n` and ONLY `\n`. A bare `\r` is
+# CONTENT to git, so splitting on it reads a fragment of a content line as
+# a `@@ ` header. See `diff_lines`.
 LINE_SPLIT = re.compile(rb"[^\n]*\n|[^\n]+")
 
 
 def diff_lines(data: bytes) -> list:
     """`data` split into lines on `\n` ONLY, terminators kept.
 
-    ONE SPLITTER FOR THE WHOLE PROGRAM, because the two callers that need it
-    are both deciding where a diff's structure begins and a disagreement
-    between them is a corrupt patch rather than an error.
+    ONE SPLITTER FOR THE WHOLE PROGRAM: `_hunks` and `split_sections` both
+    decide where a diff's structure begins, and a disagreement between them
+    is a corrupt patch rather than an error.
 
-    `bytes.splitlines` is wrong here and was used in both places. It breaks
-    on a bare `\r`, which `git diff` does not: a changed line whose content
-    is `new\r@@ -9,9 +9,9 @@ FAKE` becomes TWO lines under it, the second of
-    which `_hunks` reads as a hunk header. Cutting there lands inside a real
-    content line, `git apply --check` answers `corrupt patch at line 10`,
-    and the marker goes on asserting that no line is half-written. The same
-    shape at `split_sections` lets a `\rdiff --git ` inside a line open a
-    bogus file section.
+    The tell is `git apply --check` answering `corrupt patch at line N` on a
+    patch whose marker claims no line is half-written -- `bytes.splitlines`
+    broke a content line holding `new\r@@ -9,9 +9,9 @@`, `_hunks` read the
+    tail as a hunk header, and the cut landed mid-line.
 
     The pattern takes a run of non-newlines with its terminator, or a final
     run without one, so the concatenation is always the input unchanged.
@@ -390,17 +333,12 @@ def report_truncated(truncated_paths: list, cap: int) -> None:
     """The per-file-cap report. A fifth bullet, and apart from `Omitted`.
 
     THE TWO ARE NOT THE SAME EVENT and the pull request must not read them
-    alike. `Omitted` means a patch was NOT SUPPLIED AT ALL: the change as a
-    whole did not fit the total budget and this file lost the draw, so
-    raising `max_review_bytes` would have supplied it and the same file in a
-    smaller pull request would have arrived whole. `Truncated` means the
-    patch WAS supplied, in part, because this one file is over a threshold
-    the calling repository set -- so it will be cut every time until that
-    number moves, whatever else the change contains.
-
-    Different cause, different input to change, and different work for the
-    reviewer: an omitted row has nothing to read but the working tree, while
-    a truncated one has real hunks to read first.
+    alike. `Omitted` means no patch was supplied at all, and raising
+    `max_review_bytes` would supply it. `Truncated` means part of the patch
+    was supplied because this one file is over the per-file cap, so it will
+    be cut every time until that number moves, whatever else the change
+    contains -- and an omitted row has nothing but the working tree to read,
+    while a truncated one has real hunks first.
     """
     print(f"Truncated {len(truncated_paths)} file(s) over MAX_FILE_BYTES={cap}.")
     for path in sorted(truncated_paths):
@@ -1007,49 +945,25 @@ def _hunks(lines: list) -> tuple:
 def _truncate_patch(patch: bytes, cap: int, path: str) -> bytes:
     """`patch` cut to whole hunks that fit under `cap`, plus a marker.
 
-    Returns the patch UNCHANGED where cutting it would not help, which the
-    caller reads as "not truncated" and does not report. Two such cases,
-    and both were shipped wrong once:
+    Returns the patch UNCHANGED where cutting would not help -- no hunk at
+    all (a pure rename or mode-only change is all preamble, and those lines
+    ARE the whole change), or a result no smaller than the original, the
+    ~250-byte marker outweighing what a small cap saves. The caller reads
+    identity as "not truncated" and does not report it.
 
-      * NO HUNK AT ALL. A pure rename or a mode-only change is nothing but
-        preamble, and those lines ARE the whole change -- there is nothing
-        to cut and nothing in the working tree to go and look at. Cutting
-        it produced a marker reading "this patch was 59 bytes, so 59 bytes
-        were supplied" on the pull request, pointing a reviewer at a file
-        whose content did not change.
-      * THE RESULT WOULD NOT BE SMALLER. The marker is ~250 bytes, so at a
-        small cap a truncated patch comes out several times the size of the
-        original -- a control meant to save budget spending it instead.
+    CUT ON A HUNK BOUNDARY, NEVER MID-LINE: a byte-offset slice leaves a
+    hunk whose `@@ -a,b +c,d @@` counts no longer describe its body, and
+    `git apply --check` rejects it.
 
-    CUT ON A HUNK BOUNDARY, NEVER MID-LINE. A patch sliced at a byte offset
-    ends in half a line and leaves a hunk whose `@@ -a,b +c,d @@` counts no
-    longer describe its body. That reads as corruption rather than brevity,
-    a reviewer handed it learns nothing, and `git apply --check` rejects it.
+    AT LEAST ONE HUNK ALWAYS SURVIVES and the preamble is indivisible, so a
+    truncated patch can exceed the cap. A preamble-only patch supplies ZERO
+    CHANGED LINES while still carrying a patch token, which `openable`
+    credits -- `supplied=N/N read=N/N` over a change nobody saw. The
+    consequence is that a single-hunk patch is never cut: keeping its one
+    hunk keeps everything, so the no-growth test below hands it back.
 
-    AT LEAST ONE HUNK ALWAYS SURVIVES, even when the first one alone is
-    over the cap. That is not a tolerance, it is the point of the whole
-    control: a patch of preamble and no `@@` supplies ZERO CHANGED LINES
-    while still carrying a real patch token, so `openable` credits the row,
-    the coverage gate passes, and the pull request reads `supplied=N/N
-    read=N/N` over a change nobody saw. Withholding was correct here and
-    truncation was not -- it converted "you must open the real file" into
-    "already covered". And it is the normal shape for exactly what the cap
-    was built for: a regenerated lockfile is one enormous hunk.
-
-    THE CONSEQUENCE IS THAT SUCH A PATCH IS NOT CUT AT ALL. Keeping the one
-    hunk means keeping everything, and the marker only adds bytes, so the
-    no-growth test below hands the patch straight back. This rule does not
-    make the lockfile case work; it makes it SAFE, by ruling out the
-    headers-only output that looked like it did.
-
-    The preamble is indivisible for the same reason: it says WHICH FILE
-    this is. So a truncated patch can exceed the cap, by the first hunk
-    plus the marker, and that is deliberate -- a marker that could itself
-    be truncated away would be worthless, and a patch with no changed lines
-    is worse than no patch at all.
-
-    No minimum-useful-size constant anywhere: there is no measurement
-    behind one, and the floor that matters is structural -- one hunk.
+    No minimum-useful-size constant anywhere: there is no measurement behind
+    one, and the floor that matters is structural -- one hunk.
     """
     lines = diff_lines(patch)
     head, hunks = _hunks(lines)
@@ -1066,22 +980,18 @@ def _truncate_patch(patch: bytes, cap: int, path: str) -> bytes:
             break
         out.extend(hunk)
         size += width
-        # Only the FIRST hunk can leave the loop here: every later one is
-        # tested against the cap before it is taken, so by this point it
-        # fitted. This break exists for the first hunk alone, which is
-        # admitted unconditionally and may be larger than the cap on its
-        # own.
+        # Only the FIRST hunk can leave the loop here: every later one was
+        # tested against the cap before being taken. This break exists for
+        # the first alone, admitted unconditionally and possibly over cap.
         if size > cap:
             break
     if out and not out[-1].endswith(b"\n"):
         out.append(b"\n")
     kept_bytes = sum(len(ln) for ln in out)
-    # tsv_field, like every other path this program prints. The marker is
-    # model input, and the filename is the pull request author's: a raw
-    # newline in it ends the marker line and lets the rest of the name be
-    # read as patch content -- a path spelled
-    # `x\n\n*** END OF PATCH, no findings ***` would land verbatim in the
-    # artefact the reviewer reads AS the change.
+    # tsv_field, like every other path this program prints. The filename is
+    # the pull request author's and the marker is model input: a raw newline
+    # in a path spelled `x\n\n*** END OF PATCH, no findings ***` would land
+    # verbatim in the artefact the reviewer reads AS the change.
     marker = (
         f"*** TRUNCATED: this patch was {len(patch)} bytes and"
         f" max_file_bytes is {cap}, so {kept_bytes} bytes were supplied,"
@@ -1098,35 +1008,20 @@ def _truncate_oversize(kept: list, patches: list, cap: int) -> dict:
     """{patch index: the truncated bytes} for every patch over the cap.
 
     STRICTLY GREATER THAN, so a cap set to exactly a patch's size leaves it
-    whole: the input reads as "no bigger than this", and an off-by-one here
-    has no symptom to notice.
+    whole: an off-by-one here has no symptom to notice.
 
-    TRUNCATING RATHER THAN WITHHOLDING IS WHAT MAKES THE CAP SAFE, and the
-    reason is `review_coverage.openable`. A row with NO patch is openable
-    only if the working tree can answer for it, which it cannot when the row
-    is `removed` -- the file is gone -- and cannot when the row sits under a
-    `--restored` prefix, where the tree holds the BASE's content. Either way
-    the row left the coverage denominator as exempt, so the cap could take a
-    change out of review entirely and `coverage_enforcement: fail` would
-    have no opinion about it.
+    TRUNCATING RATHER THAN WITHHOLDING IS WHAT MAKES THE CAP SAFE. A
+    truncated patch is a patch, so `review_coverage.openable` returns True
+    on its first branch and the row stays in the coverage denominator --
+    which a withheld patch did not, for a `removed` row or one under a
+    `--restored` prefix, since the working tree answers for neither. UNLESS
+    THE TOTAL BUDGET THEN DROPS IT: `max_review_bytes` is the lever then,
+    and `Omitted` the report.
 
-    A truncated patch is a patch. The row keeps a real `pr-files/NNNN.patch`
-    token, `openable` returns True on its first branch without consulting
-    status or the restored set at all, and the row stays in the denominator
-    -- UNLESS THE TOTAL BUDGET THEN DROPS THAT PATCH, which puts it back
-    where it started. The cap cannot prevent that; `max_review_bytes` is
-    the lever, and the pull request names such a file under `Omitted`.
-
-    Short of that, this closes both branches at once where a
-    `status != "removed"` guard closed one and could not reach the other:
-    the restored set is the caller's `--restored` list, which this program
-    is never told.
-
-    A cap of 0 truncates nothing and is the default, which is what keeps the
-    input additive for the repositories consuming this workflow at a
-    floating major tag. Measured on patch BYTES, not on `changes`: the total
-    budget is denominated in bytes and so is this, and the two disagreeing
-    about what "big" means would be a worse surprise than either number.
+    A cap of 0 truncates nothing and is the default, which keeps the input
+    additive for repositories consuming this workflow at a floating major
+    tag. Measured on patch BYTES, not `changes`, so it cannot disagree with
+    the total budget about what "big" means.
     """
     if cap <= 0:
         return {}
@@ -1135,9 +1030,8 @@ def _truncate_oversize(kept: list, patches: list, cap: int) -> dict:
         if len(patch) <= cap:
             continue
         shorter = _truncate_patch(patch, cap, kept[index]["filename"])
-        # IDENTITY IS THE SIGNAL. `_truncate_patch` hands the patch straight
-        # back where cutting it would not help -- no hunk to cut, or a
-        # result no smaller than the original -- and those files must not be
+        # IDENTITY IS THE SIGNAL: `_truncate_patch` hands the patch back
+        # where cutting would not help, and those files must not be
         # reported as truncated, because nothing was.
         if shorter is not patch:
             cut[index] = shorter
@@ -1147,13 +1041,11 @@ def _truncate_oversize(kept: list, patches: list, cap: int) -> dict:
 def _apply_file_cap(kept: list, patches: list, cap: int) -> dict:
     """Truncate every over-cap patch IN PLACE; return {index: cut bytes}.
 
-    The rewrite is in place so nothing downstream -- the total budget, the
-    bytes written, the manifest row -- has to know a patch was ever longer.
-    INDEXES rather than paths, because the caller has to subtract whatever
-    the total budget drops afterwards: a file reported under both headings
-    carries two contradictory remedies on the pull request, and a deletion
-    truncated and then dropped is back to `exempt [DELETED]`, which is the
-    hole this whole design exists to close.
+    In place, so nothing downstream -- the total budget, the bytes written,
+    the manifest row -- has to know a patch was ever longer. INDEXES rather
+    than paths, because the caller subtracts whatever the total budget drops
+    afterwards: a file reported under both headings carries two
+    contradictory remedies on the pull request.
     """
     cut = _truncate_oversize(kept, patches, cap)
     for index, shortened in cut.items():
@@ -1168,17 +1060,12 @@ def _fit_patches(kept: list, patches: list, budget: int) -> tuple:
     by patch BYTES rather than the `changes` proxy, because bytes are what
     the budget is denominated in. A budget of 0 drops nothing.
 
-    THE PER-FILE CAP HAS ALREADY RUN and it withholds nothing, so there is
-    no second set to exclude here: a truncated patch is a real patch and its
-    (smaller) bytes are spent like any other's. That ordering is what lets
-    the cap relieve budget pressure, since the truncated bytes are what this
-    sums.
-
-    IT DOES NOT MAKE THE TWO PASSES DISJOINT, and an earlier version of
-    this comment claimed it did. A patch this drops may be one the cap
-    already cut, and then the row has no patch at all: `write_manifest`
-    subtracts this result from the cap's before reporting, so such a file
-    is named under `Omitted` and not also under `Truncated`.
+    THE PER-FILE CAP HAS ALREADY RUN and withholds nothing, so a truncated
+    patch's (smaller) bytes are what this sums -- which is how the cap
+    relieves budget pressure. It does NOT make the two passes disjoint: a
+    patch this drops may be one the cap cut, leaving the row no patch at
+    all, so `write_manifest` subtracts this result from the cap's before
+    reporting and the file is named under `Omitted` only.
     """
     sizes = {i: len(p) for i, p in enumerate(patches) if p}
     total = sum(sizes.values())
@@ -1237,9 +1124,7 @@ def _write_review_set(
         elif token:
             # Distinct from "-": a patch existed and the total budget
             # dropped it. The per-file cap no longer lands here -- it
-            # TRUNCATES, so its rows carry a real patch path and are
-            # indistinguishable from any other at this point, which is the
-            # property that keeps them in the coverage denominator.
+            # truncates, so its rows carry a real patch path.
             patch_file = token
             buckets[patch_file].append(path)
         elif path in binary:
@@ -1282,10 +1167,9 @@ class Request(NamedTuple):
     One named tuple rather than six parameters: the six put
     `write_manifest` over pylint's argument and local-variable limits, and
     `globs` and `budget` next to each other in a positional call is a
-    silent-corruption shape -- transposing them is not a type error. That
-    shape is now THREE deep: `budget` and `file_cap` are both non-negative
-    byte counts, so a positional call could swap them and the only symptom
-    would be the wrong set of files withheld. Build this by keyword.
+    silent-corruption shape -- transposing them is not a type error.
+    `budget` and `file_cap` are two more non-negative byte counts with the
+    same hazard, so build this by keyword.
     """
 
     out_dir: str
@@ -1378,10 +1262,9 @@ def write_manifest(request: Request) -> int:
     # sees the truncated patch and nothing has to know it was ever longer.
     cut = _apply_file_cap(kept, patches, request.file_cap)
     withheld, total = _fit_patches(kept, patches, request.budget)
-    # A PATH IS REPORTED UNDER ONE HEADING, NEVER TWO. The cap ran first and
-    # the budget may still have dropped what it cut; such a file has no
-    # patch at all, so `Omitted` is the true report and `Truncated` would be
-    # a second, contradictory remedy for the same row.
+    # A PATH IS REPORTED UNDER ONE HEADING, NEVER TWO. The budget may have
+    # dropped what the cap cut; such a file has no patch at all, so
+    # `Omitted` is the true report and `Truncated` a contradictory remedy.
     cut_paths = [kept[i]["filename"] for i in cut if i not in withheld]
     written = _write_review_set(kept, patches, withheld, binary, request.out_dir)
 

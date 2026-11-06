@@ -32,12 +32,28 @@ on:
         default: 1048576
       max_file_bytes:
         description: |
-          Cap on ONE FILE'S patch, in bytes. A patch over it is CUT to its
-          last whole hunk and gains a `*** TRUNCATED:` line naming the
-          original size, the size supplied and the path; the row keeps a
-          real patch and the file is named on the pull request. 0, the
-          default, truncates nothing and is byte-for-byte today's
-          behaviour.
+          Caps ONE FILE'S patch, in bytes, by CUTTING a multi-hunk patch
+          back to the last whole hunk that fits and appending a
+          `*** TRUNCATED:` line naming the original size, the size supplied
+          and the path. The row keeps a real patch and the file is named on
+          the pull request. 0, the default, truncates nothing and is
+          byte-for-byte today's behaviour.
+
+          IT ONLY HELPS A MULTI-HUNK PATCH. A SINGLE-HUNK PATCH IS NEVER
+          CUT: the first hunk is always kept, and the ~250-byte marker only
+          adds bytes, so truncation is skipped where it would not make the
+          patch smaller. A wholesale regeneration -- a lockfile, a
+          reformatted file -- is usually ONE hunk, so this control will not
+          shrink it. Exclude such a file by name, or reduce diff context.
+
+          THE NUMBER IS NOT A HARD CEILING ON THE FILE. The header lines
+          that say which file this is are kept whole; the FIRST hunk is
+          kept whatever it costs, because a patch of headers and no changed
+          lines would be credited as reviewed while showing nothing; and
+          the marker is appended afterwards, since one that could itself be
+          cut away would be worthless. So a truncated patch can come out
+          well over the number you set -- at a very small cap, several
+          times it.
 
           IT TRUNCATES RATHER THAN WITHHOLDING, and that is what makes it
           safe to turn on. A row with no patch is credited as reviewable
@@ -49,35 +65,15 @@ on:
           the row out of the coverage count. A truncated patch is still a
           patch, so the row stays counted however it was reached.
 
-          THE NUMBER IS NOT A HARD CEILING ON THE FILE. The header lines
-          that say which file this is are kept whole; the FIRST hunk is
-          kept whatever it costs, because a patch of headers and no changed
-          lines would be credited as reviewed while showing nothing; and
-          the marker is appended afterwards, since one that could itself be
-          cut away would be worthless. So a truncated patch can come out
-          well over the number you set -- at a very small cap, several
-          times it.
-
-          Truncation is skipped where it would not actually make the patch
-          smaller, so setting a tiny value cannot make the review bigger
-          than setting none. But the saving is real only once the cap is
-          large relative to one hunk and to the ~250-byte marker: a number
-          below that buys nothing and loses context.
-
           A DIFFERENT CONTROL FROM `max_review_bytes`, not a tuning of it.
           That one is a total: it fires only once the sum of all patches is
-          exceeded, and then drops the largest. A diff that is individually
-          lumpy and collectively small never reaches it -- one 1,205-line
-          pinned `requirements.txt` beside twenty short YAML files sits well
-          under a one-megabyte budget and arrives whole.
-
-          And a different control from `exclude_globs`, which excludes by
-          NAME: that cannot tell a three-line lockfile change from a
-          hand-written two-thousand-line file, and the names worth capping
-          are the ambiguous ones. `requirements.txt` is a generated lock in
-          one repository and a hand-written manifest in the next, which is
-          why it is not in the default glob list and cannot be. A size
-          threshold does not have to know which it is.
+          exceeded, and then drops the largest whole. A diff that is
+          individually lumpy and collectively small never reaches it. And a
+          different control from `exclude_globs`, which excludes by NAME
+          and so cannot tell a three-line change to a generated file from a
+          hand-written two-thousand-line one -- the names worth capping are
+          the ambiguous ones, which is why they are not in the default glob
+          list and cannot be. A size threshold does not have to know which.
 
           NOT DEFAULTED TO A NUMBER, and the reason is the same one that
           keeps `coverage_enforcement` on `warn`: roughly 170 repositories
