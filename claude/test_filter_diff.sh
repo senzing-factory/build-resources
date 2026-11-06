@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cspell:ignore BIGBODY cacheinfo drun erun mrun newpkg oldpkg superproject  -- test fixture / local constant names, not vocabulary
+# cspell:ignore BIGBODY cacheinfo capmanifest cappatch CAPREPO caprun CAPX capx CRREPO crun drun eqsrc erun mrun newpkg oldpkg splitlines superproject  -- test fixture / local constant names, not vocabulary
 # Fixture tests for filter_diff.py. No framework: builds the two input shapes
 # the program accepts, runs it, and checks what survived.
 #
@@ -158,6 +158,12 @@ grep -v '"big.txt"' "$WORK/files.json" > "$WORK/files_short.json"
 mrun() { # mrun <out_dir> <budget> [files_json] -> the program's stdout
   ( cd "$REPO" && EXCLUDE_GLOBS="$GLOBS" MAX_REVIEW_BYTES="$2" \
       python3 "$SCRIPT" --manifest "$1" "$BASE" "$HEAD" ${3:+"$3"} )
+}
+
+crun() { # crun <out_dir> <file_cap> <budget> -> the program's stdout
+  ( cd "$REPO" && EXCLUDE_GLOBS="$GLOBS" MAX_REVIEW_BYTES="$3" \
+      MAX_FILE_BYTES="$2" \
+      python3 "$SCRIPT" --manifest "$1" "$BASE" "$HEAD" )
 }
 
 manifest_of() { # manifest_of <out_dir> -> the manifest's contents
@@ -343,6 +349,303 @@ check "an omitted patch is not reported as an exclude_globs exclusion" \
   'yarn.lock' "$(printf '%s\n' "$LOG" | sed -n 's/^  - //p')"
 check "the surviving patches are still written" \
   '1' "$(manifest_of out_budget | grep -c '^modified	2	pkg/real\.go	out_budget/[0-9]*\.patch$')"
+
+# ---------------------------------------------------------------------------
+# The per-file cap. A SEPARATE control from the total budget above, so every
+# assertion here is about telling the two apart.
+#
+# The fixture's victim is big.txt again -- a ~12 kB patch among patches of a
+# few dozen bytes -- which is the shape the cap exists for: individually
+# lumpy, collectively tiny. The budget above only fires on it at 2000, i.e.
+# when the TOTAL is exceeded; at the real default of a megabyte it never
+# would, and that is the measured gap this closes.
+# ---------------------------------------------------------------------------
+
+# 1. THE DEFAULT CHANGES NOTHING. ~170 repositories take this workflow at a
+#    floating major tag and set nothing, so a cap of 0 must produce the same
+#    manifest, byte for byte, as a run that never heard of the input.
+crun out_cap_off 0 0 > /dev/null
+# The fourth column names the output directory, which differs by
+# construction, so it is normalised away and only that column is normalised:
+# everything else in the row must match character for character.
+check "a cap of 0 leaves the manifest identical to an uncapped run" \
+  '' "$(diff <(manifest_of out | sed 's#\tout/#\tDIR/#') \
+             <(manifest_of out_cap_off | sed 's#\tout_cap_off/#\tDIR/#') || true)"
+check "and every patch file is byte-identical too" \
+  '' "$(diff -r --exclude=manifest.tsv "$REPO/out" "$REPO/out_cap_off" || true)"
+check "and a cap of 0 truncates nothing" \
+  '0' "$(printf '%s\n' "$(crun out_cap_off0 0 0)" | sed -n 's/^  > //p' | wc -l | tr -d ' ')"
+rm -rf "$REPO/out_cap_off0"
+
+# ---------------------------------------------------------------------------
+# The per-file cap gets its own repository, because the shapes that matter
+# are shapes of a PATCH and the main fixture has none of them: its big.txt
+# is one unbroken run of identical lines, i.e. a single hunk, which the rule
+# below keeps whole. Four files, each a case that was shipped wrong once:
+#
+#   multi.txt  many small hunks -- truncation can actually help here, and
+#              this is the only shape where it does
+#   one.txt    ONE enormous hunk. The motivating case: a regenerated
+#              lockfile, a wholesale rewrite. Keeping only whole hunks that
+#              FIT supplies zero changed lines, and a patch of headers with
+#              no `@@` is still credited as reviewed -- `openable` is true,
+#              the coverage gate passes, the marker reads supplied=N/N
+#              read=N/N over a change nobody saw. At least one hunk must
+#              always survive.
+#   gone.txt   a large DELETION, which must be cut like anything else and
+#              keep a patch path; withheld it returns to exempt [DELETED]
+#   moved.txt  a pure rename: no `@@` at all, nothing to cut, and nothing
+#              in the working tree to go and look at
+# ---------------------------------------------------------------------------
+CAPREPO="$WORK/capped"
+mkdir -p "$CAPREPO"
+(
+  cd "$CAPREPO"
+  git init -q .
+  git config user.email fixture@example.invalid
+  git config user.name Fixture
+  git config commit.gpgsign false
+
+  i=0; while [ "$i" -lt 400 ]; do printf 'multi line %s\n' "$i"; i=$((i+1)); done > multi.txt
+  i=0; while [ "$i" -lt 400 ]; do printf 'one line %s\n' "$i"; i=$((i+1)); done > one.txt
+  i=0; while [ "$i" -lt 400 ]; do printf 'gone line %s\n' "$i"; i=$((i+1)); done > gone.txt
+  printf 'moved\n' > moved.txt
+  printf 'tiny\n' > tiny.txt
+  git add -A
+  git commit -qm base
+  git rev-parse HEAD > "$WORK/cap_base.sha"
+
+  # Every 20th line, so the hunks are separated by more than three lines of
+  # context and git renders them as distinct `@@` sections.
+  awk 'NR%20==0 {print "CHANGED " NR; next} {print}' multi.txt > multi.new
+  mv multi.new multi.txt
+  # Every line, so git renders ONE hunk covering the whole file.
+  awk '{print "CHANGED " NR}' one.txt > one.new
+  mv one.new one.txt
+  git rm -q gone.txt
+  git mv moved.txt renamed.txt
+  printf 'tiny\nplus\n' > tiny.txt
+  git add -A
+  git commit -qm change
+  git rev-parse HEAD > "$WORK/cap_head.sha"
+) > /dev/null
+
+CAP_BASE=$(cat "$WORK/cap_base.sha")
+CAP_HEAD=$(cat "$WORK/cap_head.sha")
+
+caprun() { # caprun <out_dir> <file_cap> <budget> -> the program's stdout
+  ( cd "$CAPREPO" && EXCLUDE_GLOBS="" MAX_REVIEW_BYTES="$3" MAX_FILE_BYTES="$2" \
+      python3 "$SCRIPT" --manifest "$1" "$CAP_BASE" "$CAP_HEAD" )
+}
+capmanifest() { cat "$CAPREPO/$1/manifest.tsv"; }
+cappatch() { # cappatch <out_dir> <path> -> the patch file for that row
+  capmanifest "$1" | awk -F'\t' -v p="$2" '$3 == p {print $4}'
+}
+
+# 2. Over the cap, with NO total budget -- the case `max_review_bytes`
+#    cannot express, because the sum was never exceeded.
+CAP_LOG=$(caprun out 2000 0)
+check "a multi-hunk patch over the cap is reported as truncated" \
+  'multi.txt' "$(printf '%s\n' "$CAP_LOG" | sed -n 's/^  > //p')"
+check "the truncated count is reported for the workflow to parse" \
+  '1' "$(printf '%s\n' "$CAP_LOG" | sed -n 's/^Truncated \([0-9][0-9]*\) file(s).*/\1/p')"
+
+# AT LEAST ONE HUNK ALWAYS SURVIVES, and for a SINGLE-hunk patch that means
+# the whole thing. This is the assertion the first truncating version did
+# not make and would have failed: one.txt is one hunk far larger than the
+# cap, so "whole hunks that fit" kept NONE and supplied a header with zero
+# changed lines -- while still carrying a real patch token, so `openable`
+# was true, the coverage gate passed, and the marker read supplied=N/N
+# read=N/N over a change nobody saw. That is the motivating shape, not an
+# edge case: a regenerated lockfile is one enormous hunk.
+#
+# The consequence is worth stating plainly rather than hiding in a pass:
+# because the sole hunk must survive and the marker only adds bytes, a
+# single-hunk patch is never cut at all. The cap helps multi-hunk patches
+# and does nothing for a wholesale rewrite.
+for f in multi.txt one.txt gone.txt tiny.txt; do
+  P=$(cappatch out "$f")
+  check "every row keeps a real patch path ($f)" \
+    '1' "$(printf '%s' "$P" | grep -c '^out/[0-9]*\.patch$')"
+  check "and its patch carries at least one hunk ($f)" \
+    '1' "$([ "$(grep -c '^@@ ' "$CAPREPO/$P")" -ge 1 ] && echo 1 || echo 0)"
+  check "and ends in a complete line ($f)" \
+    '1' "$([ "$(tail -c 1 "$CAPREPO/$P" | wc -l | tr -d ' ')" = '1' ] && echo 1 || echo 0)"
+done
+check "a single-hunk patch over the cap is left whole, not cut to a header" \
+  '0' "$(grep -c '^\*\*\* TRUNCATED' "$CAPREPO/$(cappatch out one.txt)" || true)"
+check "and so is a single-hunk deletion" \
+  '0' "$(grep -c '^\*\*\* TRUNCATED' "$CAPREPO/$(cappatch out gone.txt)" || true)"
+
+# A PURE RENAME HAS NO HUNK, so there is nothing to cut and nothing in the
+# working tree to go and look at. Untouched and unreported: the marker on
+# one of these read "this patch was 59 bytes, so 59 bytes were supplied".
+check "a pure rename is not reported as truncated" \
+  '0' "$(printf '%s\n' "$CAP_LOG" | sed -n 's/^  > //p' | grep -c 'renamed\.txt' || true)"
+check "and its patch carries no truncation marker" \
+  '0' "$(grep -c '^\*\*\* TRUNCATED' "$CAPREPO/$(cappatch out renamed.txt)" || true)"
+check "a patch under the cap is untouched too" \
+  '0' "$(grep -c '^\*\*\* TRUNCATED' "$CAPREPO/$(cappatch out tiny.txt)" || true)"
+
+# TRUNCATION NEVER MAKES A PATCH BIGGER. The marker is ~250 bytes, so a
+# naive cut of a small patch comes out several times the original -- a
+# control meant to save budget spending it instead. tiny.txt's patch is far
+# under that, and a cap of 1 must leave it exactly as it was.
+caprun out_tiny 1 0 > /dev/null
+check "a cap of 1 leaves a patch it could not shrink byte-identical" \
+  '' "$(diff "$CAPREPO/$(cappatch out tiny.txt)" \
+             "$CAPREPO/$(cappatch out_tiny tiny.txt)" || true)"
+# Compared against the UNCAPPED original, not against out/multi.txt, which
+# is itself already truncated -- a comparison between two cuts proves
+# nothing about whether cutting saved anything.
+caprun out_orig 0 0 > /dev/null
+check "and every truncated patch is smaller than the one it replaced" \
+  '1' "$([ "$(wc -c < "$CAPREPO/$(cappatch out_tiny multi.txt)")" -lt \
+           "$(wc -c < "$CAPREPO/$(cappatch out_orig multi.txt)")" ] && echo 1 || echo 0)"
+
+# 2b. STATUS IS NEVER CONSULTED, and it no longer has to be. A withheld
+#     patch on a `removed` row made `openable` False and took the row out
+#     of the denominator; a truncated one cannot, because it is a patch.
+check "no row anywhere is left without a patch by the cap" \
+  '0' "$(capmanifest out | awk -F'\t' '$4 == "-" || $4 == "omitted"' | wc -l | tr -d ' ')"
+check "the cap never emits a no-patch row for a deletion" \
+  '0' "$(capmanifest out | grep -c '^removed	[0-9]*	gone\.txt	-$' || true)"
+MULTI_CUT=$(cappatch out_tiny multi.txt)
+check "a truncated row still carries a real patch path" \
+  '1' "$(printf '%s' "$MULTI_CUT" | grep -c '^out_tiny/[0-9]*\.patch$')"
+
+# 2c. ONE HEADING PER PATH. The cap runs first and the TOTAL budget may then
+#     drop what it cut: that row has no patch at all, so `Omitted` is the
+#     true report and `Truncated` would be a second, contradictory remedy on
+#     the same pull request -- and for a deletion it is back to exempt
+#     [DELETED], the hole this design exists to close. The budget here is
+#     small enough to fire AFTER truncation, which the previous version of
+#     this block was constructed to avoid, so it proved nothing.
+HOLE_LOG=$(caprun out_hole 2000 300)
+check "the budget did fire, so the next assertion proves something" \
+  '1' "$([ "$(printf '%s\n' "$HOLE_LOG" | sed -n 's/^Omitted \([0-9][0-9]*\) file(s).*/\1/p')" -gt 0 ] && echo 1 || echo 0)"
+check "no path is reported as both truncated and omitted" \
+  '' "$(comm -12 \
+      <(printf '%s\n' "$HOLE_LOG" | sed -n 's/^  > //p' | sort) \
+      <(printf '%s\n' "$HOLE_LOG" | sed -n 's/^  \* //p' | sort))"
+
+# THE MARKER IS MODEL INPUT and the filename is the pull request author's.
+# Every other path this program prints goes through tsv_field; this one did
+# not, so a newline in a name ended the marker line and let the rest be read
+# as patch content. The file needs MANY hunks or it would not be cut at all.
+CAPX="$WORK/capped_evil"
+mkdir -p "$CAPX"
+(
+  cd "$CAPX"
+  git init -q .
+  git config user.email fixture@example.invalid
+  git config user.name Fixture
+  git config commit.gpgsign false
+  ODD=$(printf 'odd\nname.txt')
+  i=0; while [ "$i" -lt 400 ]; do printf 'x %s\n' "$i"; i=$((i+1)); done > "$ODD"
+  git add -A
+  git commit -qm base
+  git rev-parse HEAD > "$WORK/capx_base.sha"
+  awk 'NR%20==0 {print "CHANGED " NR; next} {print}' "$ODD" > x.new
+  mv x.new "$ODD"
+  git add -A
+  git commit -qm change
+  git rev-parse HEAD > "$WORK/capx_head.sha"
+) > /dev/null
+( cd "$CAPX" && EXCLUDE_GLOBS="" MAX_REVIEW_BYTES=0 MAX_FILE_BYTES=500 \
+    python3 "$SCRIPT" --manifest out "$(cat "$WORK/capx_base.sha")" \
+      "$(cat "$WORK/capx_head.sha")" ) > /dev/null
+EVIL_PATCH=$(awk -F'\t' '$4 ~ /\.patch$/ {print $4}' "$CAPX/out/manifest.tsv" | head -1)
+check "the hostile-path file really was truncated" \
+  '1' "$(grep -c '^\*\*\* TRUNCATED' "$CAPX/$EVIL_PATCH")"
+# The path is C-escaped, so the whole marker -- including the filename --
+# is ONE line, and nothing after the newline in that name can be read as
+# patch content.
+check "a newline in a filename is escaped inside the marker" \
+  '1' "$(grep -c '^\*\*\* TRUNCATED: .*name\.txt there and review it' "$CAPX/$EVIL_PATCH")"
+check "so no marker line is split in two" \
+  '0' "$(grep -c '^name\.txt there' "$CAPX/$EVIL_PATCH" || true)"
+
+# 3. THE BOUNDARY, and it is not where the input's wording suggests. A cap
+#    EQUAL to the patch size leaves it whole, as "no bigger than this" says.
+#    One byte under does NOT cut it, though: dropping the last hunk saves
+#    less than the ~250-byte marker costs, so the no-growth rule declines.
+#    The effective threshold is "below the original minus the marker minus
+#    the hunk that would go", which is a derived consequence of the two
+#    rules rather than a number anyone chose -- and it is asserted here so
+#    the input description cannot drift back to claiming an exact ceiling.
+caprun out_eqsrc 0 0 > /dev/null
+MULTI_BYTES=$(wc -c < "$CAPREPO/$(cappatch out_eqsrc multi.txt)" | tr -d ' ')
+caprun out_eq "$MULTI_BYTES" 0 > /dev/null
+check "a cap equal to the patch size truncates nothing" \
+  '0' "$(grep -c '^\*\*\* TRUNCATED' "$CAPREPO/$(cappatch out_eq multi.txt)" || true)"
+caprun out_lt1 "$((MULTI_BYTES - 1))" 0 > /dev/null
+check "one byte under it does not either, because cutting would not shrink" \
+  '0' "$(grep -c '^\*\*\* TRUNCATED' "$CAPREPO/$(cappatch out_lt1 multi.txt)" || true)"
+caprun out_half "$((MULTI_BYTES / 2))" 0 > /dev/null
+check "a cap that genuinely saves bytes does cut it" \
+  '1' "$(grep -c '^\*\*\* TRUNCATED' "$CAPREPO/$(cappatch out_half multi.txt)")"
+check "and the result really is smaller" \
+  '1' "$([ "$(wc -c < "$CAPREPO/$(cappatch out_half multi.txt)")" -lt "$MULTI_BYTES" ] && echo 1 || echo 0)"
+
+# 4. GIT MUST STILL ACCEPT WHAT WE WROTE. A patch cut mid-hunk is rejected,
+#    and one with no `@@` at all fails with "patch with only garbage" --
+#    which is what the headers-only output of the first version produced.
+#    Every shape this program emits goes through --check, reversed, against
+#    the tree the patches were computed from.
+for f in multi.txt one.txt gone.txt renamed.txt tiny.txt; do
+  P=$(cappatch out "$f")
+  check "git apply --check accepts the patch written for $f" 'OK' \
+    "$( cd "$CAPREPO" && git apply --check -R "$P" 2>&1 && echo OK )"
+done
+P=$(cappatch out_tiny multi.txt)
+check "and accepts a truncated patch too" 'OK' \
+  "$( cd "$CAPREPO" && git apply --check -R "$P" 2>&1 && echo OK )"
+
+# 4b. A BARE CR IS CONTENT, NOT A LINE BREAK. `bytes.splitlines` breaks on
+#     one and `git diff` does not, so a changed line spelling
+#     `new\r@@ -9,9 +9,9 @@ FAKE` became two "lines", the second of which
+#     reads as a hunk header: the cut landed inside a real content line,
+#     `git apply --check` answered "corrupt patch", and the marker went on
+#     claiming nothing was half-written. No earlier fixture could catch it
+#     because every fixture file was \n-terminated.
+CRREPO="$WORK/crlf_cap"
+mkdir -p "$CRREPO"
+(
+  cd "$CRREPO"
+  git init -q .
+  git config user.email fixture@example.invalid
+  git config user.name Fixture
+  git config commit.gpgsign false
+  i=0; while [ "$i" -lt 60 ]; do printf 'line %s\n' "$i"; i=$((i+1)); done > cr.txt
+  git add -A
+  git commit -qm base
+  git rev-parse HEAD > "$WORK/cr_base.sha"
+  # Every third line becomes content carrying a bare CR followed by text
+  # that looks exactly like a hunk header.
+  awk 'NR%3==0 {printf "new\r@@ -9,9 +9,9 @@ FAKE\n"; next} {print}' cr.txt > cr.new
+  mv cr.new cr.txt
+  git add -A
+  git commit -qm change
+  git rev-parse HEAD > "$WORK/cr_head.sha"
+) > /dev/null
+( cd "$CRREPO" && EXCLUDE_GLOBS="" MAX_REVIEW_BYTES=0 MAX_FILE_BYTES=120 \
+    python3 "$SCRIPT" --manifest out "$(cat "$WORK/cr_base.sha")" \
+      "$(cat "$WORK/cr_head.sha")" ) > /dev/null
+CR_PATCH=$(awk -F'\t' '$4 ~ /\.patch$/ {print $4}' "$CRREPO/out/manifest.tsv" | head -1)
+check "a bare CR does not open a bogus hunk, so the patch still applies" \
+  'OK' "$( cd "$CRREPO" && git apply --check -R "$CR_PATCH" 2>&1 && echo OK )"
+check "and no content line was rewritten with an added newline" \
+  '0' "$(grep -c '^+new$' "$CRREPO/$CR_PATCH" || true)"
+
+# 5. A malformed cap is the shape of a silently inoperative control, so it
+#    fails the run rather than reading as "no cap" -- same as the budget.
+set +e
+( cd "$REPO" && EXCLUDE_GLOBS="$GLOBS" MAX_REVIEW_BYTES=0 MAX_FILE_BYTES=-1 \
+  python3 "$SCRIPT" --manifest out_cap_bad "$BASE" "$HEAD" ) > /dev/null 2>&1
+CAP_STATUS=$?
+set -e
+check "a negative per-file cap is refused" '2' "$CAP_STATUS"
 
 # Writing into a directory the repository already owns would alter the tree
 # under review, so the refusal is deliberate and the workflow depends on it.

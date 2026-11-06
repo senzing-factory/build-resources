@@ -110,6 +110,7 @@ import sys
 import time
 from typing import NamedTuple
 
+import review_coverage
 import review_io
 
 USAGE = (
@@ -555,14 +556,68 @@ FLAGS = (
     "--lane",
     "--coverage-read",
     "--coverage-total",
+    "--truncated",
     "--summary",
     "--restored",
 )
 
 
+def counter_flag(argv: list, name: str) -> str:
+    """A non-negative integer from `--name`, or "0" having said why.
+
+    THE MARKER IS THE MACHINE-PARSED RECORD and every other number in it is
+    checked before it is written. This one arrived as a raw string straight
+    off argv, safe only because the workflow happens to guard it upstream --
+    which is a property of today's one caller, not of this program. A
+    malformed value would be written verbatim into an HTML comment that
+    something later parses as digits, and the failure would be a
+    silently unreadable field rather than an error.
+
+    Same shape as `review_io.checked_budget`: complain on stderr, which the
+    workflow prints into the job log, and fall back to the value that means
+    "none" rather than crashing a review over a counter.
+    """
+    value = _flag(argv, name, "0")
+    if value.isdigit():
+        return value
+    print(f"{name} must be a non-negative integer, got {value!r}", file=sys.stderr)
+    return "0"
+
+
 def manifest_rows(path: str) -> dict:
     """{repo path: (status, patch token)} from the manifest."""
     return {row[1]: (row[0], row[2]) for row in review_io.read_manifest(path)}
+
+
+def supply_counts(rows: dict, restored: tuple) -> tuple:
+    """(rows that got a patch, rows that could be opened at all).
+
+    THE DENOMINATOR IS OPENABLE ROWS, the same population `read=R/T`
+    divides by, because the marker puts the two side by side and invites
+    the comparison -- and a pair whose denominators differ is the exact
+    misreading this whole change exists to remove. Counted over ALL
+    manifest rows instead, a pull request touching thirty files of which
+    ten are images renders `supplied=20/30 read=20/20`: a complete review
+    that reads as a third of the change never reaching the reviewer, which
+    is `dropped=0 read=7/28` wearing different clothes.
+
+    `review_coverage.openable` is IMPORTED rather than restated. It is the
+    function that decides `COVERAGE_TOTAL`, and a second copy here would be
+    free to drift from it in precisely the way that produces two numbers
+    that look comparable and are not.
+
+    Both come from the manifest this run was handed rather than from the
+    filter's log, because the manifest IS what the reviewer saw. A row
+    whose fourth column is a REASONS token carries no patch; anything else
+    is a path to one, and such a row is always openable -- so the first
+    number is a subset of the second by construction.
+    """
+    openable = [
+        (path, token)
+        for path, (status, token) in rows.items()
+        if review_coverage.openable(status, token, path, restored)
+    ]
+    return sum(1 for _, token in openable if token not in REASONS), len(openable)
 
 
 def base_paths(base: str) -> set:
@@ -651,7 +706,7 @@ def reason_for(path: str, rows: dict) -> str:
     if path not in rows:
         return "EXCLUDED"
     status, token = rows[path]
-    if token == "-" and status == "removed":
+    if token == "-" and status == review_io.REMOVED:
         return "DELETED"
     return REASONS.get(token, "UNREAD")
 
@@ -1071,6 +1126,10 @@ class Tally(NamedTuple):
     reader what was withheld from them, the marker records everything the
     run did. Both are computed in `build` from the same `counts`, so neither
     can drift from the other by accident.
+
+    `supplied`, `rows` and `truncated` are about FILES, not findings, and
+    they are here because the marker has to carry all of them and a reader
+    could not previously tell files from findings at all. See `marker`.
     """
 
     shown: list
@@ -1079,6 +1138,9 @@ class Tally(NamedTuple):
     space: int
     read: str
     total: str
+    supplied: int = -1
+    rows: int = -1
+    truncated: str = "0"
 
 
 def coverage_note(read: str, total: str) -> str:
@@ -1276,14 +1338,67 @@ def marker(lane: str, tally: Tally, head: str) -> str:
     malformed one was simply unreadable and nothing noticed; `read=` in
     particular is the measurement, so it could never have come from there.
 
-    `findings=` is what the comment CARRIES, `dropped=` everything
-    adjudication or the budget removed. Without the second, `findings=0
-    blockers=0` meant both "nothing was found" and "everything was dropped".
+    `findings=` is what the comment CARRIES, `findings_withheld=`
+    everything adjudication or the body budget removed. Without the second,
+    `findings=0 blockers=0` meant both "nothing was found" and "everything
+    was dropped".
+
+    ~~`dropped=`~~ WAS THE NAME AND IT WAS ACTIVELY MISLEADING. It counts
+    FINDINGS; next to `read=7/28` it reads as the number of FILES withheld
+    from the reviewer, and `dropped=0 read=7/28` was duly read as "nothing
+    was withheld, so the 21 unopened files must have been too big" -- by a
+    second reader, off the artefact, after the first had made the same
+    mistake. Neither half of that was true. The rename costs a field name
+    nothing outside this repository parses; the confusion cost two wrong
+    diagnoses of the same pull request.
+
+    `supplied=S/T` is the count that was actually missing: of `T` OPENABLE
+    rows, `S` had a patch file written for them. `T` is the same population
+    `read=R/T` divides by -- openable rows, so binary, deleted and restored
+    rows are in neither -- which is what makes the two safe to read side by
+    side -- EXCEPT IN TWO CASES, and both arise in practice. When coverage
+    could not be MEASURED, `read=` is a token rather than a pair and there
+    is nothing to compare against. When the coverage step did not RUN at
+    all -- an error lane, a skipped review -- the workflow passes
+    `--coverage-read 0 --coverage-total 0` and the marker renders
+    `read=0/0` beside a real `supplied=S/T`: two pairs whose denominators
+    look alike and are not, because the 0 is an absence of measurement and
+    the T is a count of rows. Read `read=0/0` as "not measured", never as
+    "nothing was openable" -- the lane letter says which.
+
+    A low `S` means the reviewer was not GIVEN the change; a low `R`
+    against a high `S` means it was given it and did not open it. The
+    per-row detail is on the comment, from `review_coverage.py`; this is
+    the one-line version whoever is diagnosing sees first.
+
+    **v4, NOT v3.** The token tracks the FIELD SET, and this release
+    renamed one field and added two. Three different field sets sharing
+    `v3` is how a future reader comes to parse a marker by position and get
+    the wrong integer -- the same class of defect as the greedy regex
+    `previous_stats` carried. Every matcher in this repository is already
+    `v[0-9]+`, so the bump costs nothing and buys the invariant that one
+    token means one schema. The one deliberate exception is `lane=T`, which
+    omits `findings=` entirely so it can never be read as a baseline; that
+    is documented where it is written, not drift.
+
+    `truncated=N` IS WHAT STOPS `supplied=` BECOMING THE NEXT LIE. A
+    truncated patch is supplied -- it carries real hunks and the row is
+    openable -- so thirty files all cut back to their first hunk still
+    render `supplied=30/30 read=30/30`, which is a perfect-looking review
+    of a change mostly not shown. Truncation is the one new way this marker
+    can mislead, and it is the artefact the whole change exists to make
+    honest, so the count travels with it.
     """
     blockers = sum(1 for f in tally.shown if f.severity == "BLOCKER")
+    # NOT `findings_...`: `previous_stats` matches `findings=(\d+)` and a
+    # second field whose name ENDS in that literal would be captured instead
+    # of the real one, silently feeding the regression detector the wrong
+    # number. That regex is anchored now; the name still avoids the trap.
     return (
-        f"<!-- claude-review v3 lane={lane} findings={len(tally.shown)}"
-        f" blockers={blockers} dropped={tally.recorded + tally.space}"
+        f"<!-- claude-review v4 lane={lane} findings={len(tally.shown)}"
+        f" blockers={blockers} findings_withheld={tally.recorded + tally.space}"
+        f" supplied={tally.supplied}/{tally.rows}"
+        f" truncated={tally.truncated}"
         f" read={tally.read}/{tally.total} head={head} -->"
     )
 
@@ -1312,7 +1427,20 @@ def previous_stats(path: str) -> tuple:
         return 0, -1
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         body = handle.read()
-    found = re.findall(r"<!-- claude-review v\d+ [^>]*findings=(\d+)", body)
+    # THE LOOKBEHIND IS THE FIX, not a position. The greedy `[^>]*findings=`
+    # matched the LAST `findings=`-suffixed field in a marker, so adding any
+    # field whose name ends in that literal -- `dropped_findings=` was a
+    # candidate -- would have handed this the wrong integer with nothing
+    # failing. The class spans EVERY SEPARATOR A FIELD NAME CAN USE, not
+    # just the underscore: `(?<![\w])` alone still accepted
+    # `dropped-findings=` and `drop.findings=`, both of which captured the
+    # drop count. `(?<![\w.\-])` requires a real field boundary before the
+    # name while leaving the field free to MOVE -- an anchor on `lane=\S+ `
+    # instead would return -1, "no previous measurement", the moment
+    # anything was inserted between the two, silently disabling the
+    # regression detector, which is the same shape of failure one layer
+    # along. lane=T carries no `findings=` at all; `found[-1]` handles it.
+    found = re.findall(r"<!-- claude-review v\d+ [^>]*(?<![\w.\-])findings=(\d+)", body)
     return len(body), int(found[-1]) if found else -1
 
 
@@ -1395,13 +1523,26 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
         locals above. They are two views of one dictionary and nothing
         between here and there may change one without the other.
         """
+        # BY KEYWORD. Nine positional arguments with two adjacent ints --
+        # `supplied` and `rows` -- is the silent-corruption shape `Request`
+        # warns about in filter_diff.py: transposing them is not a type
+        # error and the only symptom is a wrong pair on the comment.
         tally = Tally(
-            shown,
-            dropped_total(counts, DISCLOSED),
-            dropped_total(counts, RECORDED),
-            len(survived) - len(shown),
-            read,
-            total,
+            shown=shown,
+            adjudged=dropped_total(counts, DISCLOSED),
+            recorded=dropped_total(counts, RECORDED),
+            space=len(survived) - len(shown),
+            read=read,
+            total=total,
+            supplied=counts.get("supplied", -1),
+            rows=counts.get("rows", -1),
+            # Read here rather than hoisted to a local: `build` is at
+            # pylint's limit, and unlike the clock this is a constant
+            # string, so re-reading it per render cannot change the body.
+            # Validated, not just defaulted: see `counter_flag`. "0" is
+            # what a caller with no per-file cap means, and what a
+            # malformed value falls back to after saying so.
+            truncated=counter_flag(argv, "--truncated"),
         )
         return (
             header(tally, summary, bool(counts["no_verdict"])),
@@ -1497,12 +1638,15 @@ def main(argv: list) -> int:
         return 2
 
     findings, refused, supplied = load(found)
+    rows = manifest_rows(manifest)
+    restored = tuple(_flag(argv, "--restored").split())
     counts = adjudicate(
         findings,
-        manifest_rows(manifest),
+        rows,
         base_paths(_flag(argv, "--base", "HEAD^")),
-        tuple(_flag(argv, "--restored").split()),
+        restored,
     )
+    counts["supplied"], counts["rows"] = supply_counts(rows, restored)
     counts["duplicate"] = collapse(findings)
     counts["schema"] = refused["schema"]
     counts["unsafe"] = refused["unsafe"]

@@ -145,6 +145,7 @@
     "unparseable",
     "urandom",
     "vladopajic",
+    "worktree",
     "zizmor"
   ],
   "ignorePaths": [".git/**"]

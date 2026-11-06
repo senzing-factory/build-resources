@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cspell:ignore inrun  -- an awk local, not vocabulary
+# cspell:ignore inrun unrun  -- an awk local and a comment's own word, not vocabulary
 # Fixture tests for the reviewer workflow's own guards.
 #
 # WHY THIS FILE EXISTS. On 2026-10-29 five pull requests were reviewed by a
@@ -521,6 +521,53 @@ check "and the extension super-linter ignores is not present" \
   'no' "$([ -f "$LINTERS_DIR/actionlint.yaml" ] && echo yes || echo no)"
 check "the zizmor config keeps its own, different extension" \
   'yes' "$([ -f "$LINTERS_DIR/zizmor.yaml" ] && echo yes || echo no)"
+
+# ---------------------------------------------------------------------------
+# The prompt's contradictory-instruction hazard, asserted on the FILE.
+# ---------------------------------------------------------------------------
+#
+# A path can be BOTH truncated and restored. The truncated paragraph sends
+# the reviewer to the working tree for the rest of the change; at a restored
+# path the working tree holds the BASE's content, so the remainder is
+# reachable nowhere and reading the tree invites findings against the base.
+# The restored paragraph is the correct, more specific statement, so it has
+# to be the one the model reads LAST -- and it has to say so.
+#
+# Asserted by line order in the workflow file rather than by running the
+# step: these are two `echo ... >> prompt.md` lines whose order in the file
+# IS their order in the prompt, and a test that rebuilt the prompt would be
+# a second copy of the step rather than a check on it. `filter_diff.py`
+# cannot make this correction itself -- it is deliberately never told the
+# restored set -- so the workflow is the only place it can live.
+# `|| true` INSIDE the substitution, not a default after it. This suite
+# runs `set -euo pipefail`: a `grep` that matches nothing fails the
+# pipeline, the assignment inherits that status, and the script DIES THERE
+# -- before any default is applied and before any of the checks below run.
+# Measured by deleting the TRUNCATED_SUMMARY line from a copy of the
+# workflow: exit 1, no FAIL line, no "tests FAILED" line, four assertions
+# silently unrun. An earlier version of this comment claimed the trailing
+# defaults prevented that; they are evaluated too late to prevent anything.
+#
+# The shape generalises: ANY `X=$(grep ...)` in a suite like this one. `grep
+# -c` is the sharpest case, because a legitimate count of zero exits 1.
+TRUNC_LINE=$(grep -n 'TRUNCATED_SUMMARY:-' "$WORKFLOW_FILE" | head -1 | cut -d: -f1 || true)
+REST_LINE=$(grep -n 'RESTORED_PATHS:-}" \]; then' "$WORKFLOW_FILE" | head -1 | cut -d: -f1 || true)
+TRUNC_LINE=${TRUNC_LINE:-0}
+REST_LINE=${REST_LINE:-0}
+# `-gt 0`, not `-n`: after the defaulting above neither is ever empty, so a
+# `-n` test is a tautology that cannot fail however broken the workflow is.
+check "the prompt names a truncated-files paragraph" \
+  '1' "$([ "$TRUNC_LINE" -gt 0 ] && echo 1 || echo 0)"
+check "and a restored-paths paragraph" \
+  '1' "$([ "$REST_LINE" -gt 0 ] && echo 1 || echo 0)"
+check "the restored paragraph is emitted AFTER the truncated one" \
+  '1' "$([ "$REST_LINE" -gt "$TRUNC_LINE" ] && echo 1 || echo 0)"
+check "and it overrides the working-tree instruction above it" \
+  '1' "$(sed -n "${REST_LINE},\$p" "$WORKFLOW_FILE" | head -3 \
+         | grep -c 'overrides anything above that sends you to the working tree')"
+check "and it names the truncated overlap explicitly" \
+  '1' "$(sed -n "${REST_LINE},\$p" "$WORKFLOW_FILE" | head -3 \
+         | grep -c 'also in the truncated list')"
 
 if [ "$FAILED" -ne 0 ]; then
   echo "review workflow tests FAILED" >&2
