@@ -149,6 +149,14 @@ COUNTS appended to that file:
     COVERAGE_UNCOVERED  count of openable rows it did not open
     COVERAGE_EXEMPT     rows with nothing to open (deleted or binary)
 
+Every uncovered row is named on stdout and in `--missed-file` with a code
+saying WHAT IT WAS GIVEN and WHETHER IT TRIED -- `PATCH`, `WORKTREE`, either
+with `+TRIED`. That distinction is the whole reason this program reads the
+transcript twice: a row nobody opened and a row whose `Read` came back empty
+are different defects with different owners, and the counts alone report
+them identically. The transcript itself does not outlive the job, so a code
+not emitted here cannot be recovered later.
+
 all four being the token `unmeasured` instead whenever this run established
 nothing -- either of the two cases above.
 
@@ -181,13 +189,20 @@ USAGE = (
 # The manifest's fourth column when there is no patch file to read. They mean
 # "there is no patch", for three different reasons, and only the first two
 # leave the working tree as a fallback.
+#
+# THE PER-FILE CAP IS DELIBERATELY NOT HERE. It truncates rather than
+# withholds, so its rows carry a real patch path and never reach this tuple
+# -- which is the whole point of that design: a withheld patch on a
+# `removed` row, or on one under a restored prefix, made `openable` False
+# and took the row out of the denominator. A token for it would have to sit
+# on the no-patch side and would reopen exactly that hole.
 NO_PATCH = ("-", "omitted", "binary")
 
 # The fourth-column token for a file git reported as binary, and the status
 # column's token for a deletion. Both make a row unopenable; see the module
 # docstring.
 BINARY = "binary"
-REMOVED = "removed"
+REMOVED = review_io.REMOVED
 
 # How many missed paths reach the environment file and the PR comment. The
 # rest are counted. Matches the cap the workflow already applies to its
@@ -236,9 +251,18 @@ class Reads(NamedTuple):
     reads: how many lines parsed, and how many blocks of a type this program
     knows were in them. They are what separates a run that opened nothing
     from a transcript whose envelope this program can no longer read.
+
+    `paths` is what RETURNED a file; `attempted` is every path a `Read` was
+    issued for. A row in neither was never looked at; a row in `attempted`
+    and not in `paths` was looked at and gave nothing back. Those are
+    different failures with different owners -- the first is the reviewer
+    under-reading, the second is a path that is not there to be read -- and
+    reporting them as one number is what made a 7-of-28 review impossible to
+    diagnose from the pull request it was posted on.
     """
 
     paths: set
+    attempted: set
     issued: int
     succeeded: int
     failed: int
@@ -276,10 +300,17 @@ def read_paths(transcript: str) -> Reads:
         blocks += _collect(event, requested, results)
 
     paths = {path for call, path in requested.items() if results.get(call) is True}
+    # EVERY path a `Read` was issued for, whatever came back. `paths` is the
+    # subset that returned a file; the difference between the two is the only
+    # thing that separates "the reviewer never looked at this row" from "it
+    # looked and got nothing", and until this set existed the transcript that
+    # held the answer was deleted with $RUNNER_TEMP at the end of the job.
+    attempted = set(requested.values())
     succeeded = sum(1 for call in requested if results.get(call) is True)
     failed = sum(1 for call in requested if results.get(call) is False)
     return Reads(
         paths=paths,
+        attempted=attempted,
         issued=len(requested),
         succeeded=succeeded,
         failed=failed,
@@ -411,6 +442,81 @@ def openable(status: str, patch_file: str, repo_path: str, restored: tuple) -> b
     return not review_io.under(repo_path, restored)
 
 
+def covered_by(repo_path: str, patch: str, read: Seen) -> bool:
+    """Whether this row's change was seen: either read answers for it.
+
+    A TRUNCATED ROW SHOULD NEED BOTH -- its patch is only PART of the
+    change and the remainder is only in the working tree, so crediting it
+    on the patch alone lets `coverage_enforcement: fail` pass a merge over
+    a change the reviewer saw one hunk of. That is the correct end state
+    and it is deliberately NOT done yet.
+
+    The blocker is that the two byte controls compose badly: a patch the
+    per-file cap cut and the TOTAL budget then dropped leaves a row with no
+    patch at all, so a both-reads conjunction is unsatisfiable by any
+    transcript and the pull request becomes unmergeable with nothing its
+    author can do. Fixing that needs budget-dropped indexes filtered out of
+    the cap's set before the manifest is written, plus a `bool(patch)`
+    guard here. It should also follow data on how often truncation fires,
+    not precede it -- `truncated=N` on the marker is what will say.
+    """
+    return opened(repo_path, read) or opened(patch, read)
+
+
+def _reached_and_got_nothing(candidate: str, read: Seen, tried: Seen) -> bool:
+    """A `Read` was issued for `candidate` and it did not return a file.
+
+    ATTEMPTED MINUS SUCCEEDED, not attempted. `Reads.attempted` holds every
+    path a call was issued for, successes included, so testing it alone
+    marked a row `+TRIED` when the reviewer had read one of its two halves
+    perfectly well -- which is exactly the opposite of what the code says.
+    The difference is visible whenever a row has TWO candidate paths and
+    only one of them was reached -- a row with a patch the reviewer opened
+    and a working-tree file it did not, or the reverse.
+    """
+    if not candidate:
+        return False
+    return opened(candidate, tried) and not opened(candidate, read)
+
+
+def missed_reason(repo_path: str, patch: str, read: Seen, tried: Seen) -> str:
+    """Why this openable row was not opened: a CODE, like `exempt_reason`.
+
+    TWO INDEPENDENT FACTS, and a reader of the pull request needs both.
+
+    The first is what the reviewer was GIVEN. `PATCH` means a whole patch
+    file was written for this row and sat on disk; `WORKTREE` means none
+    was, because the total byte budget dropped it or `git diff` rendered
+    none, so the instruction was to open the file in the working tree.
+    A patch the per-file cap cut counts as `PATCH` here: it is a patch,
+    and nothing in this program distinguishes a cut one. See `covered_by`
+    for why that is deliberate for now and what it costs.
+
+    A supplied-and-unopened row is the reviewer declining; a row with no
+    patch is a harder ask it also declined. Different owners, different
+    fixes, and `read=29/30` alone distinguishes neither.
+
+    The second is whether it TRIED. `+TRIED` means a `Read` was ISSUED for
+    one of this row's paths and THAT path did not return a file -- it came
+    back empty, it was flagged an error, OR NO RESULT WAS RECORDED FOR IT
+    AT ALL, which is what a
+    killed run and a changed transcript envelope both look like. All three
+    are "the reviewer reached for this and did not get it", which is a
+    different thing from never reaching, and `Reads.attempted` is built from
+    the calls rather than the results precisely so it covers the third.
+    Without the code every uncovered row looks identical on the comment, and
+    four reviews of one pull request that opened 7, 7, 14 and 29 of nearly
+    the same file set cannot be told apart from the only artefact that
+    outlives the run.
+    """
+    supply = "PATCH" if patch else "WORKTREE"
+    if _reached_and_got_nothing(repo_path, read, tried) or _reached_and_got_nothing(
+        patch, read, tried
+    ):
+        return f"{supply}+TRIED"
+    return supply
+
+
 def exempt_reason(status: str, patch_file: str, repo_path: str, restored: tuple) -> str:
     """Why nothing could be opened for this row: a CODE, not a verdict.
 
@@ -430,10 +536,18 @@ def exempt_reason(status: str, patch_file: str, repo_path: str, restored: tuple)
     return "NOPATCH"
 
 
-def measure(rows: list, read: Seen, restored: tuple = ()) -> tuple:
+def measure(rows: list, read: Seen, tried: Seen, restored: tuple = ()) -> tuple:
     """(covered, uncovered, exempt) repo paths, given the manifest and reads.
 
-    `exempt` entries carry their reason code alongside the path.
+    `uncovered` and `exempt` entries both carry a reason code beside the
+    path, in the same `path [CODE]` shape, so the two disclosures read alike
+    wherever they land.
+
+    `tried` is the same workspace split over the paths a `Read` was ISSUED
+    for, a superset of `read`. It decides only the `+TRIED` half of an
+    uncovered row's code and can never move a row between the three lists:
+    coverage is still credited on RESULTS, never on calls, which is the
+    property that stops a model satisfying the counter by issuing reads.
     """
     covered, uncovered, exempt = [], [], []
     for status, repo_path, patch_file in rows:
@@ -442,10 +556,12 @@ def measure(rows: list, read: Seen, restored: tuple = ()) -> tuple:
             exempt.append(f"{repo_path} [{reason}]")
             continue
         patch = "" if patch_file in NO_PATCH else patch_file
-        if opened(repo_path, read) or opened(patch, read):
+        if covered_by(repo_path, patch, read):
             covered.append(repo_path)
         else:
-            uncovered.append(repo_path)
+            uncovered.append(
+                f"{repo_path} [{missed_reason(repo_path, patch, read, tried)}]"
+            )
     return covered, uncovered, exempt
 
 
@@ -500,7 +616,7 @@ def unmeasured_reason(reads: Reads, seen: Seen) -> str:
     return ""
 
 
-def tally(rows: list, seen: Seen, restored: tuple, reads: Reads) -> Tally:
+def tally(rows: list, seen: Seen, tried: Seen, restored: tuple, reads: Reads) -> Tally:
     """Measure the manifest against the run, and say whether it is measurable.
 
     THE TOKEN IS WITHHELD WHERE NOTHING WAS MEASURED IN THE FIRST PLACE. A
@@ -511,7 +627,7 @@ def tally(rows: list, seen: Seen, restored: tuple, reads: Reads) -> Tally:
     sends its reader to the CLI pin over a change that never had a file to
     read. The diagnosis is still printed; only the counts stay numbers.
     """
-    covered, uncovered, exempt = measure(rows, seen, restored)
+    covered, uncovered, exempt = measure(rows, seen, tried, restored)
     degraded = unmeasured_reason(reads, seen)
     return Tally(
         covered=covered,
@@ -567,7 +683,12 @@ def write_counts(path: str, tallies: Tally) -> None:
 
 
 def write_missed(path: str, uncovered: list) -> None:
-    """The unopened paths, one per line, re-escaped on the way out."""
+    """The unopened rows, one per line, re-escaped on the way out.
+
+    Each entry is `path [CODE]` rather than a bare path -- see
+    `missed_reason` -- so the comment can say what the reviewer was given
+    and whether it tried, not only that it did not open the file.
+    """
     missed = [review_io.tsv_field(p) for p in uncovered[:MISSED_LIST_CAP]]
     if len(uncovered) > MISSED_LIST_CAP:
         missed.append(f"(+{len(uncovered) - MISSED_LIST_CAP} more)")
@@ -628,6 +749,7 @@ def report(reads: Reads, seen: Seen, workspace: str, tallies: Tally) -> None:
         f" file, {reads.failed} returned nothing or errored,"
         f" {reads.unmatched} with no result recorded."
     )
+    print(f"Distinct paths attempted: {len(reads.attempted)}")
     if reads.unmatched:
         print(
             f"::warning::{reads.unmatched} Read call(s) have no recorded"
@@ -666,6 +788,22 @@ def report(reads: Reads, seen: Seen, workspace: str, tallies: Tally) -> None:
         " (deleted, binary, or reverted to base before the review)."
     )
     if not unmeasured:
+        # THE PER-ROW LINES ARE THE INSTRUMENT, and the job log is where they
+        # survive. The stream-json transcript they are derived from lives in
+        # $RUNNER_TEMP and is deleted with the runner, so before these codes
+        # existed the one artefact that could separate "never opened it" from
+        # "opened it and got nothing" did not outlive the job -- and the
+        # question could not be asked again afterwards at any price. The
+        # legend is printed beside them rather than left to this file,
+        # because whoever reads the log is diagnosing, not browsing source.
+        if uncovered:
+            print(
+                "Not opened, by what the reviewer was given and whether it"
+                " tried: PATCH = a patch file was written for the row;"
+                " WORKTREE = no patch, so the working tree was the"
+                " instruction; +TRIED = a Read was issued for it and did not"
+                " return a file."
+            )
         for path in uncovered:
             print(f"  ? {path}")
     for path in exempt:
@@ -693,6 +831,7 @@ def main(argv: list) -> int:
     else:
         reads = Reads(
             paths=set(),
+            attempted=set(),
             issued=0,
             succeeded=0,
             failed=0,
@@ -709,7 +848,11 @@ def main(argv: list) -> int:
     # set of reviewer-configuration paths; it now also carries nested ignore
     # files the pull request touched, which is why the exclusion matters.
     restored = tuple((options["--restored"] or "").split())
-    tallies = tally(rows, seen, restored, reads)
+    # The ATTEMPTED paths go through the same split as the successful ones,
+    # so a `+TRIED` code is decided by the same matching rules that decide
+    # coverage and the two can never disagree about which row a path is.
+    tried = workspace_split(reads.attempted, workspace)
+    tallies = tally(rows, seen, tried, restored, reads)
 
     report(reads, seen, workspace, tallies)
 

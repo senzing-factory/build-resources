@@ -106,13 +106,37 @@ printf '%s\n' \
   printf '%s\n' '{"type":"result","is_error":false,"result":"**1 finding** — 0 blockers, 1 risk."}'
 } > "$WORK/thin.jsonl"
 
+{
+  read_ok f1 "$W/.claude/STATUS.md"
+  read_ok f2 "$W/crates/analyzer/src/analyzer.rs"
+  read_ok f3 "$W/crates/analyzer/src/report.rs"
+  read_ok f4 "$W/crates/analyzer/src/catalog.rs"
+  read_ok f5 "$W/crates/analyzer/tests/parity/run_parity.py"
+  printf '%s\n' '{"type":"result","is_error":false,"result":"x"}'
+} > "$WORK/full.jsonl"
+
 echo "review_coverage.py"
 LOG=$(crun manifest.tsv thin.jsonl)
 check "the failing shape reports one row of five opened" \
   '1/5' "$(coverage_of "$LOG")"
-check "the unread Rust is named first among the misses" \
-  'crates/analyzer/src/analyzer.rs,crates/analyzer/src/report.rs,crates/analyzer/src/catalog.rs,crates/analyzer/tests/parity/run_parity.py' \
+# EVERY MISS CARRIES ITS CODE, and the codes differ within this one list:
+# analyzer.rs has no patch (the fourth column is `-`), the other three do.
+# That is the supplied-vs-opened distinction the pull request comment could
+# not previously make -- `read=1/5` says the same thing about all four.
+check "the unread Rust is named first among the misses, each with its code" \
+  'crates/analyzer/src/analyzer.rs [WORKTREE],crates/analyzer/src/report.rs [PATCH],crates/analyzer/src/catalog.rs [PATCH],crates/analyzer/tests/parity/run_parity.py [PATCH]' \
   "$(missed_of "$LOG")"
+check "a row with no patch is distinguished from one that had a patch" \
+  '1' "$(printf '%s\n' "$LOG" | grep -c '^  ? crates/analyzer/src/analyzer\.rs \[WORKTREE\]$')"
+check "and the legend that explains the codes is in the job log" \
+  '1' "$(printf '%s\n' "$LOG" | grep -c 'Not opened, by what the reviewer was given')"
+# The legend is printed ONLY when there is something under it. It is the
+# comment's sole copy no longer -- it is the ONLY copy -- so a header with
+# no rows beneath it is the whole output, which reads as a finding.
+FULL_LOG=$(crun manifest.tsv full.jsonl)
+check "a run that opened everything prints no legend" \
+  '0' "$(printf '%s\n' "$FULL_LOG" | grep -c 'Not opened, by what the reviewer was given' || true)"
+check "and reports full coverage" '5/5' "$(coverage_of "$FULL_LOG")"
 
 # THE REGRESSION TEST. Reads that came back is_error opened nothing. The
 # first version of this checker counted the calls and reported 2/2 on exactly
@@ -131,6 +155,30 @@ printf '%s\n' \
 } > "$WORK/errs.jsonl"
 check "reads that came back is_error are not coverage" \
   '0/2' "$(coverage_of "$(crun errs.tsv errs.jsonl)")"
+# ...AND THE ATTEMPT IS STILL RECORDED. This is the pair the whole code
+# exists for: both rows are 0/2 whether the reviewer issued a Read that
+# failed or issued none at all, and only `+TRIED` separates them. The first
+# is a path that is not there; the second is a reviewer that did not look.
+# The transcript carrying the difference is deleted with $RUNNER_TEMP, so a
+# code not emitted here cannot be recovered afterwards.
+ERRS_LOG=$(crun errs.tsv errs.jsonl)
+check "a row whose read failed is marked as having been tried" \
+  'src/present.rs [WORKTREE+TRIED],src/vanished.rs [WORKTREE+TRIED]' \
+  "$(missed_of "$ERRS_LOG")"
+check "and the attempted-path count is reported beside the opened one" \
+  '2' "$(printf '%s\n' "$ERRS_LOG" | sed -n 's/^Distinct paths attempted: //p')"
+# The control: the same manifest with a transcript that issued no Read at
+# all. Same 0/2, no +TRIED anywhere.
+{
+  structured_out
+  printf '%s\n' '{"type":"result","is_error":false,"result":"x"}'
+} > "$WORK/silent.jsonl"
+SILENT_LOG=$(crun errs.tsv silent.jsonl)
+check "a row nobody opened is NOT marked as having been tried" \
+  'src/present.rs [WORKTREE],src/vanished.rs [WORKTREE]' \
+  "$(missed_of "$SILENT_LOG")"
+check "and both transcripts report the same coverage, which is the point" \
+  "$(coverage_of "$ERRS_LOG")" "$(coverage_of "$SILENT_LOG")"
 
 # One good read beside one failed one: the good one still counts, so the
 # fix is not a blanket refusal to credit anything.
@@ -435,7 +483,83 @@ check "and each names the exemption rather than a severity" \
 check "a reverted row with a patch stays in the denominator" \
   '0' "$(printf '%s\n' "$RESTORED_LOG" | grep -c '^  = \.claude/agents/x\.md' || true)"
 check "a row outside the restored set is still demanded" \
-  'src/a.go' "$(missed_of "$RESTORED_LOG")"
+  'src/a.go [WORKTREE]' "$(missed_of "$RESTORED_LOG")"
+
+# ---------------------------------------------------------------------------
+# A TRUNCATED ROW IS A ROW WITH A PATCH, down every branch of `openable`.
+# ---------------------------------------------------------------------------
+#
+# This is the consuming half of filter_diff.py's per-file cap, and it is the
+# assertion the first two designs of that cap would have failed. While the
+# cap WITHHELD a patch, the row carried a no-patch token -- and `openable`
+# credits such a row only when the working tree can answer for it, which it
+# cannot when the row is `removed` (the file is gone) and cannot under a
+# `--restored` prefix (the tree holds the BASE's content). Either way the
+# row left the denominator as exempt and `coverage_enforcement: fail` had no
+# opinion about it: the cap could take a change out of review entirely.
+#
+# Truncation means the row has a patch path, so `openable` returns True on
+# its FIRST branch and never reaches either test. Both rows below are the
+# exact two branches that bit us, and each is paired with the control that
+# fails on the opposite code path -- the same row with a no-patch token.
+printf '%s\n' \
+  'removed	900	src/gone_big.go	pr-files/0001.patch' \
+  'modified	900	.claude/agents/big.md	pr-files/0002.patch' \
+  'modified	4	src/app.go	pr-files/0003.patch' \
+  > "$WORK/trunc.tsv"
+{
+  read_ok t1 "$W/pr-files/0003.patch"
+  printf '%s\n' '{"type":"result","is_error":false,"result":"x"}'
+} > "$WORK/trunc.jsonl"
+TRUNC_LOG=$(python3 "$SCRIPT" "$WORK/trunc.tsv" "$WORK/trunc.jsonl" \
+  --workspace "$W" --restored '.claude CLAUDE.md')
+check "all three patched rows stay in the denominator" \
+  '1/3' "$(coverage_of "$TRUNC_LOG")"
+check "and none of them is exempt" '0' "$(exempt_of "$TRUNC_LOG")"
+# THESE ARE PLAIN PATCHED ROWS, AND THE LABELS USED TO SAY MORE. They pin
+# that a row WITH A PATCH PATH is openable whatever its status or its
+# restored prefix -- which is the property the per-file cap relies on,
+# since a truncated patch is still a patch, but which was true before any
+# of that existed. The names once called them truncated rows and claimed
+# the cap was under test; nothing here exercises the cap at all.
+#
+# Renamed rather than quietly repaired. This was the third fixture in this
+# change found passing for the wrong reason, and a wrong NAME is how the
+# next reader is misled about what is covered.
+check "a row with a patch path is demanded even when its status is removed" \
+  '1' "$(printf '%s\n' "$TRUNC_LOG" | grep -c '^  ? src/gone_big\.go \[PATCH\]$')"
+check "and even when it sits under a restored prefix" \
+  '1' "$(printf '%s\n' "$TRUNC_LOG" | grep -c '^  ? \.claude/agents/big\.md \[PATCH\]$')"
+
+# THE CONTROLS. The same two rows with a no-patch token -- which is what the
+# withholding design produced -- leave the denominator, and that is what
+# makes the four assertions above load-bearing rather than incidental.
+printf '%s\n' \
+  'removed	900	src/gone_big.go	omitted' \
+  'modified	900	.claude/agents/big.md	omitted' \
+  'modified	4	src/app.go	pr-files/0003.patch' \
+  > "$WORK/withheld.tsv"
+WITHHELD_LOG=$(python3 "$SCRIPT" "$WORK/withheld.tsv" "$WORK/trunc.jsonl" \
+  --workspace "$W" --restored '.claude CLAUDE.md')
+check "withheld, the deletion and the restored path both leave it" \
+  '1/1' "$(coverage_of "$WITHHELD_LOG")"
+check "and are filed exempt instead" '2' "$(exempt_of "$WITHHELD_LOG")"
+check "the deletion as [DELETED]" \
+  '1' "$(printf '%s\n' "$WITHHELD_LOG" | grep -c '^  = src/gone_big\.go \[DELETED\]$')"
+check "the restored path as [RESTORED]" \
+  '1' "$(printf '%s\n' "$WITHHELD_LOG" | grep -c '^  = \.claude/agents/big\.md \[RESTORED\]$')"
+
+# TWO COPIES OF ONE TOKEN SET, in two modules, with nothing asserting they
+# match. review_coverage.NO_PATCH decides whether a row is openable;
+# review_output.REASONS maps the same tokens to coverage reason codes. Add a
+# token to one and not the other and nothing errors: a row would be openable
+# here and report `UNREAD` there, or the reverse. The per-file cap's token
+# was removed from both by hand when truncation replaced withholding, which
+# is exactly the move that gets forgotten next time.
+CROSS=$(cd "$HERE" && python3 -c 'import review_coverage, review_output
+print("same" if sorted(review_coverage.NO_PATCH) == sorted(review_output.REASONS)
+      else f"{sorted(review_coverage.NO_PATCH)} != {sorted(review_output.REASONS)}")')
+check "NO_PATCH and REASONS cover exactly the same tokens" 'same' "$CROSS"
 
 # Segment-wise, or `.husky-local/` would ride in on `.husky`.
 printf 'modified\t5\t.husky-local/y.md\t-\n' > "$WORK/near.tsv"

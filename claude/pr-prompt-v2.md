@@ -13,7 +13,7 @@ Three things, all on disk. No diff is pasted into this prompt.
    `status<TAB>changes<TAB>path<TAB>patch_file`. `status` is one of
    `added modified removed renamed`. `patch_file` is one of four things:
    - a path under `pr-files/` holding that file's unified patch;
-   - `omitted` — a patch existed but was dropped to fit the byte budget;
+   - `omitted` — a patch existed but was dropped to fit the total byte budget;
    - `-` — no diff could be rendered, which now means only that `git diff`
      produced no section for it or refused one;
    - `binary` — the file's own content is binary. There is nothing to read,
@@ -27,6 +27,17 @@ Three things, all on disk. No diff is pasted into this prompt.
    working tree**. This is not a judgement call, and the one time a reviewer
    treated a missing patch as permission to skip, 2,145 changed lines of
    Rust went unexamined and unmentioned.
+
+   **A patch may be TRUNCATED.** If a file's patch was larger than this
+   repository's per-file cap, it is cut to its last whole hunk and ends in
+   a `*** TRUNCATED:` line giving the original size, the size supplied and
+   the path. The hunks above that line are complete and real — nothing is
+   half-written — but they are **not the whole change**. Review them as
+   you would any patch, and then **open the file in the working tree and
+   review the rest**: what you were given may be a single hunk out of
+   many. The truncation is a fact about the patch's size and not a verdict
+   on the file: it is not a reason to skip the row, and the size itself is
+   not a finding.
 
    **The exception is a `removed` row with no patch.** That file is gone
    from the working tree; the deletion is the whole change. Do not try to

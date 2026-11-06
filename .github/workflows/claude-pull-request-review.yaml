@@ -30,6 +30,73 @@ on:
         required: false
         type: number
         default: 1048576
+      max_file_bytes:
+        description: |
+          Cap on ONE FILE'S patch, in bytes. A patch over it is CUT to its
+          last whole hunk and gains a `*** TRUNCATED:` line naming the
+          original size, the size supplied and the path; the row keeps a
+          real patch and the file is named on the pull request. 0, the
+          default, truncates nothing and is byte-for-byte today's
+          behaviour.
+
+          IT TRUNCATES RATHER THAN WITHHOLDING, and that is what makes it
+          safe to turn on. A row with no patch is credited as reviewable
+          only where the working tree can answer for it, which it cannot
+          for a deleted file and cannot under the paths this workflow
+          reverts to base content before the review (`.claude`,
+          `CLAUDE.md`, `.gitignore` and the rest). Withholding a patch
+          there put the change nowhere the reviewer could reach AND took
+          the row out of the coverage count. A truncated patch is still a
+          patch, so the row stays counted however it was reached.
+
+          THE NUMBER IS NOT A HARD CEILING ON THE FILE. The header lines
+          that say which file this is are kept whole; the FIRST hunk is
+          kept whatever it costs, because a patch of headers and no changed
+          lines would be credited as reviewed while showing nothing; and
+          the marker is appended afterwards, since one that could itself be
+          cut away would be worthless. So a truncated patch can come out
+          well over the number you set -- at a very small cap, several
+          times it.
+
+          Truncation is skipped where it would not actually make the patch
+          smaller, so setting a tiny value cannot make the review bigger
+          than setting none. But the saving is real only once the cap is
+          large relative to one hunk and to the ~250-byte marker: a number
+          below that buys nothing and loses context.
+
+          A DIFFERENT CONTROL FROM `max_review_bytes`, not a tuning of it.
+          That one is a total: it fires only once the sum of all patches is
+          exceeded, and then drops the largest. A diff that is individually
+          lumpy and collectively small never reaches it -- one 1,205-line
+          pinned `requirements.txt` beside twenty short YAML files sits well
+          under a one-megabyte budget and arrives whole.
+
+          And a different control from `exclude_globs`, which excludes by
+          NAME: that cannot tell a three-line lockfile change from a
+          hand-written two-thousand-line file, and the names worth capping
+          are the ambiguous ones. `requirements.txt` is a generated lock in
+          one repository and a hand-written manifest in the next, which is
+          why it is not in the default glob list and cannot be. A size
+          threshold does not have to know which it is.
+
+          NOT DEFAULTED TO A NUMBER, and the reason is the same one that
+          keeps `coverage_enforcement` on `warn`: roughly 170 repositories
+          consume this workflow at a floating major tag, so any non-zero
+          default would start cutting patches in all of them at once with
+          nobody watching. Set it per repository, read the named files on
+          the next review, and raise it if a file that deserved reviewing
+          whole is in the list.
+
+          What it buys is budget, not reviewer time: the bytes it saves
+          stop pushing other patches over `max_review_bytes` and stop
+          squeezing the pull request's own comment thread, which is funded
+          from what the patches did not spend. Set low enough it will leave
+          real changed lines unread -- the marker says how many bytes are
+          missing, so the review comment carries the evidence for raising
+          it.
+        required: false
+        type: number
+        default: 0
       coverage_enforcement:
         description: |
           What to do when the reviewer did not open every openable file in
@@ -434,6 +501,7 @@ jobs:
       - name: Validate the caller's inputs
         env:
           ENFORCEMENT: ${{ inputs.coverage_enforcement }}
+          MAX_FILE_BYTES: ${{ inputs.max_file_bytes }}
           MAX_REVIEW_BYTES: ${{ inputs.max_review_bytes }}
         run: |
           case "$ENFORCEMENT" in
@@ -453,7 +521,20 @@ jobs:
               exit 1
               ;;
           esac
+          # Same test for the same reason: `type: number` permits a float,
+          # and filter_diff.py would reject it on stderr after the checkout
+          # and the diff had already been paid for.
+          case "$MAX_FILE_BYTES" in
+            '' | *[!0-9]*)
+              echo "::error::max_file_bytes must be a non-negative integer (got '$MAX_FILE_BYTES')"
+              exit 1
+              ;;
+          esac
           echo "coverage_enforcement: ${ENFORCEMENT}"
+          # Echoed because it is the input whoever is diagnosing a short or
+          # partial review reaches for first, and 0 -- the default -- is
+          # the answer that stops the search.
+          echo "max_file_bytes: ${MAX_FILE_BYTES}"
 
       # fetch-depth: 0 is load-bearing beyond history browsing: the review
       # set is computed from `git diff` between the pull request's merge base
@@ -742,6 +823,7 @@ jobs:
         env:
           EXCLUDE_GLOBS: ${{ inputs.exclude_globs }}
           GH_TOKEN: ${{ github.token }}
+          MAX_FILE_BYTES: ${{ inputs.max_file_bytes }}
           MAX_REVIEW_BYTES: ${{ inputs.max_review_bytes }}
         run: |
           # The workspace IS the reviewed checkout, and the bot lane's first
@@ -840,9 +922,10 @@ jobs:
           # closed to a comment instead of quietly reporting nothing.
           EXCLUDED_COUNT=$(sed -n 's/^Excluded \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
           OMITTED_COUNT=$(sed -n 's/^Omitted \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
+          TRUNCATED_COUNT=$(sed -n 's/^Truncated \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
           UNPATCHED_COUNT=$(sed -n 's/^Unpatched \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
           BINARY_COUNT=$(sed -n 's/^Binary \([0-9][0-9]*\) file(s).*/\1/p' "$RUNNER_TEMP/filter.log")
-          for n in "$EXCLUDED_COUNT" "$OMITTED_COUNT" "$UNPATCHED_COUNT" "$BINARY_COUNT"; do
+          for n in "$EXCLUDED_COUNT" "$OMITTED_COUNT" "$TRUNCATED_COUNT" "$UNPATCHED_COUNT" "$BINARY_COUNT"; do
             case "$n" in
               '' | *[!0-9]*)
                 echo "::warning::unparseable exclusion report"
@@ -877,6 +960,7 @@ jobs:
 
           EXCLUDED_LIST=$(list_from '  - ' "$EXCLUDED_COUNT")
           OMITTED_LIST=$(list_from '  \* ' "$OMITTED_COUNT")
+          TRUNCATED_LIST=$(list_from '  > ' "$TRUNCATED_COUNT")
           UNPATCHED_LIST=$(list_from '  ! ' "$UNPATCHED_COUNT")
           BINARY_LIST=$(list_from '  ~ ' "$BINARY_COUNT")
 
@@ -889,6 +973,14 @@ jobs:
             printf 'Not reviewed (dropped by `exclude_globs`)\t%s\n' "$EXCLUDED_LIST"
             # shellcheck disable=SC2016
             printf 'Patch not supplied (over `max_review_bytes`)\t%s\n' "$OMITTED_LIST"
+            # A SEPARATE SECTION, and NOT a "patch not supplied" one: these
+            # rows got a patch, cut to its last whole hunk. The remedies
+            # differ too -- the section above is the total budget and would
+            # not have fired in a smaller pull request, this one is a
+            # per-file threshold this repository set and fires every time
+            # until that number moves.
+            # shellcheck disable=SC2016
+            printf 'Patch truncated (over `max_file_bytes`)\t%s\n' "$TRUNCATED_LIST"
             printf 'No patch available (open in the working tree)\t%s\n' "$UNPATCHED_LIST"
             printf 'Binary (no reviewable content)\t%s\n' "$BINARY_LIST"
           } >> "$SECTIONS"
@@ -900,6 +992,8 @@ jobs:
           {
             echo "EXCLUDED_SUMMARY=${EXCLUDED_LIST}"
             echo "OMITTED_SUMMARY=${OMITTED_LIST}"
+            echo "TRUNCATED_SUMMARY=${TRUNCATED_LIST}"
+            echo "TRUNCATED_FILES=${TRUNCATED_COUNT}"
             echo "UNPATCHED_SUMMARY=${UNPATCHED_LIST}"
             echo "BINARY_SUMMARY=${BINARY_LIST}"
             echo "REVIEW_FILES=$(sed -n 's/^Files: //p' "$RUNNER_TEMP/filter.log")"
@@ -1253,9 +1347,10 @@ jobs:
           # is $GITHUB_WORKSPACE, which is the pull request's own checkout: a
           # repository that tracks `install.sh` had its file overwritten with
           # Anthropic's installer and then deleted, so a manifest row for it
-          # carrying `-` or `omitted` sent the reviewer to a working-tree file
-          # that was gone. `filter_diff.py` refuses to create `pr-files/` for
-          # the same reason.
+          # carrying one of the no-patch tokens -- `-` or `omitted` --
+          # sent the reviewer to a working-tree file that was gone.
+          # `filter_diff.py` refuses to create `pr-files/` for the same
+          # reason.
           INSTALLER="$RUNNER_TEMP/install.sh"
           echo "Installing Claude Code CLI ${CLI_VERSION}..."
           if ! curl -fsSL https://claude.ai/install.sh -o "$INSTALLER"; then
@@ -1393,14 +1488,31 @@ jobs:
             echo "- \`pr-files/\` (the patches) and \`build-resources/\` (this reviewer's own prompt and scripts) sit in the workspace but are NOT part of the repository under review. They are listed in \`.git/info/exclude\`, so \`Grep\` already skips both and you need no exclusion flags; a plain tree-wide \`Grep\` is correct."
           } >> "$RUNNER_TEMP/prompt.md"
 
-          if [ -n "${RESTORED_PATHS:-}" ]; then
-            echo "- These paths were restored to their BASE-BRANCH content before you started, because the CLI or a tool it runs would otherwise load them as configuration from this branch: ${RESTORED_PATHS}. Their patches are still in \`pr-files/\`, so review the change there; what is in the working tree at those paths is the base's version and a difference between the two is expected, not a finding." >> "$RUNNER_TEMP/prompt.md"
-          fi
           if [ -n "${EXCLUDED_SUMMARY:-}" ]; then
             echo "- Already dropped before you saw the manifest, so absent by design and never a finding -- but it does answer \"did the lockfile move with the manifest?\": ${EXCLUDED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
           fi
           if [ -n "${OMITTED_SUMMARY:-}" ]; then
             echo "- Too large to supply a patch for; these carry \`omitted\` in the manifest's fourth column. **Open each of these in the working tree.** ${OMITTED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+          fi
+          if [ -n "${TRUNCATED_SUMMARY:-}" ]; then
+            echo "- Over this repository's per-file patch cap, so the patch you are given for each of these is CUT to its last whole hunk and ends in a \`*** TRUNCATED:\` line naming the original size, the size supplied and the path. The hunks above that line are complete -- nothing is half-written -- but they are NOT the whole change: read them as you would any patch, then open the file in the working tree and review the rest, because what you were given may be one hunk out of many. The truncation is a fact about the patch's size and not a judgement about the change: it is not permission to skip the row, and the size itself is not a finding. ${TRUNCATED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+          fi
+          # THE RESTORED PARAGRAPH GOES LAST, AFTER THE TRUNCATED ONE, and
+          # that ordering is load-bearing rather than tidy. A path can be in
+          # both lists, and then the two instructions contradict: the
+          # truncated bullet sends the reviewer to the working tree for the
+          # rest of the change, and at a restored path the working tree holds
+          # the BASE's content, so the remainder is reachable NOWHERE and
+          # reading the tree invites findings against the base. The later,
+          # more specific statement is the one that has to be read last --
+          # and it names the overlap explicitly rather than leaving the
+          # reviewer to intersect two comma-separated lists.
+          #
+          # filter_diff.py cannot say this inside the marker: it is
+          # deliberately never told the restored set. The workflow holds
+          # both, so the workflow is where the correction belongs.
+          if [ -n "${RESTORED_PATHS:-}" ]; then
+            echo "- These paths were restored to their BASE-BRANCH content before you started, because the CLI or a tool it runs would otherwise load them as configuration from this branch: ${RESTORED_PATHS}. Their patches are in \`pr-files/\`, so review the change there; what is in the working tree at those paths is the base's version and a difference between the two is expected, not a finding. **This overrides anything above that sends you to the working tree.** If one of these paths is also in the truncated list, the part of its change that was cut is not available anywhere: review what the patch holds, and say in your output that the rest could not be seen -- do not read the working-tree copy, which is the base's." >> "$RUNNER_TEMP/prompt.md"
           fi
           if [ -n "${UNPATCHED_SUMMARY:-}" ]; then
             echo "- **No diff could be rendered for these, so they carry \`-\` in the manifest's fourth column. Open each one in the working tree and review it there; they are not optional and they are not generated. The one exception is a row whose status column reads \`removed\` -- that file is gone from the working tree, the deletion is the whole change, and you cannot and need not open it.** ${UNPATCHED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
@@ -1594,7 +1706,7 @@ jobs:
           #
           # RESTORED_PATHS leaves the denominator. Those paths were reverted
           # to base content after the manifest was written, so a row under one
-          # of them whose patch column is `-` or `omitted` sends the reviewer
+          # of them with no patch column -- `-` or `omitted` -- sends the reviewer
           # to a working-tree file that is now the base's, or absent if this
           # pull request added it. The read cannot succeed, the row counts
           # unopened, and under `fail` the author has no way to clear it.
@@ -1608,10 +1720,34 @@ jobs:
             cat "$RUNNER_TEMP/coverage.log"
             READ=$(sed -n 's/^COVERAGE_READ=//p' "$GITHUB_ENV" | tail -1)
             TOTAL=$(sed -n 's/^COVERAGE_TOTAL=//p' "$GITHUB_ENV" | tail -1)
+            # EACH PATH CARRIES WHY, and the legend is in the label because
+            # the reader of a pull request comment has no other place to look
+            # it up. `PATCH` means a patch file was written and the reviewer
+            # did not open it; `WORKTREE` means none was, so the row's
+            # instruction was the working tree; `+TRIED` means a read was
+            # issued and came back empty. Those are three different owners --
+            # the reviewer, the byte budget, and a path that is not there --
+            # and "did not open" alone names none of them.
             if [ -s "$RUNNER_TEMP/missed.txt" ]; then
               printf 'Files the reviewer did not open (%s of %s openable opened)\t%s\n' \
                 "$READ" "$TOTAL" "$(paste -sd, - < "$RUNNER_TEMP/missed.txt")" \
                 >> "$RUNNER_TEMP/sections.tsv"
+              # THE LEGEND IS NOT ON THE COMMENT, and that is a budget
+              # decision rather than an oversight. It ran 355 characters
+              # against review_output.py's BODY_LIMIT of 4000, and
+              # `assemble` trims a comment that is over by DROPPING THE
+              # LEAST SEVERE FINDING -- disclosure sections are never what
+              # it drops. So a static legend would cost ~8.9% of every
+              # finding-rich review's space, permanently, and it rendered
+              # inside a ```text fence, which GitHub does not wrap: one
+              # horizontally-scrolling line.
+              #
+              # It was also a SECOND COPY of what review_coverage.py's
+              # `report` already prints to the job log, and the two had
+              # already diverged in wording. One copy, in the place that
+              # costs nothing and that whoever is diagnosing coverage is
+              # already reading. The codes themselves stay on the comment,
+              # which is where the per-file disclosure belongs.
             fi
           else
             cat "$RUNNER_TEMP/coverage.log"
@@ -1668,6 +1804,7 @@ jobs:
             --lane "$LANE" \
             --coverage-read "${COVERAGE_READ:-0}" \
             --coverage-total "${COVERAGE_TOTAL:-0}" \
+            --truncated "${TRUNCATED_FILES:-0}" \
             --summary "${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS:-0}/-${REVIEW_DELETIONS:-0}." \
             --restored "${RESTORED_PATHS:-}"; then
             echo "::warning::the review output could not be adjudicated"
@@ -1752,7 +1889,7 @@ jobs:
               echo '```'
             fi
             echo ""
-            echo "<!-- claude-review v3 lane=E findings=0 blockers=0 read=0/0 head=${HEAD_SHA} -->"
+            echo "<!-- claude-review v4 lane=E findings=0 blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/body.md"
 
           # Same publish path as the review: a new comment, so an outcome
@@ -1797,7 +1934,7 @@ jobs:
               FINDINGS=0
             fi
             echo ""
-            echo "<!-- claude-review v3 lane=S findings=${FINDINGS} blockers=0 read=0/0 head=${HEAD_SHA} -->"
+            echo "<!-- claude-review v4 lane=S findings=${FINDINGS} blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/body.md"
 
           # Same publish path as the review: a new comment, so an outcome
@@ -1838,7 +1975,7 @@ jobs:
             echo ""
             echo "Nothing about this pull request has been reviewed or approved by this check."
             echo ""
-            echo "<!-- claude-review v3 lane=X findings=0 blockers=0 read=0/0 head=${HEAD_SHA} -->"
+            echo "<!-- claude-review v4 lane=X findings=0 blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/unavailable.md"
 
           # Same publish path as the review: a new comment, so the notice
@@ -1907,7 +2044,7 @@ jobs:
             echo ""
             echo "Nothing about this pull request has been reviewed or approved by this check. Re-run the workflow to review \`${HEAD_SHA}\`."
             echo ""
-            echo "<!-- claude-review v3 lane=T blockers=0 read=0/0 head=${HEAD_SHA} -->"
+            echo "<!-- claude-review v4 lane=T blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/cancelled.md"
 
           # THE ONE PATH THAT CAN OUTRUN ITS OWN HELPER. Everything else
