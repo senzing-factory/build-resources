@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
-# review-note -- record something the reviewer checked, where it will not be
-# posted to the pull request.
+# review-note -- record something the reviewer checked and found sound.
 #
 # Usage:  review-note <text...>
 #
 # The reviewer is told to use this for anything it looked at and found clean.
 # That impulse is real and constant -- "no SQL injection in the new handler",
 # "the version table is consistent" -- and the fourth requirement on this
-# reviewer is that none of it reaches the comment. Forbidding it in the prompt
-# does not work on its own, because the text has nowhere else to go; this is
-# the somewhere else. review_output.py prints the file to the job log and
-# never to a pull request.
+# reviewer is that none of it reaches the comment AS A TICK BESIDE FINDINGS.
+# Forbidding it in the prompt does not work on its own, because the text has
+# nowhere else to go; this is the somewhere else.
+#
+# ~~review_output.py prints the file to the job log and never to a pull
+# request.~~ CHANGED: it prints the file to the job log on every run, and on
+# a CLEAN VERDICT it also renders the notes into the comment. A correct clean
+# verdict with no evidence cannot be told from a review that did not happen,
+# and this file is the evidence. The model is told so, because a channel
+# described as reaching nobody is a channel nothing gets written to -- which
+# is what was measured: on the run that prompted the change, the notes file
+# was created, passed to the output step, and never written to once.
 #
 # WHY A WRAPPER AND NOT AN ALLOWED COMMAND. Claude Code's `Bash(cmd:*)`
 # permission bounds the START of the command string and nothing after it, so
