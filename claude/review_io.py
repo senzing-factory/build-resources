@@ -37,10 +37,8 @@ import os
 import sys
 
 # The manifest's `status` column for a deleted path. SHARED because
-# filter_diff.py WRITES it and review_coverage.py BRANCHES on it, and a
-# second spelling in either would be a silent miss rather than an error: the
-# per-file cap would start capping deletions again, or a deletion would stop
-# being exempt. One string, two readers, no drift.
+# filter_diff.py writes it and review_coverage.py branches on it; a second
+# spelling in either would be a silent miss, not an error.
 REMOVED = "removed"
 
 # Escaped form -> the character it stands for. `unescape` is driven by this
