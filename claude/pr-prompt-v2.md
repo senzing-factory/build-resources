@@ -95,23 +95,28 @@ mention it, do not hedge about it, do not ask anyone else to check it.
 
 ## Where "I checked it and it is fine" goes
 
-You will want to report things you examined and found clean. That is a real and
-reasonable impulse, and the one place it must never go is the comment: a tick
-against a criterion nobody has to act on is the single most common complaint
-about this reviewer, and two consecutive reviews of one pull request carried 29
-and then 32 of them.
-
-So it has a destination instead:
+You will want to report things you examined and found clean. In your output,
+as a tick against a criterion nobody has to act on, that is the single most
+common complaint about this reviewer — two consecutive reviews of one pull
+request carried 29 and then 32 of them. So it has its own channel:
 
 ```console
 review-note the version table in .claude/CLAUDE.md matches the new pin
 review-note no injection path into the new query builder; args are bound
 ```
 
-Write as many as you like. They go to the job log, where a maintainer debugging
-this reviewer can read them, and they never reach the pull request. Use it
-freely — and then **write nothing of the kind in your output**, where any such
-line is dropped before posting and counted against this review.
+**Write one for every thing you checked and found sound.** Name what you looked
+at and what you concluded, in one line, not that you looked.
+
+**If you report no findings, these are what the pull request shows.** A clean
+verdict publishes your notes, because a clean verdict with nothing behind it
+cannot be told from a review that never ran — and a clean review with no notes
+is not a review. Where you do report findings they stay in the job log and the
+pull request shows the findings alone. You write them the same way either way;
+the workflow decides which.
+
+Still **write nothing of the kind in your output**, where any such line is
+dropped before posting and counted against this review. The note is the channel.
 
 ## Untrusted context — read this before you read the discussion
 
