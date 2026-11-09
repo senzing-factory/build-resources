@@ -116,6 +116,45 @@ printf '%s\n' \
 } > "$WORK/full.jsonl"
 
 echo "review_coverage.py"
+
+# FIRST, BECAUSE IT DEPENDS ON NOTHING. Placed at the end it was
+# unreachable for the mutation it exists to catch: an empty FLAGS aborts
+# the suite at its first real fixture under `set -e`, so the vacuity
+# guard below never ran. ~~The mutation read as green.~~ MEASURED, and
+# that was wrong: the suite exits 2 either way, so the defect was caught
+# -- it was reported as an unrelated abort rather than as the thing that
+# broke. Running first is the smaller improvement the first sentence
+# claims, not a fix for a missed defect.
+
+# ---------------------------------------------------------------------------
+# EVERY FLAG THE PROGRAM ACCEPTS IS IN THE TEXT IT PRINTS WHEN MISUSED
+# ---------------------------------------------------------------------------
+#
+# `--truncated` was absent from both the module synopsis and USAGE from the
+# day it was added, and two coverage flags went the same way -- so a typo in
+# any of them printed a usage message denying the flag exists, which is the
+# worst possible answer to "did I spell this right". Both were repaired BY
+# HAND, which is the restated-constant defect this suite exists to catch in
+# other people's code.
+#
+# READ OFF THE PROGRAM, both sides. A list here would be a third copy.
+MISSING_FLAGS=$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import review_coverage as m
+print(" ".join(f for f in m.FLAGS if f not in m.USAGE))' "$HERE")
+check "every flag the program accepts appears in its usage text" \
+  '' "$MISSING_FLAGS"
+# AND THE CHECK IS NOT VACUOUS: a FLAGS that failed to import, or an empty
+# one, would also produce an empty difference.
+FLAG_COUNT=$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import review_coverage as m
+print(len(m.FLAGS))' "$HERE")
+check "and the flag list it was compared against is not empty" \
+  '1' "$([ "${FLAG_COUNT:-0}" -ge 4 ] && echo 1 || echo 0)"
+
 LOG=$(crun manifest.tsv thin.jsonl)
 check "the failing shape reports one row of five opened" \
   '1/5' "$(coverage_of "$LOG")"
@@ -444,6 +483,94 @@ check "a newline in a path stays on one line of the missed file" \
   '2' "$(wc -l < "$WORK/inject_missed.txt" | tr -d ' ')"
 check "the newline is re-escaped rather than written raw" \
   '1' "$(grep -c 'evil\\nSECRET=leaked' "$WORK/inject_missed.txt")"
+
+# A clean, fully covered run, for the uncovered-file fixtures below: one
+# openable row whose patch the reviewer opened.
+printf 'modified\t2\tsrc/a.go\tpr-files/0001.patch\n' > "$WORK/clean.tsv"
+{
+  structured_out
+  read_ok c1 "$W/pr-files/0001.patch"
+} > "$WORK/clean.jsonl"
+
+# ---------------------------------------------------------------------------
+# --uncovered-file: the SAME SET, written for a machine
+# ---------------------------------------------------------------------------
+#
+# The second review pass's manifest is built by joining this file against the
+# original manifest on its `path` column, so three properties are
+# load-bearing and none of them is true of --missed-file.
+#
+# IT IS UNCAPPED. --missed-file stops at MISSED_LIST_CAP because a pull
+# request comment cannot carry a hundred paths; a second pass handed twenty
+# of twenty-five unopened rows would review them, report success, and leave
+# five rows that no pass ever opened reading as covered. That is this
+# program's own reassuring-direction failure, reappearing one layer up.
+#
+# IT CARRIES NO REASON CODE, because the join is an equality test on the
+# manifest's own field and a consumer stripping ` [WORKTREE]` off the end
+# would be ambiguous for a path ending in `]`.
+#
+# IT IS SPELLED AS THE MANIFEST SPELLS IT. Escaped on the way out, so a path
+# containing a newline or a tab matches its manifest row exactly rather than
+# being unmatchable forever -- the failure review_io's quoting exists to
+# prevent, and the one whose symptom looks nothing like a quoting bug.
+
+# Twenty-five unopened rows, which is more than the comment's cap.
+: > "$WORK/many.tsv"
+I=1
+while [ "$I" -le 25 ]; do
+  printf 'modified\t3\tsrc/f%s.go\tpr-files/%04d.patch\n' "$I" "$I" >> "$WORK/many.tsv"
+  I=$((I + 1))
+done
+: > "$WORK/many_env.txt"
+python3 "$SCRIPT" "$WORK/many.tsv" "$WORK/absent.jsonl" --workspace "$W" \
+  --github-env "$WORK/many_env.txt" \
+  --missed-file "$WORK/many_missed.txt" \
+  --uncovered-file "$WORK/many_uncovered.txt" > /dev/null
+check "the comment's missed list is still capped at twenty plus a count" \
+  '21' "$(wc -l < "$WORK/many_missed.txt" | tr -d ' ')"
+check "the uncovered file names every unopened row, uncapped" \
+  '25' "$(wc -l < "$WORK/many_uncovered.txt" | tr -d ' ')"
+check "and it agrees with the count the workflow gates on" \
+  'COVERAGE_UNCOVERED=25' "$(grep '^COVERAGE_UNCOVERED=' "$WORK/many_env.txt")"
+check "it carries the path alone, with no reason code to strip" \
+  '0' "$(grep -c '\[' "$WORK/many_uncovered.txt" || true)"
+check "and nothing else: every line is a manifest path" \
+  '25' "$(grep -c '^src/f[0-9]*\.go$' "$WORK/many_uncovered.txt")"
+
+# THE JOIN ITSELF, run the way the workflow runs it. A path spelled one way
+# in the list and another in the manifest produces a short manifest, which
+# the workflow refuses -- but only if the spellings agree here first.
+: > "$WORK/join_env.txt"
+python3 "$SCRIPT" "$WORK/inject.tsv" "$WORK/absent.jsonl" --workspace "$W" \
+  --github-env "$WORK/join_env.txt" \
+  --uncovered-file "$WORK/join_uncovered.txt" > /dev/null
+check "a path with a newline stays on one line of the uncovered file" \
+  '2' "$(wc -l < "$WORK/join_uncovered.txt" | tr -d ' ')"
+check "and it joins against its own manifest row" \
+  '2' "$(awk -F'\t' 'NR == FNR { want[$0] = 1; next } ($3 in want)' \
+    "$WORK/join_uncovered.txt" "$WORK/inject.tsv" | wc -l | tr -d ' ')"
+
+# WITHHELD WHERE NOTHING WAS MEASURED, like the missed list. A degraded
+# instrument credits no row, so every row reads unopened; writing them out
+# would hand a second pass the whole change and call it the missed set.
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}' \
+  > "$WORK/degraded.jsonl"
+python3 "$SCRIPT" "$WORK/clean.tsv" "$WORK/degraded.jsonl" --workspace "$W" \
+  --uncovered-file "$WORK/degraded_uncovered.txt" > /dev/null
+check "an unreadable transcript envelope writes no uncovered file at all" \
+  '0' "$([ -e "$WORK/degraded_uncovered.txt" ] && echo 1 || echo 0)"
+
+# WRITTEN EVEN WHEN EMPTY on a measured run, so its ABSENCE means "nothing
+# was established" and never "nothing was missed". A consumer that could not
+# tell those apart is one `[ -s ]` away from treating the case above as full
+# coverage.
+python3 "$SCRIPT" "$WORK/clean.tsv" "$WORK/clean.jsonl" --workspace "$W" \
+  --uncovered-file "$WORK/clean_uncovered.txt" > /dev/null
+check "a fully covered run still writes the file, empty" \
+  '1' "$([ -e "$WORK/clean_uncovered.txt" ] && echo 1 || echo 0)"
+check "and it holds no rows" \
+  '0' "$(wc -l < "$WORK/clean_uncovered.txt" | tr -d ' ')"
 
 # ---------------------------------------------------------------------------
 # A path the workflow REVERTED to base content cannot be opened either

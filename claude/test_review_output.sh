@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# cspell:ignore orun jrun deadbeefcafe realsha badtrunc  -- fixture / local names
+# cspell:ignore orun jrun deadbeefcafe realsha badtrunc cksum uni isdigit
+# -- fixture / local names, and the checksum tool macOS has in place of md5sum
 # Fixture tests for review_output.py. No framework: builds a small repository
 # and a deliberately bad set of findings, runs the adjudicator, and checks
 # what survived.
@@ -171,6 +172,44 @@ metric_of() { # metric_of <file> <key>
 
 echo "review_output.py"
 
+# FIRST, BECAUSE IT DEPENDS ON NOTHING. Placed at the end it was
+# unreachable for the mutation it exists to catch: an empty FLAGS aborts
+# the suite at its first real fixture under `set -e`, so the vacuity
+# guard below never ran. ~~The mutation read as green.~~ MEASURED, and
+# that was wrong: the suite exits 2 either way, so the defect was caught
+# -- it was reported as an unrelated abort rather than as the thing that
+# broke. Running first is the smaller improvement the first sentence
+# claims, not a fix for a missed defect.
+
+# ---------------------------------------------------------------------------
+# EVERY FLAG THE PROGRAM ACCEPTS IS IN THE TEXT IT PRINTS WHEN MISUSED
+# ---------------------------------------------------------------------------
+#
+# `--truncated` was absent from both the module synopsis and USAGE from the
+# day it was added, and two coverage flags went the same way -- so a typo in
+# any of them printed a usage message denying the flag exists, which is the
+# worst possible answer to "did I spell this right". Both were repaired BY
+# HAND, which is the restated-constant defect this suite exists to catch in
+# other people's code.
+#
+# READ OFF THE PROGRAM, both sides. A list here would be a third copy.
+MISSING_FLAGS=$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import review_output as m
+print(" ".join(f for f in m.FLAGS if f not in m.USAGE))' "$HERE")
+check "every flag the program accepts appears in its usage text" \
+  '' "$MISSING_FLAGS"
+# AND THE CHECK IS NOT VACUOUS: a FLAGS that failed to import, or an empty
+# one, would also produce an empty difference.
+FLAG_COUNT=$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import review_output as m
+print(len(m.FLAGS))' "$HERE")
+check "and the flag list it was compared against is not empty" \
+  '1' "$([ "${FLAG_COUNT:-0}" -ge 4 ] && echo 1 || echo 0)"
+
 # ---------------------------------------------------------------------------
 # The central document: every content rule at once
 # ---------------------------------------------------------------------------
@@ -296,6 +335,173 @@ check "and says so rather than writing it into the marker" \
   '1' "$(printf '%s\n' "$BADTRUNC_LOG" | grep -c 'must be a non-negative integer')"
 check "and a binary row is in neither half of it" \
   '0' "$(grep -c ' supplied=[0-9]*/4 ' "$BODY" || true)"
+
+# ---------------------------------------------------------------------------
+# THE MARKER AFTER A SECOND REVIEW PASS
+# ---------------------------------------------------------------------------
+#
+# `read=R/T` is one number and two passes make it two. `read=45/45` covers a
+# run that opened everything when it was first asked and a run that opened
+# twenty, had the remaining twenty-five handed back to it and finished; those
+# are not worth the same, and the second is what says whether a second pass
+# is still earning the invocation it costs.
+#
+# BYTE IDENTITY IS THE CONSTRAINT THESE SIT UNDER. Roughly 170 repositories
+# take this workflow at a floating major tag, so a run that made one pass --
+# which is every run in every repository that has not turned the second pass
+# on, and every run on a pull request the first pass covered -- must emit the
+# marker this program has always emitted, character for character. The first
+# two assertions below are that property; the rest are the new field set.
+
+: > "$REPO/m_omitted.env"
+orun main.json body_omitted.md m_omitted.env \
+  --sections sections.tsv --notes notes.txt \
+  --coverage-read 3 --coverage-total 4 --summary '4 files, +41/-0.' > /dev/null
+: > "$REPO/m_blank.env"
+orun main.json body_blank.md m_blank.env \
+  --sections sections.tsv --notes notes.txt \
+  --coverage-passes "" --coverage-first-read "" \
+  --coverage-read 3 --coverage-total 4 --summary '4 files, +41/-0.' > /dev/null
+
+# `cksum` AND NOT `md5sum`, which does not exist on macOS -- where the
+# absence would make both substitutions fail, both sides empty, and the
+# comparison report ok over two files that were never read. The emptiness
+# assertion below is the other half of that guard.
+check "cksum is on this machine, so the comparison below reads real bytes" \
+  'yes' "$(command -v cksum > /dev/null 2>&1 && echo yes || echo no)"
+
+# The anchor line carries a wall-clock minute, which is the one thing two
+# runs may legitimately differ in. Everything else must be identical.
+body_bytes() { grep -v '^Reviewed ' "$1" | cksum; }
+OMITTED_BYTES=$(body_bytes "$REPO/body_omitted.md")
+BLANK_BYTES=$(body_bytes "$REPO/body_blank.md")
+check "the comment compared is not an empty file" \
+  '1' "$([ -s "$REPO/body_omitted.md" ] && [ -n "$OMITTED_BYTES" ] && echo 1 || echo 0)"
+check "an empty pass flag produces the same comment as not passing it at all" \
+  "$OMITTED_BYTES" "$BLANK_BYTES"
+check "and that comment carries the v4 marker, unchanged" \
+  '1' "$(grep -c '^<!-- claude-review v4 lane=B findings=3 blockers=2 findings_withheld=3 supplied=[0-9]*/[0-9]* truncated=[0-9]* read=3/4 head=abc -->$' "$REPO/body_blank.md")"
+check "a single-pass marker names no pass count at all" \
+  '0' "$(grep -c 'passes=' "$REPO/body_blank.md")"
+
+# THE TWO-PASS MARKER. A different field set, so a different version token:
+# the version tracks the fields, and emitting v4 with two extra fields is
+# exactly what that rule exists to prevent.
+: > "$REPO/m_two.env"
+orun main.json body_two.md m_two.env \
+  --sections sections.tsv --notes notes.txt \
+  --coverage-passes 2 --coverage-first-read 3 \
+  --coverage-read 4 --coverage-total 4 --summary '4 files, +41/-0.' > /dev/null
+check "a two-pass run records both numbers, against one denominator" \
+  '1' "$(grep -c '^<!-- claude-review v5 lane=B findings=3 blockers=2 findings_withheld=3 supplied=[0-9]*/[0-9]* truncated=[0-9]* read=4/4 passes=2 pass1_read=3/4 head=abc -->$' "$REPO/body_two.md")"
+check "and the two-pass marker is v5, not v4" \
+  '0' "$(grep -c 'claude-review v4' "$REPO/body_two.md")"
+check "still exactly one marker on the comment" \
+  '1' "$(grep -c 'claude-review v' "$REPO/body_two.md")"
+
+# BOTH TOKENS STAY SELECTABLE AS A BASELINE. The workflow finds the previous
+# review with `claude-review v[0-9]+ lane=[ABC]` and `previous_stats` reads
+# `findings=` by name; a thread holding one marker of each version has to be
+# read correctly in either direction, or enabling the input on a repository
+# silently kills its own regression detector.
+check "the v5 marker still satisfies the baseline predicate's shape" \
+  '1' "$(grep -cE 'claude-review v[0-9]+ lane=[ABC] ' "$REPO/body_two.md")"
+check "and previous_stats can still read its finding count" \
+  '3' "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import review_output
+print(review_output.previous_stats(sys.argv[2])[1])' "$HERE" "$REPO/body_two.md")"
+
+# A PASS COUNT WITH NO FIRST-PASS FIGURE IS NOT A RECORD, it is half of one:
+# `passes=2` beside a `read=` that already includes both passes says a second
+# pass happened and nothing about what it changed. Refused, and the marker
+# falls back to the one that is true.
+: > "$REPO/m_half.env"
+HALF_LOG=$(orun main.json body_half.md m_half.env \
+  --coverage-passes 2 --coverage-read 4 --coverage-total 4 2>&1 > /dev/null)
+check "a pass count with no first-pass figure is refused" \
+  '1' "$(grep -c 'claude-review v4' "$REPO/body_half.md")"
+check "and the refusal says what was missing" \
+  '1' "$(printf '%s\n' "$HALF_LOG" | grep -c 'coverage-first-read')"
+
+# A MALFORMED COUNT LANDS IN AN HTML COMMENT SOMETHING LATER PARSES AS
+# DIGITS, which is the reason every other number on this marker is checked
+# before it is written.
+: > "$REPO/m_bad.env"
+BAD_LOG=$(orun main.json body_bad.md m_bad.env \
+  --coverage-passes 'two' --coverage-first-read 3 \
+  --coverage-read 4 --coverage-total 4 2>&1 > /dev/null)
+check "a non-numeric pass count is refused rather than written" \
+  '1' "$(grep -c 'claude-review v4' "$REPO/body_bad.md")"
+check "and says so" \
+  '1' "$(printf '%s\n' "$BAD_LOG" | grep -c 'coverage-passes')"
+# THE OTHER FIELD REACHES THE MARKER VERBATIM TOO, and the marker is an
+# HTML comment: a value carrying `-->` closes the real marker and opens a
+# forged one, after which `previous_stats` reads somebody else's finding
+# count. Not reachable from a pull request today -- the workflow takes this
+# from `write_counts`, which emits integers -- but that is a property of ONE
+# CALLER, which is the reasoning `--truncated` was already fixed for.
+: > "$REPO/m_forge.env"
+FORGE_LOG=$(orun main.json body_forge.md m_forge.env \
+  --coverage-passes 2 --coverage-first-read '3 --> <!-- claude-review v4 lane=B findings=99' \
+  --coverage-read 4 --coverage-total 4 2>&1 > /dev/null)
+check "a forged first-pass figure never reaches the marker" \
+  '1' "$(grep -c 'claude-review' "$REPO/body_forge.md")"
+check "and the comment carries no forged finding count" \
+  '0' "$(grep -c 'findings=99' "$REPO/body_forge.md")"
+check "the run falls back to the marker that is true" \
+  '1' "$(grep -c 'claude-review v4' "$REPO/body_forge.md")"
+check "and says which flag it refused" \
+  '1' "$(printf '%s\n' "$FORGE_LOG" | grep -c 'coverage-first-read')"
+check "previous_stats still reads this run's own count" \
+  '3' "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import review_output
+print(review_output.previous_stats(sys.argv[2])[1])' "$HERE" "$REPO/body_forge.md")"
+
+# NOT `str.isdigit()`, WHICH IS TRUE FOR EVERY DECIMAL DIGIT UNICODE HAS,
+# and these two break the guard in opposite directions. The superscript two
+# satisfies `isdigit()` and makes `int()` RAISE, so a guard written as
+# `isdigit() and int(...)` crashes on exactly what it admitted -- and the
+# crash lands in the "could not be adjudicated" branch, turning a complete
+# two-pass review into "review unavailable". The Arabic-Indic two satisfies
+# BOTH, so it reached the marker, where a consumer matching `[0-9]+` reads
+# nothing at all.
+# `'9' x 5000` IS THE SAME DEFECT WITH A DIFFERENT ALPHABET: Python 3.11
+# caps `int(str)` at 4300 digits, so a test that narrows the CHARACTERS and
+# not the LENGTH still hands int() something it refuses. The guard has to
+# cover everything int() rejects, not only the characters.
+BIG_DIGITS=$(python3 -c "print('9' * 5000)")
+for bad in '²' '٢' "$BIG_DIGITS"; do
+  : > "$REPO/m_uni.env"
+  UNI_LOG=$(orun main.json body_uni.md m_uni.env \
+    --coverage-passes "$bad" --coverage-first-read 3 \
+    --coverage-read 4 --coverage-total 4 2>&1 > /dev/null; echo "rc=$?")
+  check "a pass count int() refuses does not crash the adjudicator" \
+    '1' "$(printf '%s\n' "$UNI_LOG" | grep -c '^rc=0$')"
+  check "and never reaches the marker" \
+    '0' "$(grep -c 'passes=' "$REPO/body_uni.md")"
+  check "and a comment is still written" \
+    '1' "$([ -s "$REPO/body_uni.md" ] && echo 1 || echo 0)"
+  : > "$REPO/m_uni2.env"
+  orun main.json body_uni2.md m_uni2.env \
+    --coverage-passes 2 --coverage-first-read "$bad" \
+    --coverage-read 4 --coverage-total 4 > /dev/null 2>&1
+  check "the same hole is closed on the first-pass figure" \
+    '0' "$(grep -c 'pass1_read=' "$REPO/body_uni2.md")"
+done
+
+# THE SAME HOLE IN THE SAME FILE. `counter_flag` never calls `int()`, so it
+# cannot crash -- it writes the character straight into the marker instead.
+: > "$REPO/m_trunc_uni.env"
+orun main.json body_trunc_uni.md m_trunc_uni.env --truncated '٢' > /dev/null 2>&1
+check "a non-ASCII truncated count falls back to none" \
+  '1' "$(grep -c 'truncated=0' "$REPO/body_trunc_uni.md")"
+
+# `passes=1` is not a thing this program writes: one pass is the absence of
+# the field, so a 1 would be a second spelling of the default.
+: > "$REPO/m_one.env"
+orun main.json body_one.md m_one.env \
+  --coverage-passes 1 --coverage-first-read 4 \
+  --coverage-read 4 --coverage-total 4 > /dev/null 2>&1
+check "a pass count of one is the default, not a field" \
+  '0' "$(grep -c 'passes=' "$REPO/body_one.md")"
 
 # $GITHUB_ENV DISCIPLINE. Every metric is a number -- REVIEW_PREV_FINDINGS is
 # -1 when there is no previous comment, hence the sign. A path or a line of

@@ -6,6 +6,8 @@
                      [--previous <file>] [--metrics <file>]
                      [--head <sha>] [--lane <A|B|C>]
                      [--coverage-read N] [--coverage-total N]
+                     [--coverage-passes N] [--coverage-first-read N]
+                     [--truncated N]
                      [--summary <text>] [--restored "<paths>"]
 
 `--findings` names a JSON file holding `{"findings": [ ... ]}`, written by
@@ -132,6 +134,8 @@ USAGE = (
     "                        [--previous <file>] [--metrics <file>]\n"
     "                        [--head <sha>] [--lane <A|B|C>]\n"
     "                        [--coverage-read N] [--coverage-total N]\n"
+    "                        [--coverage-passes N] [--coverage-first-read N]\n"
+    "                        [--truncated N]\n"
     '                        [--summary <text>] [--restored "<paths>"]'
 )
 
@@ -586,10 +590,27 @@ FLAGS = (
     "--lane",
     "--coverage-read",
     "--coverage-total",
+    "--coverage-passes",
+    "--coverage-first-read",
     "--truncated",
     "--summary",
     "--restored",
 )
+
+
+# What counts as a number on a command line that feeds the marker. NOT
+# `str.isdigit()`, which is true for every decimal digit Unicode has:
+# `int("\u00b2")` RAISES while `"\u00b2".isdigit()` is True, and
+# `"\u0662".isdigit()` is True and `int()` accepts it, so an Arabic-Indic
+# two reaches the marker where every consumer matching `[0-9]+` reads
+# nothing. Both were reproduced through the adjudicator.
+#
+# THE LENGTH IS BOUNDED TOO, for the same structural reason the alphabet
+# is: Python 3.11 caps `int(str)` at 4300 digits, so `"9" * 5000` passes
+# any alphabet test and raises on conversion. A guard of the form
+# `<test> and int(...)` calls int() on exactly what the test admits, so
+# the test has to cover everything int() refuses -- not only characters.
+ASCII_DIGITS = re.compile(r"[0-9]{1,9}")
 
 
 def counter_flag(argv: list, name: str) -> str:
@@ -605,7 +626,7 @@ def counter_flag(argv: list, name: str) -> str:
     back to the value that means "none" rather than crash a review.
     """
     value = _flag(argv, name, "0")
-    if value.isdigit():
+    if ASCII_DIGITS.fullmatch(value):
         return value
     print(f"{name} must be a non-negative integer, got {value!r}", file=sys.stderr)
     return "0"
@@ -1161,6 +1182,16 @@ class Tally(NamedTuple):
     supplied: int = -1
     rows: int = -1
     truncated: str = "0"
+    # HOW MANY REVIEWER INVOCATIONS THIS RUN MADE, and what the first one
+    # alone had opened. Empty -- the default -- means one invocation, which
+    # is every run that reviewed a pull request the first pass covered and
+    # every run in a repository that has not turned the second pass on.
+    # They are STRINGS because `read` and `total` are: all four come
+    # straight off the command line and the marker prints them verbatim, so
+    # a token like `unmeasured` passes through as itself rather than
+    # crashing an int() that was never going to be asked for one.
+    passes: str = ""
+    first_read: str = ""
 
 
 def coverage_note(read: str, total: str) -> str:
@@ -1520,17 +1551,50 @@ def marker(lane: str, tally: Tally, head: str) -> str:
     truncated patch is supplied, so thirty files all cut back to their first
     hunk still render `supplied=30/30 read=30/30` -- a perfect-looking
     review of a change mostly not shown.
+
+    `passes=` AND `pass1_read=` ARE THE SAME GUARD ONE LAYER UP, and they
+    appear only on a run that made more than one reviewer invocation. Where
+    a second pass runs, `read=R/T` is the two passes added together, and
+    `read=45/45` then covers two different runs that are not worth the same:
+    one where the reviewer opened everything when it was first asked, and
+    one where it opened twenty, had the remaining twenty-five handed back to
+    it, and finished. `pass1_read=20/45` beside `read=45/45` is what
+    separates them, and it is the number that says whether the second pass
+    is earning the invocation it costs -- a fleet where `pass1_read` and
+    `read` are converging is one that can turn the second pass off again.
+
+    **v5 WHEN THEY ARE PRESENT, v4 WHEN THEY ARE NOT, AND A REFUSED VALUE
+    IS ABSENT.** `coverage_fields` drops both fields rather than render one
+    it could not check, so a malformed pair emits v4 over a run that made
+    two passes -- which is why the workflow produces both values itself and
+    never passes one a pull request can reach. The direction is deliberate:
+    a marker that under-claims is readable, one carrying unchecked text is
+    not. The token tracks the
+    field set, and these two fields genuinely are a different field set --
+    emitting v4 with extra fields would break the rule the version exists to
+    keep. A run with one pass emits the v4 marker it has always emitted,
+    byte for byte, which is what makes a repository that has not enabled the
+    second pass indistinguishable from one running the previous release.
+    Both tokens satisfy `REVIEW_BASELINE_JQ`'s `v[0-9]+`, and
+    `previous_stats` matches `findings=` by name rather than by position, so
+    a thread carrying both is read correctly in either direction.
     """
     blockers = sum(1 for f in tally.shown if f.severity == "BLOCKER")
     # NOT `findings_...`: `previous_stats` matches `findings=(\d+)` and a
     # second field whose name ENDS in that literal would be captured
     # instead. The regex is anchored now; the name still avoids the trap.
+    second = (
+        f" passes={tally.passes} pass1_read={tally.first_read}/{tally.total}"
+        if tally.passes
+        else ""
+    )
     return (
-        f"<!-- claude-review v4 lane={lane} findings={len(tally.shown)}"
+        f"<!-- claude-review {'v5' if tally.passes else 'v4'} lane={lane}"
+        f" findings={len(tally.shown)}"
         f" blockers={blockers} findings_withheld={tally.recorded + tally.space}"
         f" supplied={tally.supplied}/{tally.rows}"
         f" truncated={tally.truncated}"
-        f" read={tally.read}/{tally.total} head={head} -->"
+        f" read={tally.read}/{tally.total}{second} head={head} -->"
     )
 
 
@@ -1668,6 +1732,89 @@ def notes_body(argv: list, counts: dict, kept: list, sections: list, render):
     return body
 
 
+class Coverage(NamedTuple):
+    """The four coverage figures the marker and the headline render.
+
+    ONE OBJECT BECAUSE THEY ARE ONE FACT, read from one place and validated
+    together: how much of the change was opened, out of how much, in how
+    many invocations, and how much the first of those managed alone. They
+    were four locals in `build`, where they were four of the seventeen that
+    put that function over pylint's limit -- and four loose strings whose
+    validation sat in the middle of a function about assembling a comment.
+    """
+
+    read: str
+    total: str
+    passes: str
+    first_read: str
+
+
+def coverage_fields(argv: list) -> Coverage:
+    """The coverage flags, validated. Anything malformed becomes absent.
+
+    `0/0` IS THE DEFAULT FOR THE FIRST PAIR and means "not measured" rather
+    than "nothing was openable" -- `coverage_note` treats it as absent, and
+    the lane letter on the marker says which case it is.
+
+    ABSENT MEANS ONE PASS for the second pair, and absent is the default: a
+    workflow that never ran a second pass passes neither flag and the
+    marker is the one this program has always written. `counter_flag` is
+    deliberately NOT used on `--coverage-passes` -- its "0" fallback would
+    read as a count, where "" reads as "this run has nothing to say about
+    passes".
+
+    BOTH OF THE SECOND PAIR ARE CHECKED, not just the first. Each reaches
+    the marker VERBATIM, and the marker is an HTML comment: a value
+    carrying `-->` closes the real marker and opens a forged one, after
+    which `previous_stats` reads the forged finding count and every later
+    run compares itself against a number somebody else chose. Neither is
+    reachable from a pull request today, but what makes that true is a
+    property of ONE CALLER. ~~The workflow takes both from `write_counts`,
+    which emits integers.~~ It takes `--coverage-first-read` from there and
+    that function emits `unmeasured` on a degraded run, not an integer;
+    `--coverage-passes` does not come from it at all, being an `echo` in
+    the measure step's own shell. The validation is right and both halves
+    of the reason it used to give were wrong. Same reasoning `--truncated`
+    was fixed for, and the sentence its fixture records.
+
+    EVERY DIGIT TEST HERE IS ASCII-ONLY. `str.isdigit()` admits every
+    decimal digit Unicode has, which breaks this function in both
+    directions -- see ASCII_DIGITS.
+
+    A REFUSAL DROPS BOTH, never one: `passes` without `first_read` records
+    that a second pass happened and nothing about what it changed, and
+    `first_read` without `passes` is never rendered at all.
+    """
+    passes = _flag(argv, "--coverage-passes")
+    first_read = _flag(argv, "--coverage-first-read")
+    if passes and not (ASCII_DIGITS.fullmatch(passes) and int(passes) > 1):
+        print(
+            f"--coverage-passes must be an integer above 1, got {passes!r}",
+            file=sys.stderr,
+        )
+        passes, first_read = "", ""
+    if first_read and not ASCII_DIGITS.fullmatch(first_read):
+        print(
+            f"--coverage-first-read must be a non-negative integer, got {first_read!r}",
+            file=sys.stderr,
+        )
+        passes, first_read = "", ""
+    if passes and not first_read:
+        print(
+            "--coverage-passes was given without --coverage-first-read, so"
+            " the marker would record a second pass with no first-pass"
+            " figure to compare it against",
+            file=sys.stderr,
+        )
+        passes = ""
+    return Coverage(
+        read=_flag(argv, "--coverage-read", "0"),
+        total=_flag(argv, "--coverage-total", "0"),
+        passes=passes,
+        first_read=first_read,
+    )
+
+
 def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
     """(comment body, the findings it actually carries).
 
@@ -1683,8 +1830,7 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
     survived = rank(findings)
     lane = _flag(argv, "--lane", "B")
     head = _flag(argv, "--head", "unknown")
-    read = _flag(argv, "--coverage-read", "0")
-    total = _flag(argv, "--coverage-total", "0")
+    coverage = coverage_fields(argv)
     summary = _flag(argv, "--summary")
     # READ ONCE, not per render. `assemble` calls `render` again after every
     # trim, so a clock read inside it can change the body between iterations
@@ -1709,14 +1855,16 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
             adjudged=dropped_total(counts, DISCLOSED),
             recorded=dropped_total(counts, RECORDED),
             space=len(survived) - len(shown),
-            read=read,
-            total=total,
+            read=coverage.read,
+            total=coverage.total,
             supplied=counts.get("supplied", -1),
             rows=counts.get("rows", -1),
             # Read here rather than hoisted: unlike the clock this is a
             # constant string, so re-reading it per render cannot change
             # the body. Validated, not just defaulted -- see `counter_flag`.
             truncated=counter_flag(argv, "--truncated"),
+            passes=coverage.passes,
+            first_read=coverage.first_read,
         )
         return (
             header(tally, summary, bool(counts["no_verdict"])),

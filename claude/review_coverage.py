@@ -3,7 +3,7 @@
 
     review_coverage.py <manifest.tsv> <transcript.jsonl> [--workspace DIR]
                        [--github-env FILE] [--missed-file FILE]
-                       [--restored "<paths>"]
+                       [--uncovered-file FILE] [--restored "<paths>"]
 
 Reads the manifest the reviewer was given and the Claude Code `stream-json`
 transcript of the run that reviewed it, and prints which manifest rows the
@@ -155,6 +155,23 @@ with `+TRIED`. A row nobody opened and one whose `Read` came back empty are
 different defects with different owners; the counts report them identically,
 and the transcript does not outlive the job to be asked again.
 
+`--uncovered-file` is the SAME SET as `--missed-file` written for a MACHINE
+rather than for a reader, and the differences are both deliberate. It carries
+the path alone, with no reason code, so it can be joined against the manifest
+on its `path` column; and it is UNCAPPED, where `--missed-file` stops at
+MISSED_LIST_CAP because a pull request comment cannot carry a hundred paths.
+A capped list would silently hand a second review pass twenty of the
+twenty-five rows nobody opened and report the result as complete -- the
+reassuring-direction failure this whole program exists to catch, reappearing
+in the thing built on top of it. Paths are written through `tsv_field`, so
+each is spelled exactly as the manifest's own `path` column spells it and the
+join is an equality test rather than a re-escaping exercise.
+
+It is written only when this run MEASURED something, for the same reason the
+missed list is: a degraded instrument credits no row, so every row would be
+named uncovered and a consumer would re-review the whole change believing it
+had been told which part was missed.
+
 all four being the token `unmeasured` instead whenever this run established
 nothing -- either of the two cases above.
 
@@ -181,7 +198,7 @@ import review_io
 USAGE = (
     "usage: review_coverage.py <manifest.tsv> <transcript.jsonl>\n"
     "       [--workspace DIR] [--github-env FILE] [--missed-file FILE]\n"
-    '       [--restored "<paths>"]'
+    '       [--uncovered-file FILE] [--restored "<paths>"]'
 )
 
 # The manifest's fourth column when there is no patch file to read. They mean
@@ -206,7 +223,13 @@ REMOVED = review_io.REMOVED
 MISSED_LIST_CAP = 20
 
 # The option flags, each taking one value.
-FLAGS = ("--github-env", "--missed-file", "--restored", "--workspace")
+FLAGS = (
+    "--github-env",
+    "--missed-file",
+    "--restored",
+    "--uncovered-file",
+    "--workspace",
+)
 
 # What the four counts say when nothing could be matched. A fixed token, so
 # it is still safe in `$GITHUB_ENV`, and the SAME token the workflow writes
@@ -513,8 +536,14 @@ def exempt_reason(status: str, patch_file: str, repo_path: str, restored: tuple)
 def measure(rows: list, read: Seen, tried: Seen, restored: tuple = ()) -> tuple:
     """(covered, uncovered, exempt) repo paths, given the manifest and reads.
 
-    `uncovered` and `exempt` entries both carry a reason code beside the
-    path, in the same `path [CODE]` shape.
+    `exempt` entries carry a reason code beside the path, in the
+    `path [CODE]` shape the report prints. `uncovered` entries carry the
+    SAME two facts as a `(path, code)` PAIR rather than one joined string,
+    because a second reader now needs the path on its own: the retry
+    manifest is built from these paths, and recovering one by splitting the
+    joined form would break on any path containing " [". Both renderings
+    live in the two places that print them, which is the only place the
+    joined shape was ever wanted.
 
     `tried` is the same workspace split over the paths a `Read` was ISSUED
     for, a superset of `read`. It decides only the `+TRIED` half of a code
@@ -532,9 +561,7 @@ def measure(rows: list, read: Seen, tried: Seen, restored: tuple = ()) -> tuple:
         if covered_by(repo_path, patch, read):
             covered.append(repo_path)
         else:
-            uncovered.append(
-                f"{repo_path} [{missed_reason(repo_path, patch, read, tried)}]"
-            )
+            uncovered.append((repo_path, missed_reason(repo_path, patch, read, tried)))
     return covered, uncovered, exempt
 
 
@@ -662,12 +689,32 @@ def write_missed(path: str, uncovered: list) -> None:
     `missed_reason` -- so the comment can say what the reviewer was given
     and whether it tried, not only that it did not open the file.
     """
-    missed = [review_io.tsv_field(p) for p in uncovered[:MISSED_LIST_CAP]]
+    missed = [
+        f"{review_io.tsv_field(path)} [{code}]"
+        for path, code in uncovered[:MISSED_LIST_CAP]
+    ]
     if len(uncovered) > MISSED_LIST_CAP:
         missed.append(f"(+{len(uncovered) - MISSED_LIST_CAP} more)")
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
         for entry in missed:
             handle.write(f"{entry}\n")
+
+
+def write_uncovered(path: str, uncovered: list) -> None:
+    """The unopened rows' PATHS, uncapped, one per line, re-escaped.
+
+    The join key for anything that wants to act on the misses rather than
+    display them -- today, the second review pass's manifest. No reason
+    code: a consumer joining on the `path` column would have to strip one,
+    and a path ending in `]` makes that ambiguous.
+
+    UNCAPPED, unlike `write_missed`. See the module docstring: a truncated
+    list of what was missed is a complete-looking answer over an incomplete
+    set, which is the exact shape of the defect this program measures.
+    """
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        for repo_path, _code in uncovered:
+            handle.write(f"{review_io.tsv_field(repo_path)}\n")
 
 
 def unmeasured_warning(
@@ -773,8 +820,8 @@ def report(reads: Reads, seen: Seen, workspace: str, tallies: Tally) -> None:
                 " instruction; +TRIED = a Read was issued for it and did not"
                 " return a file."
             )
-        for path in uncovered:
-            print(f"  ? {path}")
+        for path, code in uncovered:
+            print(f"  ? {path} [{code}]")
     for path in exempt:
         print(f"  = {path}")
 
@@ -830,6 +877,13 @@ def main(argv: list) -> int:
 
     if missed_file and not tallies.unmeasured:
         write_missed(missed_file, tallies.uncovered)
+
+    # WRITTEN EVEN WHEN EMPTY, so its absence means "this run established
+    # nothing" and never "this run established that nothing was missed".
+    # A consumer that cannot tell those apart is one `[ -s ]` away from
+    # treating a degraded instrument as full coverage.
+    if options["--uncovered-file"] and not tallies.unmeasured:
+        write_uncovered(options["--uncovered-file"], tallies.uncovered)
 
     return 0
 

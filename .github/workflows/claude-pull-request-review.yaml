@@ -162,6 +162,48 @@ on:
         required: false
         type: boolean
         default: false
+      second_pass:
+        description: |
+          Re-invoke the reviewer over the manifest rows the first pass did
+          not open.
+
+          The reviewer is handed a manifest and chooses which rows to read,
+          so coverage is a model decision and not a budget: measured across
+          four consecutive pushes of one 45-file pull request, with every
+          patch supplied and nothing withheld by any cap, it opened 9, 11,
+          18 and 20 of them. The unopened set is already computed exactly,
+          so it can be written back out as a manifest and handed to one
+          more invocation that has nothing else to do.
+
+          Costs one extra model call, only where the first pass fell short.
+          The second prompt shares its whole prefix with the first, so what
+          is new in it is the assignment and the first pass's own findings.
+
+          DEFAULT FALSE, for the reason `coverage_enforcement` defaults to
+          `warn`: this workflow is consumed at a floating major tag, and a
+          second model call per pull request is new spend reaching every
+          consumer at once with nobody watching.
+
+          A SECOND PASS THAT DOES NOT COMPLETE IS NOT A CLEAN VERDICT. Its
+          reads are credited only once its findings are in the document the
+          adjudicator reads, so a run that opened its rows and then died
+          leaves them counted unopened and named on the pull request.
+
+          WHY NOT `claude -p --resume <session>`, which is the first
+          question this design invites: it would delete most of it -- no
+          prompt split, no digest, no fence, no merge, since the model
+          already holds its own findings. The answer is that a resumed
+          session inherits the state that ended the first one. If the pass
+          stopped under context pressure, resuming reproduces the pressure;
+          a fresh context over a smaller manifest is the whole point. The
+          first pass is also known to have finished deliberately rather
+          than been cut off -- a review only reaches the comment when the
+          model called `StructuredOutput` as its last act -- so there is
+          nothing to resume it INTO. Worth revisiting only if a measurement
+          shows the first pass stopping for a reason resuming would clear.
+        required: false
+        type: boolean
+        default: false
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -175,6 +217,16 @@ jobs:
     # 6-hour default while holding the concurrency group below, which blocks
     # every later push on the same pull request from being reviewed at all.
     # Raise it if a real review is ever cut off; the step logs say which.
+    #
+    # IT IS A BOUND ON THE JOB, NOT ON AN INVOCATION, and that distinction
+    # became load-bearing when a second pass became possible. Hitting it
+    # CANCELS the job, and a cancelled job posts the cancellation notice and
+    # NOT the review -- so a second pass that runs past this number does not
+    # cost its own output, it costs the FIRST pass's, which was complete in
+    # $RUNNER_TEMP and never published. The second-pass step therefore
+    # computes what is left of this number before it starts, and skips
+    # rather than overrun it. `JOB_TIMEOUT_MINUTES` below is how it knows
+    # the figure; the two must stay equal and a fixture asserts they are.
     timeout-minutes: 30
     permissions:
       contents: read
@@ -210,6 +262,13 @@ jobs:
       # one checkout and a grep rather than a model call.
       REVIEW_OUTCOME: reviewed
       REVIEW_ERROR: ""
+      # THE SAME NUMBER AS `timeout-minutes` ABOVE, as a value the shell can
+      # read. `timeout-minutes` takes no `env` context, so the figure cannot
+      # be written once and referenced twice; it is written twice and
+      # CHECKED, by `test_review_workflow.sh`, which reads both off this
+      # file. A restated number nobody checks is the count-invalidation
+      # defect this reviewer is told to report in other people's code.
+      JOB_TIMEOUT_MINUTES: 30
       PR_NUMBER: ${{ github.event.pull_request.number }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       # ONE PREDICATE, TWO READERS: the step below finds this reviewer's own
@@ -285,6 +344,15 @@ jobs:
           # nothing on the pull request. `Senzing/libpostal` is one today.
           IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
+          # WHEN THIS JOB STARTED, to the nearest second, recorded in the
+          # FIRST step so that everything `timeout-minutes` bounds is inside
+          # the measurement -- the checkouts, the CLI install and the first
+          # review pass included. The second-pass step subtracts this from
+          # the job bound to decide whether it has room to run at all.
+          # Seconds since the epoch, so no locale or format can get between
+          # the two readings.
+          echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
           # IDENTITY IS RESOLVED AT RUNTIME, from the token itself.
           #
           # `GET /user` answers 403 for an installation token -- measured --
@@ -488,6 +556,16 @@ jobs:
             printf 'Reviewed %s at %s.\n' "$_short" "$_when"
           }
           PUBLISH
+
+          # READ-ONLY, for the same reason `run-review.sh` is. This file is
+          # SOURCED by every posting step, all of which run AFTER the model
+          # has had its turn with Bash -- and this is the one holding `gh
+          # api --method POST` against a token with `pull-requests: write`.
+          # The containment argument written beside the other chmod applies
+          # here verbatim and more sharply: a writable file that a later
+          # step sources is a way to replace the program the next call runs,
+          # and the program this one runs can write to the pull request.
+          chmod 444 "$RUNNER_TEMP/publish-comment.sh"
 
       # Validated before any work, so a caller's typo fails before the model
       # call rather than after it, and on every run rather than only on a
@@ -1458,7 +1536,7 @@ jobs:
           # before it rather than after an instruction to start. Dropping that
           # line and re-adding it keeps this correct whichever line is last.
           sed '$ {/^Begin\.$/ d}' build-resources/claude/pr-prompt-v2.md \
-            > "$RUNNER_TEMP/prompt.md"
+            > "$RUNNER_TEMP/prompt-common.md"
 
           : "${REVIEW_FILES:=0}"
           : "${REVIEW_ADDITIONS:=0}"
@@ -1482,16 +1560,16 @@ jobs:
             echo "- The working tree is this PR merged into its base branch, so it is what would land. \`HEAD\` is that merge commit, not the head above; \`HEAD^\` is the base branch tip and \`HEAD^2\` is the PR head. There is nothing left to resolve: do not look for a command to confirm it."
             echo "- After exclusions this PR changes ${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS}/-${REVIEW_DELETIONS}."
             echo "- \`pr-files/\` (the patches) and \`build-resources/\` (this reviewer's own prompt and scripts) sit in the workspace but are NOT part of the repository under review. They are listed in \`.git/info/exclude\`, so \`Grep\` already skips both and you need no exclusion flags; a plain tree-wide \`Grep\` is correct."
-          } >> "$RUNNER_TEMP/prompt.md"
+          } >> "$RUNNER_TEMP/prompt-common.md"
 
           if [ -n "${EXCLUDED_SUMMARY:-}" ]; then
-            echo "- Already dropped before you saw the manifest, so absent by design and never a finding -- but it does answer \"did the lockfile move with the manifest?\": ${EXCLUDED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+            echo "- Already dropped before you saw the manifest, so absent by design and never a finding -- but it does answer \"did the lockfile move with the manifest?\": ${EXCLUDED_SUMMARY}" >> "$RUNNER_TEMP/prompt-common.md"
           fi
           if [ -n "${OMITTED_SUMMARY:-}" ]; then
-            echo "- Too large to supply a patch for; these carry \`omitted\` in the manifest's fourth column. **Open each of these in the working tree.** ${OMITTED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+            echo "- Too large to supply a patch for; these carry \`omitted\` in the manifest's fourth column. **Open each of these in the working tree.** ${OMITTED_SUMMARY}" >> "$RUNNER_TEMP/prompt-common.md"
           fi
           if [ -n "${TRUNCATED_SUMMARY:-}" ]; then
-            echo "- Over this repository's per-file patch cap, so the patch you are given for each of these is CUT to its last whole hunk and ends in a \`*** TRUNCATED:\` line naming the original size, the size supplied and the path. The hunks above that line are complete -- nothing is half-written -- but they are NOT the whole change: read them as you would any patch, then open the file in the working tree and review the rest, because what you were given may be one hunk out of many. The truncation is a fact about the patch's size and not a judgement about the change: it is not permission to skip the row, and the size itself is not a finding. ${TRUNCATED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+            echo "- Over this repository's per-file patch cap, so the patch you are given for each of these is CUT to its last whole hunk and ends in a \`*** TRUNCATED:\` line naming the original size, the size supplied and the path. The hunks above that line are complete -- nothing is half-written -- but they are NOT the whole change: read them as you would any patch, then open the file in the working tree and review the rest, because what you were given may be one hunk out of many. The truncation is a fact about the patch's size and not a judgement about the change: it is not permission to skip the row, and the size itself is not a finding. ${TRUNCATED_SUMMARY}" >> "$RUNNER_TEMP/prompt-common.md"
           fi
           # THE RESTORED PARAGRAPH GOES LAST, AFTER THE TRUNCATED ONE, and
           # that ordering is load-bearing rather than tidy. A path can be in
@@ -1508,13 +1586,13 @@ jobs:
           # deliberately never told the restored set. The workflow holds
           # both, so the workflow is where the correction belongs.
           if [ -n "${RESTORED_PATHS:-}" ]; then
-            echo "- These paths were restored to their BASE-BRANCH content before you started, because the CLI or a tool it runs would otherwise load them as configuration from this branch: ${RESTORED_PATHS}. Their patches are in \`pr-files/\`, so review the change there; what is in the working tree at those paths is the base's version and a difference between the two is expected, not a finding. **This overrides anything above that sends you to the working tree.** If one of these paths is also in the truncated list, the part of its change that was cut is not available anywhere: review what the patch holds, and say in your output that the rest could not be seen -- do not read the working-tree copy, which is the base's." >> "$RUNNER_TEMP/prompt.md"
+            echo "- These paths were restored to their BASE-BRANCH content before you started, because the CLI or a tool it runs would otherwise load them as configuration from this branch: ${RESTORED_PATHS}. Their patches are in \`pr-files/\`, so review the change there; what is in the working tree at those paths is the base's version and a difference between the two is expected, not a finding. **This overrides anything above that sends you to the working tree.** If one of these paths is also in the truncated list, the part of its change that was cut is not available anywhere: review what the patch holds, and say in your output that the rest could not be seen -- do not read the working-tree copy, which is the base's." >> "$RUNNER_TEMP/prompt-common.md"
           fi
           if [ -n "${UNPATCHED_SUMMARY:-}" ]; then
-            echo "- **No diff could be rendered for these, so they carry \`-\` in the manifest's fourth column. Open each one in the working tree and review it there; they are not optional and they are not generated. The one exception is a row whose status column reads \`removed\` -- that file is gone from the working tree, the deletion is the whole change, and you cannot and need not open it.** ${UNPATCHED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+            echo "- **No diff could be rendered for these, so they carry \`-\` in the manifest's fourth column. Open each one in the working tree and review it there; they are not optional and they are not generated. The one exception is a row whose status column reads \`removed\` -- that file is gone from the working tree, the deletion is the whole change, and you cannot and need not open it.** ${UNPATCHED_SUMMARY}" >> "$RUNNER_TEMP/prompt-common.md"
           fi
           if [ -n "${BINARY_SUMMARY:-}" ]; then
-            echo "- These carry \`binary\` in the manifest's fourth column. The file's own content is binary, so there is nothing to read: **do not try to open them** and do not treat their absence from your review as a finding: ${BINARY_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+            echo "- These carry \`binary\` in the manifest's fourth column. The file's own content is binary, so there is nothing to read: **do not try to open them** and do not treat their absence from your review as a finding: ${BINARY_SUMMARY}" >> "$RUNNER_TEMP/prompt-common.md"
           fi
 
           # The thread goes last, immediately before "Begin.", so the rules
@@ -1522,11 +1600,28 @@ jobs:
           # framing -- a nonce-bearing fence plus a "| " prefix on every data
           # line -- is written by pr_discussion.py, not by any PR author.
           if [ -s "$RUNNER_TEMP/discussion.md" ]; then
-            printf '\n' >> "$RUNNER_TEMP/prompt.md"
-            cat "$RUNNER_TEMP/discussion.md" >> "$RUNNER_TEMP/prompt.md"
+            printf '\n' >> "$RUNNER_TEMP/prompt-common.md"
+            cat "$RUNNER_TEMP/discussion.md" >> "$RUNNER_TEMP/prompt-common.md"
           fi
 
+          # THE SHARED PREFIX ENDS HERE, which is why "Begin." is appended
+          # to a COPY. An assignment placed BEFORE the comment thread would
+          # put a varying block in front of the largest shared one, so the
+          # two prompts would share only the instruction file and a prompt
+          # cache could reuse nothing past it. Appending it after also
+          # keeps the later, more specific instruction last.
+          # BY REDIRECT, NOT `cp`, for the reason spelled out at the second
+          # pass -- which is where the hazard actually bites, because the
+          # `chmod` below runs AFTER this copy and so the source is still
+          # writable here. Written the same way at both sites so the first
+          # pass does not depend on that ordering surviving an edit.
+          cat "$RUNNER_TEMP/prompt-common.md" > "$RUNNER_TEMP/prompt.md"
           printf '\nBegin.\n' >> "$RUNNER_TEMP/prompt.md"
+          # READ-ONLY, like the two sourced helpers, and the argument is
+          # strongest here: this file IS the prompt every pass is built
+          # from, read again after the first model has had a turn with
+          # Bash. Each pass redirects it into a writable copy of its own.
+          chmod 444 "$RUNNER_TEMP/prompt-common.md"
           echo "Prompt created ($(wc -c < "$RUNNER_TEMP/prompt.md") bytes)"
 
       - name: Run Claude Code Review
@@ -1537,101 +1632,175 @@ jobs:
           REVIEW_NOTES: ${{ runner.temp }}/review-notes.txt
         run: |
           echo "Running Claude code review..."
+          # ONE DEFINITION OF THE INVOCATION, IN A FILE BOTH PASSES
+          # SOURCE -- the shape `publish-comment.sh` already uses, for the
+          # same reason. There is more than one caller now, and a copied
+          # invocation is how a `--safe-mode` or a `--setting-sources`
+          # goes missing from one of them: both still run, both still
+          # produce a review, and only one of them is protected.
+          #
+          # ~~One call per review, always -- no chunking, no second pass.~~
+          # SUPERSEDED by the `second_pass` input. There is still no
+          # chunking and the first pass is still handed the whole manifest;
+          # what changed is that the rows it did not open can be handed
+          # back to one more invocation. How many invocations a run makes
+          # is decided by the coverage MEASUREMENT, in the steps below, and
+          # never here.
+          cat > "$RUNNER_TEMP/run-review.sh" <<'RUNNER'
+          # run_review <prompt file> <transcript file> <stderr file> [wall clock]
+          #
+          # Runs the reviewer once and returns the CLI's own exit status.
+          # Reads MODEL from the environment; writes nothing but the three
+          # files it is given. The fourth argument is a `timeout` duration
+          # and is omitted by the first pass.
+          run_review() {
+            _prompt="$1"
+            _stream="$2"
+            _errors="$3"
+            _limit="${4:-}"
 
-          # Model reaches claude's argv, so it is validated and passed as a
-          # quoted array element. An unquoted "--model $X" would let a caller
-          # append arbitrary flags (e.g. --allowedTools) to a claude process
-          # holding CLAUDE_CODE_OAUTH_TOKEN in a job with pull-requests: write.
-          MODEL_ARGS=()
-          if [ -n "$MODEL" ]; then
-            case "$MODEL" in
-              *[!A-Za-z0-9._-]*)
-                echo "::error::model must match [A-Za-z0-9._-]+ (got '$MODEL')"
-                exit 1
-                ;;
-            esac
-            MODEL_ARGS=(--model "$MODEL")
-            echo "Using model: $MODEL"
-          fi
 
-          # One call per review, always -- no chunking, no second pass.
-          #
-          # EVERY Bash GRANT IS A WRAPPER, and this is not a style choice. A
-          # `Bash(cmd:*)` permission bounds the START of the command string
-          # and nothing after it, so the argument list is unconstrained. The
-          # five `Bash(git ...:*)` grants this replaced were therefore an
-          # arbitrary write and a remote-code-execution path, both reproduced:
-          # `git log --output=<path> --format=%B -1` writes the pull request's
-          # own commit message anywhere on the runner, which installs a
-          # `[diff "x"] command = ...` stanza in `.git/config` that
-          # `git log -p --ext-diff` then executes. A wrapper is sound where a
-          # prefix is not, because the wrapper validates its own arguments --
-          # review-git allows three subcommands and refuses the flags that
-          # write files or run programs, and review-note takes its destination
-          # from the environment so no argument can redirect the write.
-          #
-          # `git status` and `git rev-parse` were dropped rather than wrapped:
-          # the run context appended to the prompt already states what the
-          # working tree is and which commit is which, and no helper program
-          # here shells out to either.
-          #
-          # Naming tools cannot widen access -- an allow list only
-          # suppresses prompts, and `claude -p` refuses rather than queues
-          # anything not permitted -- but leaving them unnamed can silently
-          # reduce the review to reading nothing, which is the one failure
-          # this whole input shape exists to prevent.
-          #
-          # WebFetch/WebSearch stay denied: the runner has no useful network
-          # and the prompt forbids any finding that would need one.
-          ALLOWED_TOOLS="Read,Glob,Grep"
-          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(review-git:*)"
-          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(review-note:*)"
+            # Model reaches claude's argv, so it is validated and passed as a
+            # quoted array element. An unquoted "--model $X" would let a caller
+            # append arbitrary flags (e.g. --allowedTools) to a claude process
+            # holding CLAUDE_CODE_OAUTH_TOKEN in a job with pull-requests: write.
+            _model_args=()
+            if [ -n "${MODEL:-}" ]; then
+              case "$MODEL" in
+                *[!A-Za-z0-9._-]*)
+                  echo "::error::model must match [A-Za-z0-9._-]+ (got '$MODEL')"
+                  # EXIT, NOT RETURN, and the difference is load-bearing now
+                  # that this is a function. The file is SOURCED, so `exit`
+                  # ends the step red -- which is what a caller's typo did
+                  # before, and is correct: a malformed input is the caller's
+                  # defect. `return` would reach the caller as "the CLI exited
+                  # non-zero", which this workflow turns into a posted comment
+                  # saying the review could not run and a green job.
+                  exit 1
+                  ;;
+              esac
+              _model_args=(--model "$MODEL")
+              echo "Using model: $MODEL"
+            fi
 
-          # The cwd is the PULL REQUEST's checkout, which is untrusted:
-          # without these two flags that branch's own CLAUDE.md,
-          # .claude/settings.json, hooks, agents and commands load as
-          # instructions to the reviewer. A PR that adds a root CLAUDE.md
-          # saying "emit the no-findings line" would otherwise get a clean
-          # review, from a job holding CLAUDE_CODE_OAUTH_TOKEN with
-          # pull-requests: write.
-          #
-          # The CLI version is pinned (`claude_cli_version`), so a future
-          # version that drops either flag cannot arrive without a bump to
-          # this file. Were one to, the invocation exits non-zero and the
-          # review reports that it could not run, rather than quietly
-          # running unprotected -- the intended failure direction either way.
-          SAFETY_ARGS=(--safe-mode --setting-sources user)
+            # EVERY Bash GRANT IS A WRAPPER, and this is not a style choice. A
+            # `Bash(cmd:*)` permission bounds the START of the command string
+            # and nothing after it, so the argument list is unconstrained. The
+            # five `Bash(git ...:*)` grants this replaced were therefore an
+            # arbitrary write and a remote-code-execution path, both reproduced:
+            # `git log --output=<path> --format=%B -1` writes the pull request's
+            # own commit message anywhere on the runner, which installs a
+            # `[diff "x"] command = ...` stanza in `.git/config` that
+            # `git log -p --ext-diff` then executes. A wrapper is sound where a
+            # prefix is not, because the wrapper validates its own arguments --
+            # review-git allows three subcommands and refuses the flags that
+            # write files or run programs, and review-note takes its destination
+            # from the environment so no argument can redirect the write.
+            #
+            # `git status` and `git rev-parse` were dropped rather than wrapped:
+            # the run context appended to the prompt already states what the
+            # working tree is and which commit is which, and no helper program
+            # here shells out to either.
+            #
+            # Naming tools cannot widen access -- an allow list only
+            # suppresses prompts, and `claude -p` refuses rather than queues
+            # anything not permitted -- but leaving them unnamed can silently
+            # reduce the review to reading nothing, which is the one failure
+            # this whole input shape exists to prevent.
+            #
+            # WebFetch/WebSearch stay denied: the runner has no useful network
+            # and the prompt forbids any finding that would need one.
+            _allowed="Read,Glob,Grep"
+            _allowed="${_allowed},Bash(review-git:*)"
+            _allowed="${_allowed},Bash(review-note:*)"
 
-          # --json-schema takes the schema INLINE, not a path, so it is read
-          # from the file here. Double quotes are the whole safety argument:
-          # bash word-splits and globs an expanded value but never re-scans it
-          # for quotes or escapes, so the JSON cannot break out of the
-          # argument. It must also precede the variadic flags below, which
-          # would otherwise swallow a value starting with `{`.
-          REVIEW_SCHEMA=$(cat build-resources/claude/review-schema.json)
+            # The cwd is the PULL REQUEST's checkout, which is untrusted:
+            # without these two flags that branch's own CLAUDE.md,
+            # .claude/settings.json, hooks, agents and commands load as
+            # instructions to the reviewer. A PR that adds a root CLAUDE.md
+            # saying "emit the no-findings line" would otherwise get a clean
+            # review, from a job holding CLAUDE_CODE_OAUTH_TOKEN with
+            # pull-requests: write.
+            #
+            # The CLI version is pinned (`claude_cli_version`), so a future
+            # version that drops either flag cannot arrive without a bump to
+            # this file. Were one to, the invocation exits non-zero and the
+            # review reports that it could not run, rather than quietly
+            # running unprotected -- the intended failure direction either way.
+            _safety=(--safe-mode --setting-sources user)
 
-          # --allowedTools and --disallowedTools are VARIADIC in this CLI, so
-          # they swallow any following argument that does not start with "-".
-          # The prompt therefore arrives on stdin and these two stay last;
-          # do not add a positional argument after them.
-          #
-          # `--output-format stream-json --verbose` replaces plain text
-          # output, so stdout is the run's TRANSCRIPT rather than the
-          # review. That is the whole point: the transcript records every
-          # file the model opened, with the tool result that says whether
-          # the read returned anything, and that is the only coverage signal
-          # which is a measurement rather than a second opinion from the
-          # thing being measured. Anthropic's own action captures the same
-          # Agent SDK message array into an execution file; this is the CLI
-          # equivalent, and `--verbose` is required alongside stream-json in
-          # print mode.
-          if ! claude -p "${MODEL_ARGS[@]}" "${SAFETY_ARGS[@]}" \
-            --output-format stream-json --verbose \
-            --json-schema "$REVIEW_SCHEMA" \
-            --allowedTools "$ALLOWED_TOOLS" \
-            --disallowedTools "WebFetch,WebSearch" \
-            < "$RUNNER_TEMP/prompt.md" \
-            > "$RUNNER_TEMP/stream.jsonl" 2> "$RUNNER_TEMP/review.err"; then
+            # --json-schema takes the schema INLINE, not a path, so it is read
+            # from the file here. Double quotes are the whole safety argument:
+            # bash word-splits and globs an expanded value but never re-scans it
+            # for quotes or escapes, so the JSON cannot break out of the
+            # argument. It must also precede the variadic flags below, which
+            # would otherwise swallow a value starting with `{`.
+            # `|| exit 1`, BECAUSE THIS MOVED INTO A FUNCTION. At base the
+            # read ran at top level under `bash -e`, so a failed one ended
+            # the step red. Both callers invoke this as `if ! run_review`,
+            # and `set -e` is off for the whole body of a condition -- so
+            # without this the read fails soft, `_schema` is empty, and
+            # `claude` is invoked with `--json-schema ""`. Unreachable
+            # (`Verify build resources checkout` requires the file) and the
+            # direction is safe either way, but the first pass is the path
+            # that must behave exactly as it did. `exit` from a sourced
+            # function ends the step, as the model check above relies on.
+            _schema=$(cat build-resources/claude/review-schema.json) || exit 1
+
+            # --allowedTools and --disallowedTools are VARIADIC in this CLI, so
+            # they swallow any following argument that does not start with "-".
+            # The prompt therefore arrives on stdin and these two stay last;
+            # do not add a positional argument after them.
+            #
+            # `--output-format stream-json --verbose` replaces plain text
+            # output, so stdout is the run's TRANSCRIPT rather than the
+            # review. That is the whole point: the transcript records every
+            # file the model opened, with the tool result that says whether
+            # the read returned anything, and that is the only coverage signal
+            # which is a measurement rather than a second opinion from the
+            # thing being measured. Anthropic's own action captures the same
+            # Agent SDK message array into an execution file; this is the CLI
+            # equivalent, and `--verbose` is required alongside stream-json in
+            # print mode.
+
+            # AN OPTIONAL WALL CLOCK, OMITTED BY THE FIRST PASS so that
+            # call is byte-for-byte the one this file has always made. An
+            # argument rather than an environment variable, so a reader can
+            # see which invocations are bounded.
+            #
+            # `--kill-after` IS WHAT MAKES THE BOUND A BOUND. Measured,
+            # `timeout --signal=TERM 2` against a child that traps it
+            # returned 124 after THIRTY SECONDS; a wedged event loop
+            # services a signal no better.
+            _wrap=()
+            if [ -n "$_limit" ]; then
+              _wrap=(timeout --kill-after=30s --signal=TERM "$_limit")
+            fi
+
+            "${_wrap[@]}" claude -p "${_model_args[@]}" "${_safety[@]}" \
+              --output-format stream-json --verbose \
+              --json-schema "$_schema" \
+              --allowedTools "$_allowed" \
+              --disallowedTools "WebFetch,WebSearch" \
+              < "$_prompt" \
+              > "$_stream" 2> "$_errors"
+          }
+          RUNNER
+
+          # READ-ONLY, for the reason `chmod 555` is applied to the review
+          # wrappers above: this file is SOURCED, and the second pass
+          # sources it AFTER an untrusted model has had a turn with Bash. A
+          # writable file that a later step runs is a way to replace the
+          # program the next call executes. The reviewer's grants reach only
+          # `review-git` and `review-note`, neither of which can redirect a
+          # write, so this closes a path rather than a hole -- which is the
+          # same argument that put the chmod on those two.
+          chmod 444 "$RUNNER_TEMP/run-review.sh"
+
+          . "$RUNNER_TEMP/run-review.sh"
+
+          if ! run_review "$RUNNER_TEMP/prompt.md" \
+            "$RUNNER_TEMP/stream.jsonl" "$RUNNER_TEMP/review.err"; then
             echo "::warning::claude exited non-zero"
             echo "stderr:"
             cat "$RUNNER_TEMP/review.err"
@@ -1700,6 +1869,10 @@ jobs:
           # variables to the job environment. Only counts cross into the
           # environment.
           #
+          # `--uncovered-file` IS THE SAME SET FOR A MACHINE, written on
+          # every run so the input decides what is DONE, never what is
+          # measured. Uncapped, where the missed list stops at twenty.
+          #
           # RESTORED_PATHS leaves the denominator. Those paths were reverted
           # to base content after the manifest was written, so a row under one
           # of them with no patch column -- `-` or `omitted` -- sends the reviewer
@@ -1711,6 +1884,7 @@ jobs:
             --workspace "$GITHUB_WORKSPACE" \
             --github-env "$GITHUB_ENV" \
             --missed-file "$RUNNER_TEMP/missed.txt" \
+            --uncovered-file "$RUNNER_TEMP/uncovered.txt" \
             --restored "${RESTORED_PATHS:-}" \
             > "$RUNNER_TEMP/coverage.log"; then
             cat "$RUNNER_TEMP/coverage.log"
@@ -1761,6 +1935,453 @@ jobs:
               >> "$RUNNER_TEMP/sections.tsv"
           fi
 
+      # ---------------------------------------------------------------------
+      # THE SECOND PASS. Three steps, and THE ORDER OF THE GATES IS THE
+      # DESIGN: build the assignment from what was measured, run it, and
+      # credit its reads only once its findings have reached the comment.
+      #
+      # ONE RETRY, NOT A LOOP: a loop needs a bound, and "until coverage
+      # stops improving" measures the model's willingness rather than the
+      # change. Why a second invocation beats more prompt, and why one is
+      # enough, are in the pull request.
+      - name: Build the second-pass manifest
+        if: ${{ env.REVIEW_OUTCOME == 'reviewed' && inputs.second_pass }}
+        # Like the two steps below it: all three sit between a finished
+        # review and its only publication, and an uncaught non-zero in any
+        # of them skips the posting step and tells the pull request the
+        # review could not run. This one would lose the FIRST pass's
+        # review, by a route that did not exist before the second pass did.
+        continue-on-error: true
+        run: |
+          # NOTHING TO DO IS THE COMMON CASE AND IT MUST COST NOTHING. A
+          # pull request the first pass opened in full produces no second
+          # manifest, no second invocation, and the same comment -- byte for
+          # byte -- as a release with none of this in it.
+          if [ "${COVERAGE_UNCOVERED:-unmeasured}" = "0" ]; then
+            echo "the first pass opened every openable row; no second pass needed"
+            exit 0
+          fi
+
+          # A NON-NUMERIC COUNT IS NOT A SHORTFALL. It is the token
+          # review_coverage.py writes when it established nothing about any
+          # row -- a changed transcript envelope, or a workspace prefix that
+          # matched no read. Every row then LOOKS unopened, and re-reviewing
+          # the whole change on the strength of a broken instrument spends a
+          # full second review to learn nothing. The first pass's own
+          # warning is the right output here.
+          case "${COVERAGE_UNCOVERED:-}" in
+            '' | *[!0-9]*)
+              echo "::warning::coverage was not measured on this run, so there is no set of unopened rows to re-review"
+              exit 0
+              ;;
+          esac
+
+          # The same condition arriving by a second route: the list is
+          # written only by a run that measured something.
+          if [ ! -f "$RUNNER_TEMP/uncovered.txt" ]; then
+            echo "::warning::no uncovered-row list was written, so no second pass can be assembled"
+            exit 0
+          fi
+
+          # THE JOIN IS ON THE MANIFEST'S OWN `path` COLUMN AND THE ROWS ARE
+          # COPIED VERBATIM. Rebuilding a row would mean re-deciding its
+          # `changes` count and re-applying filter_diff.py's C-quoting, and
+          # a second spelling of a path containing a tab or a backslash is a
+          # row the coverage check can then never match. review_coverage.py
+          # writes the list through the same `tsv_field`, which is what makes
+          # this an equality test rather than a normalisation exercise.
+          awk -F'\t' 'NR == FNR { want[$0] = 1; next } ($3 in want)' \
+            "$RUNNER_TEMP/uncovered.txt" pr-files/manifest.tsv \
+            > pr-files/manifest-2.tsv
+
+          WANTED=$(wc -l < "$RUNNER_TEMP/uncovered.txt" | tr -d ' ')
+          GOT=$(wc -l < pr-files/manifest-2.tsv | tr -d ' ')
+          echo "second-pass manifest: ${GOT} row(s) against ${WANTED} named unopened"
+
+          # EVERY NAMED ROW HAS TO LAND IN THE MANIFEST, and a short join is
+          # refused rather than reviewed. A manifest missing a row hands the
+          # second pass less than it was told about, and the coverage
+          # re-measurement afterwards would then credit the rows it did get
+          # while the rest stayed silently unopened -- the reassuring-
+          # direction failure this whole measurement exists to catch,
+          # reappearing one layer above where it was fixed.
+          if [ "$GOT" != "$WANTED" ] || [ "$GOT" = "0" ]; then
+            echo "::warning::the second-pass manifest holds ${GOT} of ${WANTED} unopened row(s); not running a second pass over an incomplete assignment"
+            rm -f pr-files/manifest-2.tsv
+            exit 0
+          fi
+
+          # THE ONLY GATE THE NEXT STEP READS. It is set last and only on
+          # the path where a complete manifest exists on disk, so there is
+          # no state in which the second pass runs against a file this step
+          # decided not to write.
+          echo "SECOND_PASS_ROWS=${GOT}" >> "$GITHUB_ENV"
+
+      - name: Run the second review pass
+        if: ${{ env.REVIEW_OUTCOME == 'reviewed' && env.SECOND_PASS_ROWS != '' }}
+        # THIS STEP SITS BETWEEN A FINISHED REVIEW AND ITS ONLY PUBLICATION.
+        # An uncaught non-zero skips the posting step and tells the pull
+        # request the review could not run, over a complete first-pass
+        # review sitting in `$RUNNER_TEMP/review.txt`.
+        #
+        # NOT A LICENCE TO FAIL SILENTLY: `SECOND_PASS_STATUS` is then not
+        # `completed`, so the re-measurement does not run, the rows stay
+        # counted unopened, `Enforce review completion` still fails a
+        # `fail` repository, and the ERR trap below says so on the comment.
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          MODEL: ${{ inputs.model }}
+          # THE SAME NOTES FILE. A note from either pass is evidence for the
+          # same clean verdict, and a clean verdict renders them; two files
+          # would mean the second pass's notes reached nobody.
+          REVIEW_NOTES: ${{ runner.temp }}/review-notes.txt
+        run: |
+          # EVERY FAILURE PATH IN THIS STEP ENDS HERE, and all of them leave
+          # the first pass's review intact and its coverage unamended. The
+          # rows this pass was given stay counted unopened, stay named on
+          # the pull request, and keep failing a `fail` repository. What
+          # must never happen is the opposite: a pass that read its rows and
+          # then died crediting them, which turns COVERAGE_UNCOVERED to 0
+          # and publishes "No blocking findings" over code nothing
+          # adjudicated.
+          # TWO OUTCOMES, AND THE COMMENT HAS TO TELL THEM APART. Three of
+          # the paths below run BEFORE any `claude -p` exists -- the digest
+          # could not be built, the job's start time was not recorded,
+          # there is not enough of the job left -- and the budget skip is
+          # the common one. Saying those rows "were handed to a second
+          # reviewer invocation" is simply false, and the fixture for it is
+          # named "skipped, not started". Both outcomes leave the rows
+          # uncovered and named on the pull request, so the STATUS is the
+          # same; only the sentence differs.
+          record_second_pass() { # record_second_pass <sentence> <log> <reason>
+            echo "::warning::$2: $3"
+            {
+              echo "SECOND_PASS_STATUS=failed"
+              echo "SECOND_PASS_ERROR=$3"
+            } >> "$GITHUB_ENV"
+            printf 'Second review pass\t%s row(s) the first pass did not open %s (%s). Nothing in those rows has been adjudicated.\n' \
+              "${SECOND_PASS_ROWS}" "$1" "$3" >> "$RUNNER_TEMP/sections.tsv"
+          }
+          # An invocation was made and did not finish.
+          fail_second_pass() { # fail_second_pass <reason>
+            record_second_pass \
+              "were handed to a second reviewer invocation, which did not complete" \
+              "the second review pass did not complete" "$1"
+          }
+          # No invocation was made at all.
+          skip_second_pass() { # skip_second_pass <reason>
+            record_second_pass "were not re-reviewed" \
+              "no second review pass was made" "$1"
+          }
+
+          # THE TRAP PICKS BETWEEN THEM, because the region it guards spans
+          # BOTH SIDES of the invocation -- the digest, the whole prompt
+          # assembly and the budget arithmetic all run before any
+          # `claude -p` exists, which is more lines than the three designed
+          # pre-invocation paths put together. A trap fixed at `fail_`
+          # would reinstate there the false claim those three were just
+          # corrected for.
+          INVOKED=0
+          trap_second_pass() {
+            if [ "$INVOKED" = 1 ]; then
+              fail_second_pass "the second-pass step did not finish"
+            else
+              skip_second_pass "the second-pass step did not finish, and no reviewer had been invoked when it stopped"
+            fi
+          }
+
+          # SO THAT AN UNDESIGNED FAILURE SAYS THE SAME THING A DESIGNED ONE
+          # DOES. Every path above exits 0 after calling that function, so
+          # the trap fires only on an uncaught non-zero -- the case
+          # `continue-on-error` exists for, which otherwise leaves a normal
+          # first-pass review with no trace that a second pass was attempted
+          # and died. It also closes the one statement between the merge and
+          # the status write, where a death would publish both passes'
+          # findings beside a section naming the files the second pass had
+          # just reviewed.
+          trap trap_second_pass ERR
+
+          # WHAT THE FIRST PASS ALREADY SAID, one flat line per finding.
+          # This is the block that makes "append, never merge" safe: the
+          # second pass's rows are disjoint from the first's, so the only
+          # finding both can reach for is a repo-wide one with no path, and
+          # the cheapest way to stop two passes writing the same sentence is
+          # to show the second what the first wrote.
+          #
+          # A DIGEST THAT CANNOT BE BUILT IS A FAILED SECOND PASS, not a
+          # second pass told there were no findings. Those two sentences
+          # look alike in a prompt and mean opposite things.
+          if ! python3 build-resources/claude/review_text.py --digest \
+            "$RUNNER_TEMP/review.txt" > "$RUNNER_TEMP/digest.txt"; then
+            skip_second_pass "the first pass's own findings could not be read back to tell the second pass what had already been reported"
+            exit 0
+          fi
+
+          # THE PROMPT IS THE FIRST PASS'S, PLUS A BLOCK AT THE END.
+          # `prompt-common.md` is the shared prefix -- the instruction file,
+          # the run context, the disclosure bullets and the pull request's
+          # comment thread -- and the first pass was sent exactly that text
+          # with "Begin." after it. So the two prompts are extensions of the
+          # same prefix, not of each other: neither is a prefix of the
+          # other, because the first ends in "Begin." and this one carries
+          # its assignment there instead.
+          # BY REDIRECT, NOT `cp`, AND THIS IS THE SITE THAT MATTERS.
+          # `prompt-common.md` was made read-only by the step that built
+          # it, and `cp` gives a destination the SOURCE's mode bits -- so a
+          # copy here is a file the block below cannot append to, and the
+          # step dies with Permission denied for the runner's non-root
+          # user, on every consumer, every time. A redirect creates the
+          # file under the umask instead. Reproduced end to end as a
+          # non-root user against the extracted steps.
+          cat "$RUNNER_TEMP/prompt-common.md" > "$RUNNER_TEMP/prompt-2.md"
+          {
+            echo ""
+            echo "## Second pass — the rows the first reviewer did not open"
+            echo ""
+            echo "A first reviewer invocation on this same pull request has already finished. It opened ${COVERAGE_READ:-?} of ${COVERAGE_TOTAL:-?} openable manifest rows and left ${SECOND_PASS_ROWS} unopened, and those rows have been handed to you. You are the other half of that one review, not a second opinion on it."
+            echo ""
+            echo "**Your manifest is \`pr-files/manifest-2.tsv\`.** Same four columns, same rules, holding exactly the ${SECOND_PASS_ROWS} rows the first pass did not open. **This overrides the instruction above to read \`pr-files/manifest.tsv\`:** read yours, and open every row in it. The full manifest is still on disk and you may consult it, but it is not your assignment."
+            echo ""
+            echo "Everything else above binds unchanged — the tools you have, the untrusted-context rules, what is and is not a finding, and the output contract. Call \`StructuredOutput\` exactly once with every finding you have, and with an empty \`findings\` array if you have none."
+            echo ""
+            echo "Review the rows in your manifest. Do not re-review the rest of the change: it has been adjudicated already and its findings are below. Do not repeat one, do not restate one in different words, and do not report on the first pass, on this prompt, or on the fact that there were two passes — none of that is a finding about the change. Open a file outside your manifest only where a row of yours depends on it."
+            echo ""
+            echo "### Already reported by the first pass — do not repeat"
+            echo ""
+            # THE DIGEST CARRIES ITS OWN PREAMBLE AND FENCE, minted by
+            # review_text.py so that the sentence naming the nonce and the
+            # fence using it cannot disagree -- the same argument
+            # pr_discussion.py makes for the comment thread. Nothing is
+            # added around it here.
+            if [ -s "$RUNNER_TEMP/digest.txt" ]; then
+              cat "$RUNNER_TEMP/digest.txt"
+            else
+              echo "None. The first pass reported no findings."
+            fi
+            printf '\nBegin.\n'
+          } >> "$RUNNER_TEMP/prompt-2.md"
+          echo "Second-pass prompt created ($(wc -c < "$RUNNER_TEMP/prompt-2.md") bytes, against $(wc -c < "$RUNNER_TEMP/prompt.md") for the first)"
+
+          # WHAT IS LEFT OF THE JOB, less what still has to happen after
+          # this step, and SKIP when that is not enough: skipping publishes
+          # the first pass's review, overrunning the job bound cancels the
+          # job and publishes nothing. ~~A fixed ten minutes.~~ That is
+          # safe only if the first pass reliably finishes inside twenty,
+          # which nothing asserts. Full argument in the pull request.
+          #
+          # ALL THREE NUMBERS ARE GUESSES. POST_MARGIN is one coverage
+          # re-measurement, the adjudication and one POST. SECOND_PASS_FLOOR
+          # is the least time in which a pass could read its rows and reach
+          # a verdict. SECOND_PASS_CEILING is ANDed with the remaining time,
+          # so it can only shorten a pass and never overrun the job.
+          POST_MARGIN=180
+          SECOND_PASS_FLOOR=120
+          SECOND_PASS_CEILING=600
+
+          if [ -z "${JOB_STARTED_AT:-}" ]; then
+            skip_second_pass "the job's start time was not recorded, so the time left before the job's own timeout could not be computed; skipping rather than risk the job being cancelled over the first pass's review"
+            exit 0
+          fi
+          JOB_SECONDS=$(( ${JOB_TIMEOUT_MINUTES:-30} * 60 ))
+          ELAPSED=$(( $(date +%s) - JOB_STARTED_AT ))
+          REMAINING=$(( JOB_SECONDS - ELAPSED - POST_MARGIN ))
+          echo "job budget: ${ELAPSED}s elapsed of ${JOB_SECONDS}s, ${REMAINING}s usable after a ${POST_MARGIN}s margin"
+          if [ "$REMAINING" -lt "$SECOND_PASS_FLOOR" ]; then
+            skip_second_pass "only ${REMAINING}s of the job's ${JOB_TIMEOUT_MINUTES:-30}-minute bound remained after the first pass, which is not enough for a second one; the first pass's review is posted rather than risking a cancelled job that publishes nothing"
+            exit 0
+          fi
+          BUDGET=$REMAINING
+          if [ "$BUDGET" -gt "$SECOND_PASS_CEILING" ]; then
+            BUDGET=$SECOND_PASS_CEILING
+          fi
+          echo "second pass bounded at ${BUDGET}s"
+
+          . "$RUNNER_TEMP/run-review.sh"
+
+          # FROM HERE ON A CALL MAY HAVE BEEN STARTED, which is what the
+          # trap above branches on. Set before the invocation rather than
+          # after it, because a call that died mid-flight is still a call.
+          INVOKED=1
+          if ! run_review "$RUNNER_TEMP/prompt-2.md" \
+            "$RUNNER_TEMP/stream-2.jsonl" "$RUNNER_TEMP/review-2.err" "$BUDGET"; then
+            echo "::warning::the second-pass claude invocation exited non-zero"
+            cat "$RUNNER_TEMP/review-2.err"
+            # SHAPE, NEVER CONTENT -- a raw tail of the transcript prints
+            # whole source files into a job log anyone can read.
+            python3 build-resources/claude/review_text.py --events \
+              "$RUNNER_TEMP/stream-2.jsonl" || true
+            fail_second_pass "the second-pass review command failed; see the job log for the CLI's output"
+            exit 0
+          fi
+
+          if [ -s "$RUNNER_TEMP/review-2.err" ]; then
+            echo "::notice::the second pass wrote to stderr; kept out of the comment body"
+            cat "$RUNNER_TEMP/review-2.err"
+          fi
+
+          python3 build-resources/claude/review_text.py \
+            "$RUNNER_TEMP/stream-2.jsonl" > "$RUNNER_TEMP/review-2.json"
+
+          # AN EMPTY STRUCTURED OUTPUT IS A FAILURE WHATEVER THE EXIT STATUS
+          # SAID, and this is the test that holds the whole design up. The
+          # CLI can exit 0 having produced no `StructuredOutput` call at all
+          # -- a turn limit, a refusal, a model that wrote prose instead --
+          # and it can exit 0 after reading every row it was given. Keying
+          # off the exit status alone credits those reads and publishes a
+          # clean verdict over rows nothing adjudicated. An empty `findings`
+          # ARRAY is a different thing and is not caught here: that is the
+          # clean verdict for those rows, and it arrives as real JSON.
+          #
+          # Not `-s`: a file holding only a newline passes that test.
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/review-2.json" 2>/dev/null; then
+            echo "shape of the last second-pass transcript events:"
+            python3 build-resources/claude/review_text.py --events \
+              "$RUNNER_TEMP/stream-2.jsonl" || true
+            fail_second_pass "the second pass produced no structured output, so nothing it read was adjudicated"
+            exit 0
+          fi
+
+          # APPEND, DO NOT MERGE. The two passes' ASSIGNED ROWS are
+          # disjoint by construction; their FINDINGS are not, and
+          # `collapse()` downstream removes only an IDENTICAL one. What
+          # actually stops the second pass restating the first is the
+          # DIGEST above -- model compliance, not structure, and saying so
+          # is the point. Nothing is keyed here and nothing is merged: the
+          # message-merging rule that preceded `collapse()` once produced a
+          # comment-length message that deleted two security blockers to
+          # fit.
+          if ! python3 build-resources/claude/review_text.py --merge \
+            "$RUNNER_TEMP/review.txt" "$RUNNER_TEMP/review-2.json" \
+            > "$RUNNER_TEMP/review-merged.txt"; then
+            fail_second_pass "the two passes' findings could not be combined; see the job log"
+            exit 0
+          fi
+          mv "$RUNNER_TEMP/review-merged.txt" "$RUNNER_TEMP/review.txt"
+
+          echo "SECOND_PASS_STATUS=completed" >> "$GITHUB_ENV"
+          echo ""
+          echo "Raw model output (both passes):"
+          cat "$RUNNER_TEMP/review.txt"
+          echo ""
+
+      - name: Measure coverage across both passes
+        if: ${{ env.REVIEW_OUTCOME == 'reviewed' && env.SECOND_PASS_STATUS == 'completed' }}
+        # The worst of the three to lose: by here `review.txt` holds BOTH
+        # passes' findings, so an uncaught non-zero spends two model
+        # invocations and publishes neither.
+        continue-on-error: true
+        run: |
+          # GATED ON `completed`, AND THAT GATE IS THE SAFETY PROPERTY. A
+          # second pass that read its rows and then died leaves a transcript
+          # of successful reads and no verdict; measuring it would drive
+          # COVERAGE_UNCOVERED to 0 over rows nothing adjudicated. Reads are
+          # credited only where their findings reached the comment.
+
+          # THE FIRST TWO STATEMENTS IN THE STEP, before anything that can
+          # fail. From the moment the second pass merged, the first pass's
+          # counts describe one transcript out of two and its missed-file
+          # row names rows the second pass may have opened; an uncaught
+          # death anywhere below would otherwise leave both standing and
+          # the gate would pass on a number that predates the second pass.
+          # ~~They sat after the concatenation~~, which is itself a bare
+          # command -- measured, with `stream-2.jsonl` absent awk exits 2
+          # and `continue-on-error` swallows it, leaving all four counts
+          # and the stale row exactly as the first pass wrote them.
+          #
+          # The success branch overwrites all four and writes a current
+          # row; GITHUB_ENV takes the last write.
+          #
+          # THE STRIP IS THE ONE STATEMENT THAT CAN LEAVE AN INCONSISTENT
+          # PAIR: a death inside it leaves the stale row beside
+          # `unmeasured` counts. That over-reports -- files named unopened
+          # that may have been read -- which is the safe direction. A death
+          # anywhere later leaves no row at all, which is consistent with
+          # the tokens rather than covered by them.
+          FIRST_READ="${COVERAGE_READ:-0}"
+          {
+            echo "COVERAGE_TOTAL=unmeasured"
+            echo "COVERAGE_READ=unmeasured"
+            echo "COVERAGE_UNCOVERED=unmeasured"
+            echo "COVERAGE_EXEMPT=unmeasured"
+            # WRITTEN HERE TOO, so a run that made two passes and merged
+            # both sets of findings does not publish a `v4` marker claiming
+            # it made one. (`review_output.py` still emits v4 if it has to
+            # REFUSE a value -- it drops both fields rather than render an
+            # unchecked one -- which is why these two are produced here
+            # rather than taken from anywhere a pull request can reach.)
+            # The denominator is honestly `unmeasured` on this path; the
+            # pass count and the first pass's own figure are not.
+            echo "COVERAGE_PASSES=2"
+            echo "COVERAGE_FIRST_READ=${FIRST_READ}"
+          } >> "$GITHUB_ENV"
+          if [ -f "$RUNNER_TEMP/sections.tsv" ]; then
+            awk -F'\t' '$1 !~ /^Files the reviewer did not open/' \
+              "$RUNNER_TEMP/sections.tsv" > "$RUNNER_TEMP/sections-2.tsv"
+            mv "$RUNNER_TEMP/sections-2.tsv" "$RUNNER_TEMP/sections.tsv"
+          fi
+
+          # `awk 1`, NOT `cat`. These are newline-delimited JSON and `cat`
+          # concatenates BYTES: an unterminated last line in the first file
+          # welds two records into one that parses as neither. Measured: 0
+          # of 2 rows credited without the trailing newline, 2 of 2 with
+          # it. `awk 1` terminates every record.
+          awk 1 "$RUNNER_TEMP/stream.jsonl" "$RUNNER_TEMP/stream-2.jsonl" \
+            > "$RUNNER_TEMP/stream-all.jsonl"
+
+          # AGAINST THE ORIGINAL MANIFEST, NOT THE SECOND-PASS ONE: the
+          # denominator is the change, so `read=45/45` means 45 of this
+          # pull request's rows and never 25 of 25 leftovers. Re-running
+          # one program over both transcripts also keeps one definition of
+          # "opened".
+          if python3 build-resources/claude/review_coverage.py \
+            pr-files/manifest.tsv "$RUNNER_TEMP/stream-all.jsonl" \
+            --workspace "$GITHUB_WORKSPACE" \
+            --github-env "$GITHUB_ENV" \
+            --missed-file "$RUNNER_TEMP/missed.txt" \
+            --restored "${RESTORED_PATHS:-}" \
+            > "$RUNNER_TEMP/coverage-2.log"; then
+            cat "$RUNNER_TEMP/coverage-2.log"
+            READ=$(sed -n 's/^COVERAGE_READ=//p' "$GITHUB_ENV" | tail -1)
+            TOTAL=$(sed -n 's/^COVERAGE_TOTAL=//p' "$GITHUB_ENV" | tail -1)
+
+            # THE CURRENT ROW GOES BACK ON, last, which is where the
+            # first measurement put it -- so the section order on the
+            # comment does not move. The stale one was taken off above the
+            # branch, because it is wrong on this path and on the other.
+            if [ -s "$RUNNER_TEMP/missed.txt" ]; then
+              printf 'Files the reviewer did not open (%s of %s openable opened)\t%s\n' \
+                "$READ" "$TOTAL" "$(paste -sd, - < "$RUNNER_TEMP/missed.txt")" \
+                >> "$RUNNER_TEMP/sections.tsv"
+            fi
+
+            # WHAT A HUMAN READS. `read=R/T` on the marker is invisible in a
+            # browser and says nothing about how the rows were reached, so
+            # the comment carries the split in prose: what the second pass
+            # was given, what the two passes opened together, and what the
+            # first had opened on its own. A reader can then tell a pull
+            # request the reviewer covered first time from one that needed
+            # asking twice, which is the number that says whether this input
+            # is still earning its invocation.
+            printf 'Second review pass\t%s row(s) the first pass did not open were re-reviewed; %s of %s openable row(s) are now opened, against %s after the first pass alone.\n' \
+              "${SECOND_PASS_ROWS}" "$READ" "$TOTAL" "$FIRST_READ" \
+              >> "$RUNNER_TEMP/sections.tsv"
+
+            # THE MACHINE-READABLE HALF. Read by the adjudicator, which puts
+            # them on the marker; absent on every single-pass run, which is
+            # what keeps that marker byte-identical there.
+            {
+              echo "COVERAGE_PASSES=2"
+              echo "COVERAGE_FIRST_READ=${FIRST_READ}"
+            } >> "$GITHUB_ENV"
+          else
+            cat "$RUNNER_TEMP/coverage-2.log"
+            echo "::warning::coverage could not be re-measured across both passes"
+            # The tokens are already written, above the branch.
+            printf 'Review coverage\tcould not be measured across the two review passes\n' \
+              >> "$RUNNER_TEMP/sections.tsv"
+          fi
+
       # REQUIREMENT 4: the comment body is assembled, and the filler
       # rejected, by a program rather than by the model that produced it.
       - name: Adjudicate the review and build the comment
@@ -1787,6 +2408,14 @@ jobs:
           # RESTORED_PATHS for the same reason the coverage check takes
           # it: those paths hold the BASE's file, so a finding's line
           # number there cannot be resolved against the checkout.
+          #
+          # THE TWO COVERAGE-PASS FLAGS ARE EMPTY ON EVERY SINGLE-PASS RUN,
+          # which is what makes the marker on such a run the v4 string this
+          # file has always written, byte for byte. They are passed
+          # unconditionally rather than appended conditionally: a command
+          # line assembled differently on two paths is one where the second
+          # path is never exercised, and an empty value already means
+          # "this run has nothing to say about passes".
           if ! python3 build-resources/claude/review_output.py \
             --findings "$RUNNER_TEMP/review.txt" \
             --manifest pr-files/manifest.tsv \
@@ -1800,6 +2429,8 @@ jobs:
             --lane "$LANE" \
             --coverage-read "${COVERAGE_READ:-0}" \
             --coverage-total "${COVERAGE_TOTAL:-0}" \
+            --coverage-passes "${COVERAGE_PASSES:-}" \
+            --coverage-first-read "${COVERAGE_FIRST_READ:-}" \
             --truncated "${TRUNCATED_FILES:-0}" \
             --summary "${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS:-0}/-${REVIEW_DELETIONS:-0}." \
             --restored "${RESTORED_PATHS:-}"; then
@@ -2074,6 +2705,16 @@ jobs:
           ENFORCEMENT: ${{ inputs.coverage_enforcement }}
         run: |
           echo "coverage: ${COVERAGE_READ:-?}/${COVERAGE_TOTAL:-?} opened, ${COVERAGE_UNCOVERED:-?} not, ${COVERAGE_EXEMPT:-?} exempt"
+          # PRINTED ONLY WHERE THERE IS SOMETHING TO SAY. A run with one
+          # pass writes neither variable, and a line reading "passes: 1" on
+          # every job log would be noise in the one place this file keeps
+          # for diagnosis.
+          if [ -n "${COVERAGE_PASSES:-}" ]; then
+            echo "passes: ${COVERAGE_PASSES} (the first alone opened ${COVERAGE_FIRST_READ:-?}/${COVERAGE_TOTAL:-?}; ${SECOND_PASS_ROWS:-?} row(s) went to the second)"
+          fi
+          if [ "${SECOND_PASS_STATUS:-}" = "failed" ]; then
+            echo "::warning::${SECOND_PASS_ROWS:-?} unopened row(s) were not adjudicated by a second pass (${SECOND_PASS_ERROR:-no reason recorded}); they are counted unopened above"
+          fi
           # EVERY NAME HERE IS ONE review_output.py WRITES, and every name
           # it writes is here. REVIEW_MALFORMED and REVIEW_STRAY_LINES used
           # to be on this line and were left behind by the deleted markdown
@@ -2136,5 +2777,20 @@ jobs:
 
           if [ "${REVIEW_NO_VERDICT:-0}" = "1" ]; then
             echo "::error::the reviewer's output could not be read as findings or as a verdict, so nothing on this pull request has been adjudicated"
+            exit 1
+          fi
+
+          # THE THIRD SHORTFALL THE COVERAGE GATE CANNOT SEE ON ITS OWN. A
+          # second pass that was launched and did not complete leaves its
+          # rows uncovered, so "Enforce review coverage" above usually
+          # catches it -- but only usually: where every row it was given is
+          # ALSO exempt by the time the counts are read, or where the
+          # coverage measurement itself degraded to the token, that step
+          # has nothing numeric to fail on. This one does not depend on the
+          # arithmetic. A review was started over rows nobody had opened
+          # and it produced no verdict about them; in a repository that
+          # chose `fail`, that is a failure.
+          if [ "${SECOND_PASS_STATUS:-}" = "failed" ]; then
+            echo "::error::${SECOND_PASS_ROWS:-?} row(s) the first pass did not open were not adjudicated by a second pass (${SECOND_PASS_ERROR:-no reason recorded}); nothing in them has been reviewed"
             exit 1
           fi
