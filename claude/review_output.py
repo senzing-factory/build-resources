@@ -565,10 +565,17 @@ CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 # finding rather than being rewritten.
 MARKER_DELIMS = ("<!--", "-->")
 
-# The fence a disclosure section's text is rendered inside. Named rather than
-# spelled twice, because `load_notes` has to refuse what would close it and a
-# second spelling of the delimiter is a second thing to keep in step.
+# The fence a DISCLOSURE SECTION's text is rendered inside. Named rather than
+# spelled twice: a second spelling of the delimiter is a second thing to keep
+# in step. ~~`load_notes` has to refuse what would close it~~ SUPERSEDED: the
+# notes section is no longer fenced, so no note can close anything.
 FENCE = "```"
+
+# Every character a note could spend as markdown, escaped one for one: the
+# classic Markdown set, plus what GitHub added for tables, raw HTML, entities
+# and strikethrough. Every occurrence is escaped, not only one at the start
+# of the line, so nothing turns on WHERE in a note a character sits.
+MD_SPECIALS = re.compile(r"([\\`*_{}\[\]()#+.!|<>&~=-])")
 
 # The heading the evidence renders under on a clean verdict. It says what the
 # reviewer CONCLUDED, not that it looked: "Checked" alone reads as a list of
@@ -1360,17 +1367,17 @@ def load_notes(path: str) -> tuple:
     refusing what does not:
 
     * `<!--` OR `-->` REFUSES THE NOTE, exactly `MARKER_DELIMS`, exactly
-      `build_verdict`'s rule. THE CODE FENCE IS NOT A CONTAINMENT: the
-      state marker is an HTML comment and `previous_stats` reads it out of
-      the RAW body with a regex, which cannot see a fence at all, so a note
+      `build_verdict`'s rule. The state marker is an HTML comment and
+      `previous_stats` reads it out of the RAW body with a regex, so a note
       carrying one forges the measurement the regression detector compares
       against. Nothing is gained by collapsing it, because the forgery is
-      inline.
-    * A TRIPLE BACKTICK REFUSES THE NOTE. The section renders inside a
-      fence, so a note carrying one closes it early and everything after it
-      is markdown -- the same forging through a different character. There
-      is no benign reading: a one-line clean-check note has no code block
-      in it.
+      inline. A FENCE NEVER PROTECTED THIS and could not have: a regex over
+      the raw body does not see one.
+    * ~~A TRIPLE BACKTICK REFUSES THE NOTE, because the section renders
+      inside a fence it would close.~~ SUPERSEDED: each note is an escaped
+      paragraph, so a backtick is text like any other. The rule cost the
+      reviewer a failed tool call for quoting a fenced block it had just
+      read.
     * OVER `NOTE_LIMIT` REFUSES THE NOTE, as the second witness to the
       bound `review-note` enforces. Measured on the RAW line, before any
       collapsing, because that is the string the wrapper measured.
@@ -1397,13 +1404,48 @@ def load_notes(path: str) -> tuple:
         if len(line) > NOTE_LIMIT:
             refused += 1
             continue
-        if FENCE in line or any(delim in line for delim in MARKER_DELIMS):
+        if any(delim in line for delim in MARKER_DELIMS):
             refused += 1
             continue
         clean = " ".join(CONTROL_CHARS.sub(" ", line).split())
         if clean:
             notes.append(clean)
     return notes, refused
+
+
+def escape_markdown(text: str) -> str:
+    """`text` as literal prose in a markdown paragraph.
+
+    A note is MODEL TEXT written after reading an untrusted diff, and it is
+    now rendered rather than fenced, so this is what stands between that text
+    and the comment's structure. Every character `MD_SPECIALS` names gets a
+    backslash -- heading, list, blockquote, table, link, image, HTML tag and
+    emphasis all need one of them, and a backslash before any ASCII
+    punctuation is literal in CommonMark, so over-escaping is invisible to
+    the reader and costs only length.
+
+    UNCONDITIONAL, NOT POSITIONAL, which is the whole argument for it over a
+    rule that escapes `#` and `-` only at the start: a one-line note has no
+    second line to underline a heading or delimit a table, but reasoning
+    about position is how escaping gets a case wrong. Nothing here depends on
+    where a character sits.
+
+    IT IS NOT A CODE SPAN, deliberately. Wrapping the note in backticks would
+    contain it just as well and would not WRAP at a long token -- a path, a
+    SHA, a URL -- which is the complaint this rendering exists to answer.
+
+    WHAT IT CANNOT REACH, measured through GitHub's own renderer: the mention,
+    reference, autolink, emoji and MATH filters run AFTER markdown escaping is
+    resolved, so `@user`, `#1`, `GH-1`, a bare URL, a 40-hex SHA and `:shipit:`
+    all still linkify or render. Markdown-syntax links and images are blocked;
+    those filters are not, and no escaper here can block them. `line_out`
+    interpolates a finding's message with no escaping at all, so this path is
+    the more contained of the two.
+
+    `\\` is in the set, so a trailing backslash cannot neutralise the escape
+    on the character after it. One `re.sub` pass, so no escape is re-escaped.
+    """
+    return MD_SPECIALS.sub(r"\\\1", text)
 
 
 def notes_section(shown: list, withheld: int, refused: int):
@@ -1426,8 +1468,22 @@ def notes_section(shown: list, withheld: int, refused: int):
     section owes even with no note left to show, so the tail alone still
     renders. Only a run with no note, no withholding and no refusal
     returns None.
+
+    ~~EACH NOTE IS A LINE INSIDE A ```text FENCE.~~ SUPERSEDED: a fence does
+    not wrap, so a note longer than the reader's column ran off the right
+    edge. Each note is now its own PARAGRAPH with its text escaped -- see
+    `escape_markdown`. The fence did contain mentions and autolinks; what it
+    never contained is the state marker, which `previous_stats` reads out of
+    the raw body with a regex that cannot see a fence.
+
+    ~~A LIST ITEM~~ was the first form of this and is wrong: GitHub's
+    task-list filter runs on the RENDERED item text and ignores backslash
+    escapes, so a note opening `[ ]` or `[x]` became a checkbox and those
+    characters were DELETED from the evidence the tick rests on. A paragraph
+    wraps identically, keeps `\\[ \\]` literal, and needs no separator before
+    the tail. Do not restore the bullet.
     """
-    lines = list(shown)
+    blocks = [escape_markdown(note) for note in shown]
     tail = []
     if withheld:
         noun = "note" if withheld == 1 else "notes"
@@ -1439,10 +1495,10 @@ def notes_section(shown: list, withheld: int, refused: int):
             " comment's own structure"
         )
     if tail:
-        lines.append("-- " + "; ".join(tail) + ". Every note is in the job log.")
-    if not lines:
+        blocks.append("-- " + "; ".join(tail) + ". Every note is in the job log.")
+    if not blocks:
         return None
-    return (NOTES_LABEL, "\n".join(lines))
+    return (NOTES_LABEL, "\n\n".join(blocks), True)
 
 
 def fit_notes(notes: list, refused: int, kept: list, sections: list, render) -> tuple:
@@ -1643,8 +1699,13 @@ def compose(kept: list, sections: list, render) -> str:
     if kept:
         parts.append("")
         parts.extend(f.line_out() for f in kept)
-    for label, text in sections:
-        parts.extend(["", f"**{label}**", "", f"{FENCE}text", text, FENCE])
+    # A row is (label, text) and renders inside FENCE. A third element marks
+    # text that is already markdown, which only `notes_section` sets, because
+    # only it escapes its content first.
+    for row in sections:
+        label, text, rendered = row[0], row[1], len(row) > 2 and row[2]
+        parts.extend(["", f"**{label}**", ""])
+        parts.extend([text] if rendered else [f"{FENCE}text", text, FENCE])
     parts.extend(["", state, ""])
     return "\n".join(parts)
 
@@ -1991,7 +2052,7 @@ def note_report(kept: list, counts: dict) -> None:
     if counts.get("note_refused"):
         print(
             f"::warning::{counts['note_refused']} reviewer note(s) were not"
-            " rendered: an HTML comment or a code fence in the text would"
+            " rendered: an HTML comment in the text would"
             " forge the comment's own structure, and a note over"
             f" {NOTE_LIMIT} characters did not come through review-note"
         )
