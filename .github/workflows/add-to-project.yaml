@@ -61,6 +61,11 @@ jobs:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ inputs.org }}
+          # `org` need not be the caller's owner and `repositories:` resolves
+          # under `owner`, so scoping the token would 422 for cross-org callers.
+          # Permissions: addProjectV2ItemById, plus reading the linked item.
+          permission-organization-projects: write
+          permission-pull-requests: read
 
       - name: add to project
         uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0

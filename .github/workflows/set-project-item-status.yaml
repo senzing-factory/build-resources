@@ -65,6 +65,11 @@ jobs:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ inputs.org }}
+          # `org` need not be the caller's owner and `repositories:` resolves
+          # under `owner`, so scoping the token would 422 for cross-org callers.
+          # Needs: updateProjectV2ItemFieldValue, and reading item content.
+          permission-organization-projects: write
+          permission-pull-requests: read
 
       - name: Update project item status
         env:
