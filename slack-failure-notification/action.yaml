@@ -6,12 +6,18 @@ inputs:
   job-status:
     description: The status of the job (e.g., failure, cancelled)
     required: true
+  slack-webhook-url:
+    description: Slack incoming webhook URL. Takes precedence over slack-bot-token when both are set.
+    required: false
+    default: ""
   slack-channel:
-    description: Slack channel ID to post to
-    required: true
+    description: Slack channel ID to post to. Required with slack-bot-token; an incoming webhook ignores it.
+    required: false
+    default: ""
   slack-bot-token:
-    description: Slack bot token for authentication
-    required: true
+    description: Slack bot token for authentication. Used when slack-webhook-url is not set.
+    required: false
+    default: ""
   additional-info:
     description: Optional context to append to the message (e.g., SDK version)
     required: false
@@ -24,8 +30,63 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Send Slack notification
+    # Same selection as build-failure-slack-notification.yaml, so the two
+    # cannot drift. `required: true` on an action input is advisory and never
+    # enforced, so neither credential being present has to fail here.
+    - name: Select Slack credential
+      id: slack
       if: ${{ inputs.job-status == 'failure' || inputs.job-status == 'cancelled' }}
+      shell: bash
+      env:
+        WEBHOOK: ${{ inputs.slack-webhook-url }}
+        BOT_TOKEN: ${{ inputs.slack-bot-token }}
+        CHANNEL: ${{ inputs.slack-channel }}
+      run: |
+        set -euo pipefail
+        if [ -n "$WEBHOOK" ]; then
+          if [ -n "$BOT_TOKEN" ]; then
+            echo "::notice::Both Slack credentials are set; using the webhook. The bot token is unused and can be removed."
+          fi
+          echo "mode=webhook" >> "$GITHUB_OUTPUT"
+        elif [ -n "$BOT_TOKEN" ] && [ -n "$CHANNEL" ]; then
+          echo "mode=token" >> "$GITHUB_OUTPUT"
+        elif [ -n "$BOT_TOKEN" ]; then
+          echo "::error::slack-bot-token was provided without slack-channel. Pass both, or pass slack-webhook-url instead."
+          exit 1
+        else
+          echo "::error::No Slack credential was provided. Pass slack-webhook-url (incoming webhook), or slack-bot-token and slack-channel (chat.postMessage)."
+          exit 1
+        fi
+
+    # An incoming webhook is permanently bound to one channel and ignores a
+    # `channel` field, so this payload omits it. Passing both `webhook` and
+    # `token` to one step is rejected by the action, hence two steps.
+    - name: Send Slack notification via incoming webhook
+      if: steps.slack.outputs.mode == 'webhook'
+      uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+      with:
+        payload: |
+          attachments:
+            - color: "FF0000"
+              fields:
+                - title: "Status"
+                  short: true
+                  value: "${{ inputs.job-status }}"
+                - title: "Actor"
+                  short: true
+                  value: "${{ github.actor }}"
+          blocks:
+            - type: "section"
+              text:
+                type: "mrkdwn"
+                text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ inputs.branch-name }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>${{ inputs.additional-info != '' && format(' | {0}', inputs.additional-info) || '' }}"
+          text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ inputs.branch-name }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>${{ inputs.additional-info != '' && format(' | {0}', inputs.additional-info) || '' }}"
+        webhook: ${{ inputs.slack-webhook-url }}
+        webhook-type: incoming-webhook
+        errors: true
+
+    - name: Send Slack notification via chat.postMessage
+      if: steps.slack.outputs.mode == 'token'
       uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
       with:
         method: chat.postMessage
