@@ -3,10 +3,15 @@ name: build failure slack notification
 on:
   workflow_call:
     secrets:
+      # Provide EITHER the incoming webhook OR the bot token and channel. All
+      # three relaxed from `required: true` so this stays additive at @v4; the
+      # emptiness checks in "Select Slack credential" are the guard now.
+      SLACK_WEBHOOK_URL:
+        required: false
       SLACK_BOT_TOKEN:
-        required: true
+        required: false
       SLACK_CHANNEL:
-        required: true
+        required: false
     inputs:
       job-status:
         required: true
@@ -23,7 +28,65 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+      # `secrets` is not available in a step-level `if:`, so the mode is decided
+      # here and gated on below -- same shape as add-to-project.yaml. The
+      # webhook wins when both are set, so a repo can migrate before retiring a
+      # bot token.
+      - name: Select Slack credential
+        id: slack
+        env:
+          WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+        run: |
+          set -euo pipefail
+          if [ -n "$WEBHOOK" ]; then
+            if [ -n "$BOT_TOKEN" ]; then
+              echo "::notice::Both Slack credentials are set; using the webhook. The bot token is unused and can be removed."
+            fi
+            echo "mode=webhook" >> "$GITHUB_OUTPUT"
+          elif [ -n "$BOT_TOKEN" ] && [ -n "$CHANNEL" ]; then
+            echo "mode=token" >> "$GITHUB_OUTPUT"
+          elif [ -n "$BOT_TOKEN" ]; then
+            echo "::error::SLACK_BOT_TOKEN was provided without SLACK_CHANNEL. Pass both, or pass SLACK_WEBHOOK_URL instead."
+            exit 1
+          else
+            echo "::error::No Slack credential was provided. Pass SLACK_WEBHOOK_URL (incoming webhook), or SLACK_BOT_TOKEN and SLACK_CHANNEL (chat.postMessage)."
+            exit 1
+          fi
+
+      # An incoming webhook is permanently bound to one channel and ignores a
+      # `channel` field, so this payload omits it. Passing both `webhook` and
+      # `token` to one step is rejected by the action, hence two steps.
+      - name: Notify Slack via incoming webhook
+        if: steps.slack.outputs.mode == 'webhook'
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+        with:
+          payload: |
+            attachments:
+              - color: "FF0000"
+                fields:
+                  - title: "Status"
+                    short: true
+                    value: "${{ inputs.job-status }}"
+                  - title: "Actor"
+                    short: true
+                    value: "${{ github.actor }}"
+            blocks:
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>${{ inputs.additional-info != '' && format(' | {0}', inputs.additional-info) || '' }}"
+            text: "_*REPO:*_ `${{ github.repository }}` _*BRANCH:*_ `${{ env.BRANCH_NAME }}` workflow ${{ inputs.job-status }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>${{ inputs.additional-info != '' && format(' | {0}', inputs.additional-info) || '' }}"
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          errors: true
+
+      - name: Notify Slack via chat.postMessage
+        if: steps.slack.outputs.mode == 'token'
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         env:
           BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
         with:

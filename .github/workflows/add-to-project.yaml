@@ -22,6 +22,8 @@ on:
         required: false
       SLACK_CHANNEL:
         required: false
+      SLACK_WEBHOOK_URL:
+        required: false
 
 permissions: {}
 
@@ -33,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
       # Transitional dual auth (v4): prefer the GitHub App; fall back to the PAT.
@@ -69,9 +72,12 @@ jobs:
           project-url: "https://github.com/orgs/${{inputs.org}}/projects/${{inputs.project-number}}"
 
       - name: Notify Slack on failure
-        if: (failure() || cancelled()) && env.SLACK_BOT_TOKEN != ''
+        if: >-
+          (failure() || cancelled())
+          && (env.SLACK_BOT_TOKEN != '' || env.SLACK_WEBHOOK_URL != '')
         uses: senzing-factory/build-resources/slack-failure-notification@v4
         with:
           job-status: ${{ job.status }}
           slack-channel: ${{ secrets.SLACK_CHANNEL }}
           slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
