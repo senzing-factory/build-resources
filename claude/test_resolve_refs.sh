@@ -507,6 +507,20 @@ check "a tag list cut at the cap says how many it did not name" \
 check "and the names it did keep are still quoted" \
   '1' "$(printf '%s\n' "$OUT" | grep -c '`v6`')"
 
+# AND THE COMMENT CHECK MUST NOT READ THE CUT AS ABSENCE. `describe` tests the
+# `# vX` comment against the list `_names` already truncated, so a tag that was
+# cut would be reported in bold as naming no tag at all -- a false fact the
+# prompt tells the model to treat as established.
+# CATCHES: the comment check run against a truncated list.
+F="$WORK/f-many-tags-comment.tsv"
+fact some-org/some-action new "$SHA_B" ok "$SHA_B" 2026-09-02 on-default \
+  v1,v2,v3,v4,v5,v6,v7,v8 '' v8 > "$F"
+OUT=$(render "$F")
+check "a comment naming a tag beyond the cap is not called absent" \
+  '0' "$(printf '%s\n' "$OUT" | grep -c 'names no tag at this commit')"
+check "and the uncertainty is stated instead" \
+  '1' "$(printf '%s\n' "$OUT" | grep -c 'is not among the 6 tags listed; there are more')"
+
 # A BUMP THAT MOVES BACKWARDS.
 F="$WORK/f-backwards.tsv"
 {

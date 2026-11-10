@@ -396,14 +396,22 @@ def describe(fact: dict) -> str:
         bits.append(f"committed {fact['date']}")
     line = f"`{fact['sha'][:12] or fact['ref']}`: " + "; ".join(bits) + "."
     if fact["comment"]:
-        line += (
-            f" The line's `# {fact['comment']}` comment names a tag here."
-            if fact["comment"] in fact["tags"]
-            else (
+        # `_names` caps the list, so absence from it is only absence from the
+        # ones shown. Claiming "names no tag" off a truncated list states a
+        # falsehood in bold, which the prompt tells the model to trust.
+        cut = any(name.startswith("(+") for name in fact["tags"])
+        if fact["comment"] in fact["tags"]:
+            line += f" The line's `# {fact['comment']}` comment names a tag here."
+        elif cut:
+            line += (
+                f" The line's `# {fact['comment']}` comment is not among the"
+                f" {MAX_NAMES} tags listed; there are more."
+            )
+        else:
+            line += (
                 f" **The line's `# {fact['comment']}` comment names no tag at"
                 " this commit.**"
             )
-        )
     return line
 
 
