@@ -8,7 +8,7 @@
 # Reproduced verbatim from the template: check-hidden, and the skip list.
 #
 # ADDED: ignore-words-list. codespell carries its own dictionary and flags
-# real words cspell accepts, so these two are named individually rather than
+# real words cspell accepts, so each is named individually rather than
 # a rule being switched off:
 #
 #   caf  -- not a misspelling of "calf". claude/test_filter_diff.sh builds a
@@ -26,7 +26,11 @@
 #           removes covert channels from the pull request's comment thread --
 #           HTML comments, invisible characters, image alt text -- and that is
 #           what they are called.
+#
+#   trun  -- a shell helper in claude/test_review_text.sh that runs the script
+#           in --telemetry mode, named to match the rrun/erun helpers beside
+#           it. Not "turn".
 [codespell]
 check-hidden =
 skip = */package-lock.json,*/go.mod,*/go.sum,*.log,.git
-ignore-words-list = caf,covert,unparseable
+ignore-words-list = caf,covert,trun,unparseable

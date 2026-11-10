@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cspell:ignore jsonl rrun erun  -- test fixture / local constant names
+# cspell:ignore jsonl rrun erun trun tstderr  -- test fixture / local constant names
 # Fixture tests for review_text.py. No framework: builds a Claude Code
 # stream-json transcript, runs the extractor, and checks what came out.
 #
@@ -309,10 +309,179 @@ check "--events is bounded to the newest 40 events" \
 check "and it is the newest that survive, not the oldest" \
   '1' "$(erun long.jsonl | tail -1 | grep -c '^assistant text:2c$')"
 
+# ---------------------------------------------------------------------------
+# --telemetry prints OCCUPANCY, and nothing a file or a finding could reach
+# ---------------------------------------------------------------------------
+#
+# The reviewer's own output cannot say how close the run came to its context
+# window, and that is what decides coverage: two runs over identical rows,
+# patches, prompt and model scored 48 of 48 and 24 of 48, the second having
+# compacted three times and finished on a terminal reason instead of a
+# verdict. None of that survived the run -- the transcript is a $RUNNER_TEMP
+# file nothing uploads.
+#
+# These fixtures assert the three properties that make the mode safe to put
+# in a PUBLIC job summary: it reports the last result even when that result
+# is an error, it reports what it can when there is no result at all, and
+# every string it prints is reduced to [A-Za-z0-9._:/-] so a transcript
+# cannot inject markdown into the page it is written to.
+
+trun() { python3 "$SCRIPT" --telemetry "$WORK/$1" 2>/dev/null; }
+tstderr_of() { { python3 "$SCRIPT" --telemetry "$WORK/$1" >/dev/null; } 2>&1; }
+
+# A complete run. Three assistant turns whose occupancies are 42,010 /
+# 60,105 / 102, so the peak is NEITHER the first nor the last turn and is
+# only 60,105 if all three usage components are summed: input_tokens alone
+# gives 5, and omitting cache_creation_input_tokens gives 60,005.
+{
+  printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5"}'
+  printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":40000,"cache_creation_input_tokens":2000},"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/w/pkg/real.go"}}]}}'
+  printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"package main // SECRET_FILE_BODY"}]}}'
+  printf '%s\n' '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":150000}}'
+  printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":60000,"cache_creation_input_tokens":100},"content":[{"type":"text","text":"**BLOCKER** `pkg/real.go:3` unvalidated input."}]}}'
+  printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":1,"cache_read_input_tokens":100,"cache_creation_input_tokens":1}}}'
+  printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":33,"stop_reason":"end_turn","total_cost_usd":1.23456,"modelUsage":{"claude-opus-5":{"contextWindow":1000000,"maxOutputTokens":64000}},"structured_output":{"findings":[]}}'
+} > "$WORK/telemetry.jsonl"
+
+TELEMETRY=$(trun telemetry.jsonl)
+check "--telemetry names the model the run actually used" \
+  '1' "$(printf '%s\n' "$TELEMETRY" | grep -c '^model: claude-opus-5$')"
+check "and the model is the FIRST line, so the summary leads with it" \
+  'model: claude-opus-5' "$(printf '%s\n' "$TELEMETRY" | head -1)"
+check "peak occupancy is the MAX turn and sums all three usage components" \
+  '1' "$(printf '%s\n' "$TELEMETRY" | grep -c '^peak_context_tokens: 60105$')"
+check "the window and output cap come from the result's modelUsage" \
+  '1' "$(printf '%s\n' "$TELEMETRY" | grep -c '^window: claude-opus-5 context=1000000 max_output=64000$')"
+check "--telemetry reports the turn count" \
+  '1' "$(printf '%s\n' "$TELEMETRY" | grep -c '^num_turns: 33$')"
+check "--telemetry reports the stop reason" \
+  '1' "$(printf '%s\n' "$TELEMETRY" | grep -c '^stop_reason: end_turn$')"
+check "--telemetry reports the cost to four places" \
+  '1' "$(printf '%s\n' "$TELEMETRY" | grep -c '^total_cost_usd: 1\.2346$')"
+check "--telemetry counts compaction boundaries" \
+  '1' "$(printf '%s\n' "$TELEMETRY" | grep -c '^compact_boundaries: 1$')"
+# THE WHOLE REASON THIS IS SAFE TO PUBLISH. The transcript it just read
+# carries a file body out of a Read result and a finding out of an assistant
+# text block; a raw tail of it into a public job log published both.
+check "--telemetry never prints tool result content" \
+  '0' "$(printf '%s\n' "$TELEMETRY" | grep -c 'SECRET_FILE_BODY' || true)"
+check "--telemetry never prints a finding" \
+  '0' "$(printf '%s\n' "$TELEMETRY" | grep -c 'BLOCKER\|real.go' || true)"
+check "--telemetry prints only the fields it declares" \
+  '8' "$(printf '%s\n' "$TELEMETRY" | wc -l | tr -d ' ')"
+
+# AN ERRORED RESULT IS THE MOST VALUABLE TELEMETRY IN THE FILE, and this is
+# the deliberate difference from the findings mode above, which discards it.
+# The run that ran out of window is the one whose turn count and terminal
+# reason someone needs; it is also the run with no verdict to read instead.
+{
+  printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5"}'
+  printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":60000,"cache_creation_input_tokens":100}}}'
+  printf '%s\n' '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":150000}}'
+  printf '%s\n' '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":150000}}'
+  printf '%s\n' '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":150000}}'
+  printf '%s\n' '{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":32,"stop_reason":"max_turns","terminal_reason":"rapid_refill_breaker","total_cost_usd":4.5}'
+} > "$WORK/constrained.jsonl"
+CONSTRAINED=$(trun constrained.jsonl)
+check "an errored result still yields its terminal reason" \
+  '1' "$(printf '%s\n' "$CONSTRAINED" | grep -c '^terminal_reason: rapid_refill_breaker$')"
+check "and its turn count, which the findings mode throws away" \
+  '1' "$(printf '%s\n' "$CONSTRAINED" | grep -c '^num_turns: 32$')"
+check "three compactions are counted, not collapsed to one" \
+  '1' "$(printf '%s\n' "$CONSTRAINED" | grep -c '^compact_boundaries: 3$')"
+check "the same transcript still adjudicates nothing, which is the point" \
+  '' "$(rrun constrained.jsonl)"
+
+# A killed run: no result event at all. Everything that does not come from
+# the result is still measurable, and that is the case the mode exists for.
+{
+  printf '%s\n' '{"type":"system","subtype":"init","model":"claude-sonnet-4-6"}'
+  printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":40000,"cache_creation_input_tokens":2000}}}'
+} > "$WORK/noresult_telemetry.jsonl"
+NORESULT=$(trun noresult_telemetry.jsonl)
+check "with no result event the occupancy is still reported" \
+  '1' "$(printf '%s\n' "$NORESULT" | grep -c '^peak_context_tokens: 42010$')"
+check "and the fields that only a result can answer read as absent" \
+  '3' "$(printf '%s\n' "$NORESULT" | grep -c '^num_turns: -$\|^stop_reason: -$\|^total_cost_usd: -$')"
+check "no modelUsage means no window line, rather than a guessed one" \
+  '0' "$(printf '%s\n' "$NORESULT" | grep -c '^window: ' || true)"
+
+# `-` and `0` are different answers and must not collapse. A run that died
+# before its first assistant message measured nothing; a turn whose usage
+# carried nothing countable measured zero.
+printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5"}' \
+  > "$WORK/no_usage.jsonl"
+check "no assistant turn at all reports an absent occupancy, not zero" \
+  '1' "$(trun no_usage.jsonl | grep -c '^peak_context_tokens: -$')"
+# An assistant turn carrying no `usage` block at all is the same answer, and
+# it is a DIFFERENT code path from having no assistant turn: this one reaches
+# the per-turn reader and has to decline there.
+{
+  printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5"}'
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'
+} > "$WORK/turn_no_usage.jsonl"
+check "an assistant turn with no usage block is absent, not zero either" \
+  '1' "$(trun turn_no_usage.jsonl | grep -c '^peak_context_tokens: -$')"
+{
+  printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":"many","cache_read_input_tokens":null}}}'
+} > "$WORK/bad_usage.jsonl"
+check "a turn whose usage is unreadable reports a measured zero" \
+  '1' "$(trun bad_usage.jsonl | grep -c '^peak_context_tokens: 0$')"
+# A boolean is an int in Python. Printed as 1 it would read as one turn.
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":true,"total_cost_usd":true}' \
+  > "$WORK/bool_result.jsonl"
+check "a boolean turn count is absent, not 1" \
+  '1' "$(trun bool_result.jsonl | grep -c '^num_turns: -$')"
+check "a boolean cost is absent, not 1.0000" \
+  '1' "$(trun bool_result.jsonl | grep -c '^total_cost_usd: -$')"
+
+# THE SUMMARY IS RENDERED AS MARKDOWN. A model id arrives from the CLI, but
+# the mode must not be the thing that trusts it: a newline would break the
+# field into two and a `#` would open a heading in the published page.
+printf '%s\n' '{"type":"system","subtype":"init","model":"evil\n### Injected"}' \
+  > "$WORK/injection.jsonl"
+INJECTED=$(trun injection.jsonl)
+check "a newline in a model id cannot split the field" \
+  '7' "$(printf '%s\n' "$INJECTED" | wc -l | tr -d ' ')"
+check "and every disallowed character is replaced, not dropped" \
+  '1' "$(printf '%s\n' "$INJECTED" | grep -c '^model: evil?????Injected$')"
+check "so no heading reaches the job summary" \
+  '0' "$(printf '%s\n' "$INJECTED" | grep -c '^###' || true)"
+
+# A `system` event is not automatically a compaction. Counting by type
+# rather than subtype would turn every init into one.
+printf '%s\n' '{"type":"system","subtype":"model_refresh"}' > "$WORK/other_system.jsonl"
+check "a system event of another subtype is not a compaction" \
+  '1' "$(trun other_system.jsonl | grep -c '^compact_boundaries: 0$')"
+
+# Two models in one run -- a fallback, or a model change mid-session. Both
+# windows are reported and neither is reconciled against the init model,
+# because choosing between them would be a guess printed as a measurement.
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"modelUsage":{"claude-sonnet-4-6":{"contextWindow":200000,"maxOutputTokens":8192},"claude-opus-5":{"contextWindow":1000000,"maxOutputTokens":64000}}}' \
+  > "$WORK/two_models.jsonl"
+check "every model the run billed gets its own window line" \
+  '2' "$(trun two_models.jsonl | grep -c '^window: ')"
+check "and they are sorted, so the same run summarises the same way twice" \
+  'window: claude-opus-5 context=1000000 max_output=64000' \
+  "$(trun two_models.jsonl | grep '^window: ' | head -1)"
+
+# Same two non-fatal cases as the findings mode: this runs on the failure
+# paths, so it must not be the step that fails the job.
+{
+  cat "$WORK/telemetry.jsonl"
+  printf '%s' '{"type":"result","subtype":"success","is_error":false,"num_tu'
+} > "$WORK/truncated_telemetry.jsonl"
+check "a truncated final line is skipped, not fatal" \
+  '1' "$(trun truncated_telemetry.jsonl | grep -c '^num_turns: 33$')"
+check "a missing transcript prints nothing and exits 0" \
+  ' 0' "$(python3 "$SCRIPT" --telemetry "$WORK/absent.jsonl" 2>/dev/null; printf ' %s' "$?")"
+check "and says why on stderr, where it cannot reach the summary" \
+  '1' "$(tstderr_of absent.jsonl | grep -c 'no transcript to summarise')"
+
 check "a bad argument list exits 2" \
   '2' "$(python3 "$SCRIPT" 2>/dev/null; echo $?)"
-check "and names both forms on stderr" \
-  '2' "$(python3 "$SCRIPT" 2>&1 >/dev/null | grep -c 'usage: review_text.py\|--events')"
+check "and names all three forms on stderr" \
+  '3' "$(python3 "$SCRIPT" 2>&1 >/dev/null | grep -c 'usage: review_text.py\|--events\|--telemetry')"
 
 if [ "$FAILED" -eq 0 ]; then
   echo "all review_text.py tests passed"
