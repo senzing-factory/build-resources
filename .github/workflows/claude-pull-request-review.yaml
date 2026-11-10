@@ -4,7 +4,29 @@ on:
   workflow_call:
     inputs:
       model:
-        description: "Claude model for the review (e.g. claude-sonnet-4-6). Empty = Claude Code CLI default. The reviewer makes one call per PR and pages patches in from disk, so pick a large-context model rather than a cheap one."
+        description: |
+          Claude model for the review (e.g. claude-sonnet-4-6). Empty is the
+          Claude Code CLI's own default, and the default stays empty: changing
+          it would move every caller at the floating major tag at once.
+
+          ~~The reviewer makes one call per PR and pages patches in from disk,
+          so pick a large-context model rather than a cheap one.~~ MEASURED,
+          and the conclusion is sharper than that: the CONTEXT WINDOW is the
+          binding constraint on coverage. Two runs over identical rows,
+          patches, prompt and model scored 48 of 48 openable files and 24 of
+          48; the constrained one compacted three times, ended on a terminal
+          reason rather than a verdict, and produced no structured output at
+          all. The 24 it never opened were the 24 SMALLEST, because the
+          prompt ranks the manifest by changed lines and the run worked
+          largest-first until the window was gone. Neither row count nor
+          patch bytes separated the two.
+
+          SO AN EMPTY VALUE IS AN UNKNOWN WINDOW, not merely an unnamed
+          model: the CLI's default is undocumented and moves with the version
+          `claude_cli_version` pins. The job summary's "Reviewer run
+          telemetry" block reports the model the run actually used and that
+          model's context window and peak occupancy, which is how a caller
+          finds out which one it got.
         required: false
         type: string
         default: ""
@@ -2117,9 +2139,8 @@ jobs:
       #     a clean verdict, and which nothing acted on.
       #
       # `!cancelled()` rather than `always()`: a cancelled run is a
-      # superseded push, not a shortfall. Last in the job, after every
-      # posting step, so the comment is on the pull request before this can
-      # turn the job red.
+      # superseded push, not a shortfall. After every posting step, so the
+      # comment is on the pull request before this can turn the job red.
       - name: Enforce review completion
         if: ${{ !cancelled() }}
         env:
@@ -2138,3 +2159,74 @@ jobs:
             echo "::error::the reviewer's output could not be read as findings or as a verdict, so nothing on this pull request has been adjudicated"
             exit 1
           fi
+
+      # WHAT THE RUN COST ITSELF, which nothing has ever recorded. The
+      # transcript is a $RUNNER_TEMP file, no artifact is uploaded, and the
+      # run ends with the review posted and no trace of the conditions it was
+      # produced under.
+      #
+      # Four measured invocations say those conditions are what decides
+      # coverage. The same 48 manifest rows and the same 305,850 patch bytes
+      # scored 48 of 48 at a peak occupancy of 211,948 tokens, and 24 of 48
+      # when the window was constrained -- same rows, same patches, same
+      # prompt, same model. The 24 that went unopened were the 24 SMALLEST:
+      # the prompt ranks by the manifest's `changes` column, so the run
+      # worked largest-first and stopped. It ended on
+      # `terminal_reason: rapid_refill_breaker` with three compactions and no
+      # structured output. Row count and patch bytes discriminated nothing
+      # between those two runs.
+      #
+      # `.model` is the line worth the most. `model` defaults to "", which is
+      # the CLI's own undocumented default, so without this nobody can say
+      # which model reviewed anything -- including here.
+      #
+      # `if: always()` WITH ITS OWN GUARD rather than the outcome gate every
+      # other step carries. A run that errored, produced nothing, or was
+      # cancelled is the one whose occupancy is worth reading, and on the
+      # 'bot' and 'empty' paths there is neither a checkout nor a transcript,
+      # which the guard answers for. It cannot fail the job: the guard
+      # returns early, the helper exits 0 on a missing or truncated
+      # transcript, and the write is `|| true`.
+      #
+      # NUMBERS AND CLI ENUMS ONLY. review_text.py --telemetry emits model
+      # ids, stop and terminal reasons, occupancy and event counts, each
+      # string reduced to [A-Za-z0-9._:/-]; it never reads a finding or a
+      # file. A raw tail of this transcript into a public job log would
+      # publish whole source files, which is the defect `--events` closed.
+      - name: Summarise the review run
+        if: always()
+        run: |
+          SCRIPT=build-resources/claude/review_text.py
+          if [ ! -f "$SCRIPT" ] || [ ! -f "$RUNNER_TEMP/stream.jsonl" ]; then
+            echo "No reviewer transcript on this path; nothing to summarise."
+            exit 0
+          fi
+
+          python3 "$SCRIPT" --telemetry "$RUNNER_TEMP/stream.jsonl" \
+            > "$RUNNER_TEMP/telemetry.txt" \
+            2> "$RUNNER_TEMP/telemetry.err" || true
+
+          if [ -s "$RUNNER_TEMP/telemetry.err" ]; then
+            cat "$RUNNER_TEMP/telemetry.err"
+          fi
+
+          if [ ! -s "$RUNNER_TEMP/telemetry.txt" ]; then
+            echo "The transcript yielded no telemetry."
+            exit 0
+          fi
+
+          echo "Reviewer run telemetry:"
+          cat "$RUNNER_TEMP/telemetry.txt"
+
+          # Appended, not truncated: publish_comment() falls back to this file
+          # when the token cannot comment on a fork PR.
+          {
+            echo "### Reviewer run telemetry"
+            echo ""
+            echo "Occupancy and event counts for the run itself. No file"
+            echo "content and no findings."
+            echo ""
+            echo '```'
+            cat "$RUNNER_TEMP/telemetry.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true

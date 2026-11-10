@@ -111,7 +111,10 @@ at and what you concluded, in one line, not that you looked.
 **If you report no findings, these are what the pull request shows.** A clean
 verdict publishes your notes, because a clean verdict with nothing behind it
 cannot be told from a review that never ran — and a clean review with no notes
-is not a review. Where you do report findings they stay in the job log and the
+is not a review: with no note there is no clean verdict to publish, so the
+workflow withholds the tick and posts that this review established nothing.
+What earns it is notes that match what you actually checked, not their number.
+Where you do report findings they stay in the job log and the
 pull request shows the findings alone. You write them the same way either way;
 the workflow decides which.
 
