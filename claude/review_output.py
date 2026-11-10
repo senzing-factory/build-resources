@@ -106,6 +106,14 @@ content; a clean verdict is the one case where the evidence IS the content,
 and the two are not in tension. See `load_notes`, `notes_section` and
 `fit_notes`.
 
+AND A CLEAN VERDICT WITH NO NOTE IS NOT PUBLISHED AS CLEAN. Publishing the
+evidence made the silence visible and nothing acted on it: measured across
+every review posted by the 4.9 reviewer, two of four clean verdicts recorded
+no note at all, including two consecutive runs over the same one-line diff
+where the first recorded one and the second recorded none. The tick is the
+assurance, so `header` withholds it and says what the review established
+instead. See `header`'s `proved` branch.
+
 METRICS are written as `KEY=value` lines for `$GITHUB_ENV`, and every value
 is a NUMBER. A path or a message there is author-controlled text one newline
 away from appending arbitrary variables to the job environment, so no string
@@ -1161,6 +1169,11 @@ class Tally(NamedTuple):
     supplied: int = -1
     rows: int = -1
     truncated: str = "0"
+    # NOTES THE RUN RECORDED, published or not -- the clean verdict's only
+    # evidence, and zero withholds the tick. ~~-1 for "the caller did not
+    # say"~~: no construction site produced it. `build` passes a measured
+    # count always, and `load_notes` reads an absent `--notes` as zero.
+    proved: int = 0
 
 
 def coverage_note(read: str, total: str) -> str:
@@ -1209,6 +1222,16 @@ def header(tally: Tally, summary: str, unread: bool = False) -> str:
             return (
                 f"**No finding survived adjudication{note}.**"
                 f" {tally.adjudged} {noun} dropped before posting; see below."
+            )
+        if tally.proved == 0:
+            # NOT the clean header, for the same reason as the two above:
+            # it reports a conclusion nothing in the comment supports. The
+            # reviewer read files and recorded none of it, so the only
+            # honest statement is that the review proved nothing -- and the
+            # mark is withheld because a tick is the assurance itself.
+            return (
+                f"**No findings, and nothing recorded as checked{note}.**"
+                " This review is not evidence that the change is sound."
             )
         clean = f"{CLEAN_MARK} **No blocking findings{note}.**"
         return f"{clean} {summary}" if summary else clean
@@ -1383,26 +1406,28 @@ def load_notes(path: str) -> tuple:
     return notes, refused
 
 
-def notes_section(shown: list, withheld: int, refused: int) -> tuple:
+def notes_section(shown: list, withheld: int, refused: int):
     """The clean verdict's evidence row: what was checked, and what is missing.
 
-    AN EMPTY LIST STILL RENDERS, and says that it is empty. That is the
-    point of the whole mechanism rather than an edge case in it: if a
-    reviewer that recorded nothing posted the same comment as one that
-    recorded six checks, the reader is back to being unable to tell a
-    review that ran from one that did not, which is the defect.
+    ~~AN EMPTY LIST STILL RENDERS~~, under this heading, saying that the
+    clean verdict carried no evidence. SUPERSEDED: the statement moved to
+    the headline, which is where a reader who scans one line of a comment
+    meets it, and where it can withhold the tick as well as explain it. A
+    section headed "Checked and found sound" whose only line said nothing
+    was checked also contradicted its own label, and contradicted a
+    headline that no longer calls such a verdict clean.
 
-    It is also the only line here this program writes about the model
-    rather than for it, and it is deliberately not softened. A clean
-    verdict asserts that nothing is wrong; with nothing behind it, that
-    assertion has not been earned and the comment should say so.
+    What is unchanged is that a reviewer recording nothing must not post
+    the comment of one that recorded six checks. `header` makes that
+    distinction now; see its `proved` branch.
+
+    NONE IS NOT THE SAME AS NOTHING TO SAY. Notes withheld for the body
+    budget and notes refused as unsafe text are both disclosures this
+    section owes even with no note left to show, so the tail alone still
+    renders. Only a run with no note, no withholding and no refusal
+    returns None.
     """
     lines = list(shown)
-    if not shown:
-        lines.append(
-            "The reviewer recorded nothing that it checked, so this clean"
-            " verdict carries no evidence that anything was examined."
-        )
     tail = []
     if withheld:
         noun = "note" if withheld == 1 else "notes"
@@ -1415,6 +1440,8 @@ def notes_section(shown: list, withheld: int, refused: int) -> tuple:
         )
     if tail:
         lines.append("-- " + "; ".join(tail) + ". Every note is in the job log.")
+    if not lines:
+        return None
     return (NOTES_LABEL, "\n".join(lines))
 
 
@@ -1442,8 +1469,10 @@ def fit_notes(notes: list, refused: int, kept: list, sections: list, render) -> 
 
     `not shown` ends it rather than `len(shown) <= 1`: unlike a finding, a
     note is not the review's subject, so there is nothing a comment must
-    overrun its budget to keep. The section then renders the empty case,
-    which still says how many were withheld.
+    overrun its budget to keep. The section then renders the withholding
+    count on its own, and the headline keeps the tick -- the run DID record
+    evidence, and losing it to the budget is not the same failure as never
+    writing any. See `header`.
     """
     shown, used = [], 0
     for note in notes:
@@ -1452,7 +1481,8 @@ def fit_notes(notes: list, refused: int, kept: list, sections: list, render) -> 
             break
         shown.append(note)
     while True:
-        rows = sections + [notes_section(shown, len(notes) - len(shown), refused)]
+        row = notes_section(shown, len(notes) - len(shown), refused)
+        rows = sections + ([row] if row else [])
         body = compose(kept, rows, render)
         if len(body) <= BODY_LIMIT or not shown:
             return body, shown
@@ -1619,7 +1649,7 @@ def compose(kept: list, sections: list, render) -> str:
     return "\n".join(parts)
 
 
-def notes_body(argv: list, counts: dict, kept: list, sections: list, render):
+def notes_body(notes: list, counts: dict, kept: list, sections: list, render):
     """The clean verdict's body, carrying its evidence -- or None, for every
     other verdict. Sets every note count on `counts` either way.
 
@@ -1650,16 +1680,6 @@ def notes_body(argv: list, counts: dict, kept: list, sections: list, render):
     what makes the silence measurable instead, and it is written on every
     run.
     """
-    notes, counts["note_refused"] = load_notes(_flag(argv, "--notes"))
-    # HOW MANY THE RUN PRODUCED AT ALL, published or not. The other three
-    # note counts are zero on every review that carries findings, so without
-    # this one the fleet has no signal for the defect that prompted the
-    # mechanism: on the measured run the notes file was created, passed to
-    # this step, and the model never called `review-note` once. "Published
-    # none" and "wrote none" are different failures and only one is ours.
-    counts["notes_recorded"] = len(notes)
-    counts["notes"] = 0
-    counts["notes_withheld"] = 0
     if kept or dropped_total(counts, DISCLOSED) or counts["no_verdict"]:
         return None
     body, shown = fit_notes(notes, counts["note_refused"], kept, sections, render)
@@ -1681,6 +1701,21 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
     `notes_body`, which decides, and the module docstring for why.
     """
     survived = rank(findings)
+    # LOADED BEFORE THE FIRST RENDER, not inside `notes_body`. `assemble`
+    # renders the header while deciding what fits, so a count set afterwards
+    # reaches the headline of the clean body and not of any other -- and the
+    # clean body is re-composed from it. Both must see the same number.
+    #
+    # HOW MANY THE RUN PRODUCED AT ALL, published or not. The other three
+    # note counts are zero on every review that carries findings, so without
+    # this one the fleet has no signal for the defect that prompted the
+    # mechanism: on the measured run the notes file was created, passed to
+    # this step, and the model never called `review-note` once. "Published
+    # none" and "wrote none" are different failures and only one is ours.
+    notes, counts["note_refused"] = load_notes(_flag(argv, "--notes"))
+    counts["notes_recorded"] = len(notes)
+    counts["notes"] = 0
+    counts["notes_withheld"] = 0
     lane = _flag(argv, "--lane", "B")
     head = _flag(argv, "--head", "unknown")
     read = _flag(argv, "--coverage-read", "0")
@@ -1691,8 +1726,6 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
     # and would put a different minute in the comment than the one the body
     # was measured at.
     when = time.strftime(STAMP, time.gmtime())
-    # The runner sets this on every job; nothing passes it in. See `anchor`.
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
 
     def render(shown: list) -> tuple:
         """(header, anchor, marker) for exactly the findings `shown` holds.
@@ -1717,10 +1750,15 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
             # constant string, so re-reading it per render cannot change
             # the body. Validated, not just defaulted -- see `counter_flag`.
             truncated=counter_flag(argv, "--truncated"),
+            proved=counts["notes_recorded"],
         )
         return (
             header(tally, summary, bool(counts["no_verdict"])),
-            anchor(head, when, repo),
+            # The runner sets this on every job; nothing passes it in.
+            # Read per render rather than hoisted, unlike the clock: it is a
+            # constant for the life of the process, so it cannot change the
+            # body between trims. See `anchor`.
+            anchor(head, when, os.environ.get("GITHUB_REPOSITORY", "")),
             marker(lane, tally, head),
         )
 
@@ -1728,7 +1766,7 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
     counts["space"] = len(survived) - len(kept)
     # `or body` is safe by construction and not a shortcut: `compose` always
     # emits the heading and the marker, so a body is never the empty string.
-    return notes_body(argv, counts, kept, sections, render) or body, kept
+    return notes_body(notes, counts, kept, sections, render) or body, kept
 
 
 def _flag(argv: list, name: str, default: str = "") -> str:
@@ -1936,13 +1974,19 @@ def report(kept, findings, counts, size) -> None:
 def note_report(kept: list, counts: dict) -> None:
     """What became of the reviewer's notes, for the job log.
 
-    THE LAST LINE IS THE ONE THAT MATTERS and it is not a warning. A clean
-    verdict publishes its notes, so "0 published" there is the defect this
-    whole mechanism exists for and the log must say it outright rather than
-    leave a maintainer to notice an absent section. On a review that carries
-    findings the notes are kept off the comment BY DESIGN, so that line only
-    says where they went -- an absent section must never read as evidence
-    lost on the way.
+    AT MOST ONE OF THE LAST TWO LINES RENDERS, and which one has to agree
+    with the headline the comment carries. ~~The clean line printed on `not
+    kept` alone~~: it called the zero-note and the all-refused run clean,
+    which are the two whose headline now says the review is not evidence
+    that the change is sound, and on a clean verdict whose notes did not fit
+    the budget it printed beside "this review is not clean." Both lines are
+    gated on the test `notes_body` makes, so the log cannot call a verdict
+    clean that the comment does not.
+
+    A run that recorded nothing is reported by the headline, not here. On a
+    review that carries findings the notes are kept off the comment BY
+    DESIGN, so that line only says where they went -- an absent section must
+    never read as evidence lost on the way.
     """
     if counts.get("note_refused"):
         print(
@@ -1957,12 +2001,16 @@ def note_report(kept: list, counts: dict) -> None:
             f" fit the {BODY_LIMIT}-character comment budget and are NOT on"
             " the pull request"
         )
-    if counts.get("notes_recorded") and not counts.get("notes"):
+    # THE SAME THREE QUANTITIES `notes_body` DECIDES ON. Gating on `kept`
+    # alone would call a run clean that the comment headlines as having
+    # adjudicated everything away, or as having produced no verdict at all.
+    clean = not (kept or dropped_total(counts, DISCLOSED) or counts.get("no_verdict"))
+    if counts.get("notes_recorded") and not clean:
         print(
             f"{counts['notes_recorded']} reviewer note(s) recorded and kept"
             " off the pull request; this review is not clean."
         )
-    if not kept:
+    if clean and counts.get("notes_recorded"):
         print(
             f"Clean verdict: {counts.get('notes', 0)} reviewer note(s)"
             " published as its evidence."

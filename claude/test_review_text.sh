@@ -217,13 +217,17 @@ check "and the CLI's own diagnostic is not emitted as a review" \
   git commit -qm base
 ) > /dev/null
 printf 'modified\t1\treal.go\tpr-files/0001.patch\n' > "$WORK/manifest.tsv"
+# THE EVIDENCE A CLEAN VERDICT NEEDS. review_output.py withholds the tick
+# from a run that recorded no `review-note`, so a seam fixture asserting the
+# clean headline has to supply one or it asserts the defect instead.
+printf 'the only changed line is a version pin and it resolves\n' > "$WORK/seam_note.txt"
 
 seam() { # seam <transcript> <body> -> runs both programs over one transcript
   ( cd "$WORK" && python3 "$SCRIPT" "$1" > "findings-$1.json" 2>/dev/null
     cd "$WORK" && python3 "$OUTPUT" --findings "findings-$1.json" \
       --manifest manifest.tsv --base HEAD --out "$2" --metrics "metrics-$1.env" \
       --head abc --lane B --coverage-read 1 --coverage-total 1 \
-      --summary '1 file, +1/-1.' ) > /dev/null
+      --notes seam_note.txt --summary '1 file, +1/-1.' ) > /dev/null
 }
 : > "$WORK/metrics-clean.jsonl.env"
 : > "$WORK/metrics-maxturns.jsonl.env"
