@@ -34,6 +34,13 @@
 # with a message and a non-zero status, which the reviewer sees as a failed
 # tool call rather than as silent acceptance.
 #
+# TEXT THAT WOULD FORGE THE COMMENT is refused the same way: `<!--`, `-->`
+# and a triple backtick. The state marker is an HTML comment read out of the
+# raw body, and the notes render inside a fence, so either one rewrites the
+# comment's own structure. review_output.py refuses them too, but SILENTLY --
+# so a note accepted here and dropped there is evidence the reviewer believes
+# it recorded, and on a clean verdict that costs the tick. Rephrase the note.
+#
 # REVIEW_NOTES names the file. Unset is an error, not a default path: a
 # default would mean a copy of this running outside the workflow silently
 # writes somewhere nobody reads.
@@ -67,6 +74,15 @@ if [ "${#NOTE}" -gt "$NOTE_MAX" ]; then
   echo "review-note: note is ${#NOTE} characters; the limit is ${NOTE_MAX}" >&2
   exit 2
 fi
+
+case "$NOTE" in
+  *'<!--'* | *'-->'* | *'```'*)
+    echo "review-note: a note cannot contain an HTML comment or a code fence;" \
+      "that text forges the comment's own structure and the note would be" \
+      "dropped. Rephrase it without the marker and record it again." >&2
+    exit 2
+    ;;
+esac
 
 if [ -f "$REVIEW_NOTES" ]; then
   SIZE=$(wc -c <"$REVIEW_NOTES")
