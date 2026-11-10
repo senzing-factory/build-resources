@@ -174,16 +174,29 @@ on:
           *.snap
       review_bot_authors:
         description: |
-          Review pull requests opened by a bot. Default false: dependency
-          bumps are 73.2% of fleet PR volume (2,327 of 3,178 in the PR
-          survey) and essentially all of the model's false blockers, and
-          nobody reads those reviews. Skipped PRs still get a comment, and
-          still get the deterministic stale-version check that was the only
-          part of a bot review that ever found anything. Set true to restore
-          the model review for this repository.
+          Review pull requests opened by a bot. Default true.
+
+          ~~Default false: dependency bumps are 73.2% of fleet PR volume
+          (2,327 of 3,178 in the PR survey) and essentially all of the
+          model's false blockers, and nobody reads those reviews.~~ The
+          volume holds; the conclusion does not. It was measured against a
+          reviewer that could not resolve a pin, and on a bump the entire
+          diff is one forty-character hash replacing another -- so the model
+          had nothing true available about the only thing that changed, and
+          said untrue things instead. "Resolve the action pins this change
+          moves" now supplies the facts: whether the commit exists, what
+          tags point at it, whether the trailing `# vX` comment is truthful,
+          and whether the repository behind a familiar name changed.
+
+          FALSE STILL BUYS SOMETHING, so it is not simply the old default
+          left in place. The deterministic stale-version search runs ONLY on
+          the skip path and reads the whole working tree, so it reaches a
+          README badge or a dependency table the diff never touches and that
+          no review of a diff can see. Setting false trades the model review
+          for that check.
         required: false
         type: boolean
-        default: false
+        default: true
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -774,7 +787,8 @@ jobs:
             claude/pr_discussion.py claude/review_io.py \
             claude/review-schema.json \
             claude/review_coverage.py claude/review_output.py \
-            claude/review_text.py claude/review-note claude/review-git; do
+            claude/review_text.py claude/resolve_refs.py \
+            claude/review-note claude/review-git; do
             if [ ! -f "build-resources/$f" ]; then
               MISSING="${MISSING} ${f}"
             fi
@@ -1026,6 +1040,211 @@ jobs:
           fi
 
           echo "Review set: $(wc -l < pr-files/manifest.tsv) file(s)"
+
+      # THE ONE DIFF SHAPE THE REVIEWER CANNOT SAY ANYTHING TRUE ABOUT. Its
+      # tools are Read, Glob and Grep plus two wrappers confined to the
+      # checkout, so a `uses:` line moving from one forty-character hash to
+      # another is two opaque strings: it cannot name either version, confirm
+      # the new commit exists, or check the trailing `# v4` comment. The hash
+      # pin is this estate's control over everything it did not write, and
+      # the reviewer was structurally blind to exactly that diff.
+      #
+      # RESOLVED HERE, NOT BY THE MODEL. The job already holds a token;
+      # giving the model a network primitive would widen a sandbox whose
+      # narrowness is the point. The facts go into the prompt instead.
+      - name: Resolve the action pins this change moves
+        if: env.REVIEW_OUTCOME == 'reviewed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # `git ls-remote` against a repository the token cannot read would
+          # otherwise sit on a credential prompt until the job times out.
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          PAIRS="$RUNNER_TEMP/ref-pairs.tsv"
+          FACTS="$RUNNER_TEMP/ref-facts.tsv"
+          # A GAP, NOT A LOG LINE. A run that could not list the pins, or
+          # that hit the cap, is blind in exactly the way this step exists
+          # to publish, so the notice goes to the model and to the comment
+          # rather than scrolling past in the runner's own output.
+          NOTES="$RUNNER_TEMP/ref-notes.txt"
+          : > "$PAIRS"
+          : > "$FACTS"
+          : > "$NOTES"
+          if ! python3 build-resources/claude/resolve_refs.py pairs \
+            --manifest pr-files/manifest.tsv --overflow "$NOTES" \
+            "$MERGE_BASE" "$MERGE_HEAD" > "$PAIRS"; then
+            echo "::warning::the changed action pins could not be listed"
+            : > "$PAIRS"
+            echo "the changed action pins could not be listed" > "$NOTES"
+          fi
+          echo "Changed action pins: $(wc -l < "$PAIRS")"
+
+          # CACHE PER REPOSITORY, not per ref. A bump touches both sides of
+          # one action, and both sides share a default branch and a tag map.
+          CACHE="$RUNNER_TEMP/ref-cache"
+          mkdir -p "$CACHE"
+          slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
+
+          # THE HTTP STATUS, NOT MERELY SUCCESS OR FAILURE. A 403, a
+          # secondary rate limit or a 5xx rendered as "does not exist in
+          # that repository" is a false accusation handed to a model that is
+          # told these facts are established and not to check them. 404 and
+          # 422 are what GitHub returns for a repository and for a commit
+          # that are genuinely absent; anything else is a lookup that did
+          # not happen, and says so. The status goes to a FILE because every
+          # caller here reads the body through `$(...)`, which would discard
+          # a variable set in the subshell.
+          STATUS_FILE="$RUNNER_TEMP/ref-api-status"
+          api() { # api <jq filter> <path> -- body on stdout, status to file
+            local out
+            out=$(gh api -i "$2" --jq "$1" 2>/dev/null) || true
+            printf '%s' "$out" | head -1 | awk '{print $2}' > "$STATUS_FILE"
+            [ "$(cat "$STATUS_FILE")" = "200" ] || return 0
+            printf '%s\n' "$out" | awk 'body { print } /^\r?$/ { body = 1 }'
+          }
+          api_status() { cat "$STATUS_FILE" 2>/dev/null; }
+
+          # The default branch, with the status beside it, which is how a
+          # private, renamed, deleted or IP-restricted repository (404) is
+          # told apart from a lookup that failed (anything else).
+          repo_default() {
+            local file
+            file="$CACHE/d-$(slug "$1")"
+            if [ ! -f "$file" ]; then
+              api '.default_branch' "repos/$1" > "$file"
+              api_status > "$file.status"
+            fi
+            cat "$file"
+          }
+          repo_default_status() { cat "$CACHE/d-$(slug "$1").status" 2>/dev/null; }
+
+          # THE WHOLE TAG MAP IN ONE UNAUTHENTICATED ROUND TRIP. `ls-remote`
+          # returns every tag, so there is no page cap, no "the listing was
+          # cut short" state for a reviewer to discount, and no API quota
+          # spent on the largest listing of the set. An ANNOTATED tag
+          # appears twice -- `refs/tags/v1` is the tag object and
+          # `refs/tags/v1^{}` the commit it peels to -- and the peeled line
+          # is the one a pin resolves to, so it wins where both exist.
+          repo_tags() {
+            local file
+            file="$CACHE/t-$(slug "$1")"
+            if [ ! -f "$file" ]; then
+              : > "$file"
+              git ls-remote --tags "https://github.com/$1" 2>/dev/null \
+                | awk '{ n = $2; sub(/^refs\/tags\//, "", n)
+                         if (sub(/\^\{\}$/, "", n)) peeled[n] = $1
+                         else plain[n] = $1 }
+                       END { for (n in plain)
+                               print (n in peeled ? peeled[n] : plain[n]), n }' \
+                | sort -k2,2 > "$file"
+            fi
+            cat "$file"
+          }
+
+          # status, sha, date, reach, tags, branches -- one tab-separated
+          # record for one ref, written however it fails.
+          resolve_ref() {
+            local repo="$1" ref="$2"
+            local meta sha when branch state reach tags status
+            meta=$(api '[.sha, .commit.committer.date] | @tsv' "repos/$repo/commits/$ref")
+            status=$(api_status)
+            if [ -z "$meta" ]; then
+              case "$status" in
+                404 | 422)
+                  repo_default "$repo" > /dev/null
+                  if [ "$(repo_default_status "$repo")" = "404" ]; then
+                    printf 'no-such-repo\t\t\t\t\t'
+                  else
+                    printf 'no-such-commit\t\t\t\t\t'
+                  fi
+                  ;;
+                *) printf 'lookup-failed\t\t\t\t\t' ;;
+              esac
+              return 0
+            fi
+            sha=$(printf '%s' "$meta" | cut -f1)
+            when=$(printf '%s' "$meta" | cut -f2)
+
+            # COMPARE, not a tag listing, for ancestry. One call answers it
+            # whatever the repository's tagging habits are, where a tag
+            # listing answers a different question -- a tag can and often does
+            # sit off the default branch -- and `merge-base` is not an
+            # endpoint of its own. `behind` and `identical` are the two
+            # statuses that mean the commit IS an ancestor of that branch.
+            reach=unknown
+            branch=$(repo_default "$repo")
+            if [ -n "$branch" ]; then
+              state=$(api '.status' "repos/$repo/compare/$branch...$sha")
+              case "$state" in
+                behind | identical) reach=on-default ;;
+                ahead | diverged) reach=off-default ;;
+              esac
+            fi
+
+            tags=$(repo_tags "$repo" | awk -v s="$sha" '$1 == s { printf "%s%s", sep, $2; sep = "," }')
+            # Only branches whose HEAD is this commit. A branch-pinned action
+            # such as `@stable` lands here and nowhere else.
+            branch=$(api '[.[].name] | join(",")' "repos/$repo/commits/$sha/branches-where-head")
+            printf 'ok\t%s\t%s\t%s\t%s\t%s' "$sha" "$when" "$reach" "$tags" "$branch"
+          }
+
+          # `cut`, NOT `IFS=<tab> read`. A tab is IFS WHITESPACE, so bash folds
+          # a run of them into one delimiter and drops leading ones -- and
+          # four of these six fields are routinely empty (no subpath, a newly
+          # added pin with no old ref, a removed pin with no new ref, a pin
+          # with no trailing comment). Read that way the row silently shifts
+          # left and every ref is resolved under the wrong name. Measured: it
+          # put the old SHA in `subpath`. resolve_refs.py validates every
+          # field it prints against a character class, so none of them can
+          # contain a tab or a newline.
+          while IFS= read -r ROW; do
+            [ -n "$ROW" ] || continue
+            REPO=$(printf '%s' "$ROW" | cut -f1)
+            SUBPATH=$(printf '%s' "$ROW" | cut -f2)
+            OLD=$(printf '%s' "$ROW" | cut -f3)
+            NEW=$(printf '%s' "$ROW" | cut -f4)
+            NOTE=$(printf '%s' "$ROW" | cut -f5)
+            FILES=$(printf '%s' "$ROW" | cut -f6)
+            [ -n "$REPO" ] || continue
+            [ -n "$OLD" ] || [ -n "$NEW" ] || continue
+            echo "  ${REPO}${SUBPATH:+/$SUBPATH}: ${OLD:-<new>} -> ${NEW:-<removed>} (${FILES} file(s))"
+            if [ -n "$OLD" ]; then
+              printf '%s\t%s\told\t%s\t%s\t\n' \
+                "$REPO" "$SUBPATH" "$OLD" "$(resolve_ref "$REPO" "$OLD")" >> "$FACTS"
+            fi
+            if [ -n "$NEW" ]; then
+              printf '%s\t%s\tnew\t%s\t%s\t%s\n' \
+                "$REPO" "$SUBPATH" "$NEW" "$(resolve_ref "$REPO" "$NEW")" "$NOTE" >> "$FACTS"
+            fi
+          done < "$PAIRS"
+
+          BLOCK="$RUNNER_TEMP/ref-block.md"
+          GAPS="$RUNNER_TEMP/ref-unresolved.txt"
+          : > "$BLOCK"
+          : > "$GAPS"
+          if ! python3 build-resources/claude/resolve_refs.py render \
+            --facts "$FACTS" --disclosure "$GAPS" > "$BLOCK"; then
+            echo "::warning::the resolved action pins could not be rendered"
+            : > "$BLOCK"
+            : > "$GAPS"
+            echo "the resolved action pins could not be rendered" > "$NOTES"
+          fi
+          if [ -s "$NOTES" ]; then
+            printf -- '- **%s.**\n' "$(cat "$NOTES")" >> "$BLOCK"
+          fi
+          cat "$BLOCK"
+
+          # A ROW THAT IS USUALLY EMPTY, which is mechanism 1: review_output.py
+          # drops a section with no text, so this discloses a ref the reviewer
+          # could not resolve and says nothing on the runs where all of them
+          # did. The blindness is the thing worth publishing; a pin that
+          # resolved needs no space in the comment.
+          DISCLOSE=$(cat "$GAPS")
+          if [ -s "$NOTES" ]; then
+            DISCLOSE="${DISCLOSE:+$DISCLOSE; }$(cat "$NOTES")"
+          fi
+          printf 'Action pins that could not be resolved\t%s\n' \
+            "$DISCLOSE" >> "$RUNNER_TEMP/sections.tsv"
 
       - name: Collect the pull request's own discussion
         if: env.REVIEW_OUTCOME == 'reviewed'
@@ -1537,6 +1756,29 @@ jobs:
           fi
           if [ -n "${BINARY_SUMMARY:-}" ]; then
             echo "- These carry \`binary\` in the manifest's fourth column. The file's own content is binary, so there is nothing to read: **do not try to open them** and do not treat their absence from your review as a finding: ${BINARY_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
+          fi
+
+          # THE PINS, AS FACTS. The reviewer cannot resolve a forty-character
+          # hash with the tools it has, so what the job resolved goes in here
+          # as prose. The calibration sentence is not editorial: measured over
+          # 206 hash pins from recent pull requests across these organisations,
+          # 13 sat off their repository's default branch -- `actions/checkout`
+          # among them, because an action that commits a built `dist/` tags
+          # releases off the mainline. Without that sentence the model reads
+          # the commonest state in the fleet as an attack.
+          if [ -s "$RUNNER_TEMP/ref-block.md" ]; then
+            {
+              echo ""
+              echo "## Action pins this change moves"
+              echo ""
+              echo "Resolved by the job, because you have no tool that can. Treat these as established and do not look for a command to confirm them."
+              echo ""
+              echo "**Two of these facts carry weight.** Whether the \`uses:\` moved to a DIFFERENT REPOSITORY under a familiar-looking name, and whether a pin's trailing \`# vX\` comment matches a tag that actually points at the commit. Each is a claim this pull request makes that the resolved facts can contradict, and neither is under the control of whoever owns the action; both are called out in bold below where they occur."
+              echo ""
+              echo "Everything else is stated flat, including the one case that looks alarming and is not: a released action's tag commonly sits OFF its default branch, so \"not an ancestor\" is normal and is not on its own a finding. A pin that is tagged by nothing, heads no branch AND is not an ancestor is noted where it occurs, but all three of those are properties of the pinned repository itself, so whoever controls it can clear them with one push -- weigh it as a smell, not as evidence."
+              echo ""
+              cat "$RUNNER_TEMP/ref-block.md"
+            } >> "$RUNNER_TEMP/prompt.md"
           fi
 
           # The thread goes last, immediately before "Begin.", so the rules

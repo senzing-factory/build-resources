@@ -76,16 +76,21 @@ check "the guard's shell was found in the workflow file" \
 # fixtures can actually be in. `git -C build-resources rev-parse HEAD` is the
 # only thing the guard reads from disk.
 #
-# The ten helper files are created too, because the same step checks for
-# them: without them these fixtures would fail on the file check and report
-# a ref problem that is not there.
+# The helper files are created too, because the same step checks for them:
+# without them these fixtures would fail on the file check and report a ref
+# problem that is not there. The LIST IS READ OFF THE GUARD, not restated --
+# a copy here would go stale the moment the guard gained a file, and the
+# symptom (every case reporting a ref problem that is not there) looks
+# nothing like a stale list. There was a prose count of them here too.
 mk_checkout() { # mk_checkout <dir>
   mkdir -p "$1/build-resources/claude"
-  for f in pr-prompt-v2.md filter_diff.py pr_discussion.py review_io.py \
-    review-schema.json review_coverage.py review_output.py review_text.py \
-    review-note review-git; do
-    : > "$1/build-resources/claude/$f"
-  done
+  # `while read`, not `for f in $(...)`: the list is a line per file and
+  # word-splitting it is what SC2013 is about.
+  awk '/^ *for f in claude\//,/; do$/' "$GUARD" \
+    | grep -oE 'claude/[A-Za-z0-9._-]+' \
+    | while IFS= read -r f; do
+        : > "$1/build-resources/$f"
+      done
   git -C "$1/build-resources" init -q
   git -C "$1/build-resources" -c user.email=t@t -c user.name=t \
     commit -q --allow-empty -m c
