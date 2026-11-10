@@ -1,11 +1,11 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["findings"],
+  "required": ["findings", "notes"],
   "properties": {
     "findings": {
       "type": "array",
-      "description": "Every finding, one object each. An empty array is the clean verdict and is the ONLY way to report one; do not add a field, a note or a sentence to say so. Report every finding you have: the workflow decides how many reach the comment and discloses the rest.",
+      "description": "Every finding, one object each. An empty array is the clean verdict and is the ONLY way to report one; do not add a sentence or a pseudo-finding to say so -- `notes` is where the evidence for it goes. Report every finding you have: the workflow decides how many reach the comment and discloses the rest.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -31,6 +31,18 @@
             "description": "One sentence saying what is wrong and what it breaks, then one imperative clause giving the fix. No severity word, no path, no line number, no markdown bullet: those are separate fields and the comment is assembled from them. Aim for 400 characters; 2000 is the hard limit and a finding over it is refused. A newline is collapsed to a space, and `<!--` or `-->` refuses the finding, because the comment body is assembled line by line and its state marker is an HTML comment."
           }
         }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 130,
+      "description": "What you examined and found sound, one short line each: name what you looked at and what you concluded, not that you looked. This is required on every review, including one that reports findings. On a clean verdict it is published as the evidence for it, because a clean verdict with nothing behind it cannot be told from a review that never ran; where there are findings it reaches the job log only and the comment carries the findings alone. It is not a place for a finding, a tick against a criterion nobody has to act on, a summary of the change, or a request that someone else verify something.",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "description": "One note. No markdown bullet, no heading and no severity word: each is rendered on its own. A newline or any other control character is collapsed to a space. `<!--` or `-->` REFUSES the note, and so does a note over 500 characters: the comment carries a state marker that is an HTML comment, read back out of the raw body, so that text would rewrite what a later run measures. A refusal is SILENT -- nothing in your turn says it happened -- and a review whose every note is refused publishes as having established nothing. Write `an HTML comment` rather than quoting one. Aim for 120 characters."
       }
     }
   }

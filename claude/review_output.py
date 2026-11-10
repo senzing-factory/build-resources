@@ -2,17 +2,19 @@
 """Turn the reviewer's structured findings into the comment body.
 
     review_output.py --findings <file> --manifest <file> --base <rev>
-                     --out <file> [--sections <file>] [--notes <file>]
+                     --out <file> [--sections <file>]
                      [--previous <file>] [--metrics <file>]
                      [--head <sha>] [--lane <A|B|C>]
                      [--coverage-read N] [--coverage-total N]
                      [--summary <text>] [--restored "<paths>"]
 
-`--findings` names a JSON file holding `{"findings": [ ... ]}`, written by
-review_text.py from the `structured_output` of the CLI's terminal `result`
-event. Every object in it has already been validated against
+`--findings` names a JSON file holding `{"findings": [...], "notes": [...]}`,
+written by review_text.py from the `structured_output` of the CLI's terminal
+`result` event. It has already been validated against
 `claude/review-schema.json` by the CLI, which refuses the model's tool call
-and makes it try again until the object conforms.
+and makes it try again until the object conforms. BOTH KEYS ARE REQUIRED
+THERE, so a review that recorded no evidence is a malformed response the CLI
+sends back rather than a weak one this program apologises for.
 
 WHAT THIS IS FOR: four measured complaints about this reviewer, none of which
 a prompt instruction fixed on its own -- tick lines against criteria needing
@@ -88,22 +90,31 @@ does not shorten one, and it does not judge whether a finding is correct.
 Every mechanism above is a drop, a downgrade or a recount, each visible in
 the metrics.
 
-THE SCRATCHPAD, AND THE ONE CASE WHERE IT IS PUBLISHED. `--notes` names the
-file the `review-note` wrapper appends to. It is printed to the job log on
-every run, and on a CLEAN VERDICT -- nothing shown and nothing adjudicated
-away -- it is ALSO rendered into the comment. That is a fifth measured
-complaint. A review of a four-file change posted `lane=B findings=0
+THE EVIDENCE, AND THE ONE CASE WHERE IT IS PUBLISHED. `notes` is the
+reviewer's account of what it checked and found sound. It is printed to the
+job log on every run, and on a CLEAN VERDICT -- nothing shown and nothing
+adjudicated away -- it is ALSO rendered into the comment. That is a fifth
+measured complaint. A review of a four-file change posted `lane=B findings=0
 read=4/4` in 385 characters whose whole body was the one sentence "No blocking
 findings in the 4 of 4 files opened." The verdict was correct, and a correct
-clean verdict with
-no evidence is indistinguishable from a review that never ran -- while the
-channel that holds the evidence was being described to the model as reaching
-nobody, so the model never wrote to it.
+clean verdict with no evidence is indistinguishable from a review that never
+ran.
+
+~~A `Bash` WRAPPER CARRIED IT~~, appending one line per note to a file
+nothing validated. SUPERSEDED: two rounds of prompt wording and one round of
+publishing the notes each failed to make the model write any, and the
+telemetry said why -- a six-turn run that opened every file, ended
+`terminal_reason: completed` with a 1M window barely touched, and recorded
+nothing. The only output the model was OBLIGED to produce was `findings`, so
+the evidence was the one part it could decline for free. It is a required
+property of the validated object now, and the wrapper, its bounds and its
+tool grant are gone. The containment those bounds existed for did not move:
+it was always duplicated in `clean_notes`, which is now the only witness.
 
 WHERE THERE ARE FINDINGS, NOTHING CHANGES and no note reaches the comment.
 The tick complaint above is about PADDING a review that already carries
 content; a clean verdict is the one case where the evidence IS the content,
-and the two are not in tension. See `load_notes`, `notes_section` and
+and the two are not in tension. See `clean_notes`, `notes_section` and
 `fit_notes`.
 
 AND A CLEAN VERDICT WITH NO NOTE IS NOT PUBLISHED AS CLEAN. Publishing the
@@ -136,7 +147,7 @@ import review_io
 
 USAGE = (
     "usage: review_output.py --findings <file> --manifest <file> --base <rev>\n"
-    "                        --out <file> [--sections <file>] [--notes <file>]\n"
+    "                        --out <file> [--sections <file>]\n"
     "                        [--previous <file>] [--metrics <file>]\n"
     "                        [--head <sha>] [--lane <A|B|C>]\n"
     "                        [--coverage-read N] [--coverage-total N]\n"
@@ -543,12 +554,19 @@ MESSAGE_LIMIT = 2000
 # reaching the body, not to second-guess the repository.
 PATH_LIMIT = 4096
 
-# The per-note bound `review-note` already enforces (`NOTE_MAX`), re-stated
-# here for the reason SEVERITIES and MESSAGE_LIMIT are: this program is the
-# SECOND WITNESS, and a bound only the wrapper knows about is one this
-# program cannot witness. A note longer than this did not come through the
-# wrapper, which is worth surfacing rather than rendering.
+# The per-note bound, witnessed here and declared to the model in
+# `review-schema.json`, for the reason SEVERITIES and MESSAGE_LIMIT are: a
+# bound only the CLI's validator knows about is one this program cannot
+# witness. Carried over unchanged from the retired `review-note` wrapper.
 NOTE_LIMIT = 500
+
+# How many notes may be rendered or printed, the second witness to the
+# schema's `maxItems`. NOT A FRESH NUMBER: the wrapper bounded the notes
+# FILE at 65,536 bytes, which is 130.8 notes at the per-note maximum plus
+# its newline, rounded down. Not the count the wrapper ADMITTED -- it
+# tested the size before appending, so the 131st still fitted -- the
+# ceiling its bound implied. The channel moved; the ceiling did not.
+NOTE_COUNT_LIMIT = 130
 
 # Every C0 control character and DEL. In a message these are collapsed to
 # spaces: the body is assembled LINE BY LINE, so a newline inside a message
@@ -567,8 +585,8 @@ MARKER_DELIMS = ("<!--", "-->")
 
 # The fence a DISCLOSURE SECTION's text is rendered inside. Named rather than
 # spelled twice: a second spelling of the delimiter is a second thing to keep
-# in step. ~~`load_notes` has to refuse what would close it~~ SUPERSEDED: the
-# notes section is no longer fenced, so no note can close anything.
+# in step. ~~`clean_notes` has to refuse what would close it~~ SUPERSEDED:
+# the notes section is no longer fenced, so no note can close anything.
 FENCE = "```"
 
 # Every character a note could spend as markdown, escaped one for one: the
@@ -594,7 +612,6 @@ FLAGS = (
     "--base",
     "--out",
     "--sections",
-    "--notes",
     "--previous",
     "--metrics",
     "--head",
@@ -802,7 +819,7 @@ def normalise(message: str) -> str:
 
 
 def load(path: str) -> tuple:
-    """(findings, {reason: count} for what was refused, True when supplied).
+    """(findings, {reason: count} refused, True when supplied, raw notes).
 
     The file is review_text.py's output: the CLI's `structured_output`, or
     nothing when the run produced none. A missing file, an unreadable one,
@@ -811,6 +828,13 @@ def load(path: str) -> tuple:
     element says so. That is a FACT about the run, where the heuristic it
     replaces ("no finding parsed, no verdict line, and some stray text") was
     an inference from how prose happened to fail.
+
+    THE NOTES COME BACK RAW, uninspected, because two callers want different
+    things from them: `clean_notes` decides what may be rendered, and the
+    job log prints what the model wrote. A `notes` that is not an array is
+    an empty one -- the schema requires it, so this is the second witness
+    disagreeing, and `header` already withholds the tick from a run that
+    recorded nothing.
 
     An entry that is not an object of the declared shape is REJECTED and
     counted, never repaired. Repairing one -- a truncation, a default, a
@@ -828,20 +852,29 @@ def load(path: str) -> tuple:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             raw = handle.read()
     except OSError:
-        return [], dict.fromkeys(REFUSALS, 0), False
+        return [], dict.fromkeys(REFUSALS, 0), False, []
     if not raw.strip():
-        return [], dict.fromkeys(REFUSALS, 0), False
+        return [], dict.fromkeys(REFUSALS, 0), False, []
     try:
         document = json.loads(raw)
     except ValueError as exc:
         print(f"review_output: the findings file is not JSON: {exc}", file=sys.stderr)
-        return [], dict.fromkeys(REFUSALS, 0), False
+        return [], dict.fromkeys(REFUSALS, 0), False, []
     if not isinstance(document, dict) or not isinstance(document.get("findings"), list):
         print(
             "review_output: the findings file carries no `findings` array",
             file=sys.stderr,
         )
-        return [], dict.fromkeys(REFUSALS, 0), False
+        return [], dict.fromkeys(REFUSALS, 0), False, []
+
+    notes = document.get("notes")
+    if not isinstance(notes, list):
+        print(
+            "review_output: the response carries no `notes` array; the schema"
+            " requires one, so this run recorded no evidence",
+            file=sys.stderr,
+        )
+        notes = []
 
     findings = []
     refused = dict.fromkeys(REFUSALS, 0)
@@ -853,7 +886,7 @@ def load(path: str) -> tuple:
         if verdict.normalised:
             refused["normalised"] += 1
         findings.append(verdict)
-    return findings, refused, True
+    return findings, refused, True, notes
 
 
 def build_verdict(entry):
@@ -1179,7 +1212,7 @@ class Tally(NamedTuple):
     # NOTES THE RUN RECORDED, published or not -- the clean verdict's only
     # evidence, and zero withholds the tick. ~~-1 for "the caller did not
     # say"~~: no construction site produced it. `build` passes a measured
-    # count always, and `load_notes` reads an absent `--notes` as zero.
+    # count always, and a response with no `notes` array reads as zero.
     proved: int = 0
 
 
@@ -1357,14 +1390,14 @@ def restored_section(count: int) -> tuple:
     )
 
 
-def load_notes(path: str) -> tuple:
+def clean_notes(value) -> tuple:
     """(the notes that may be rendered, how many were refused).
 
-    One note per line, as `review-note` writes them. A note is MODEL TEXT
-    written by a model that has just read an untrusted diff, so it crosses
-    the same boundary `build_verdict` holds for a finding's message, with
-    the same split between collapsing what has a benign reading and
-    refusing what does not:
+    `value` is the response's `notes` array. A note is MODEL TEXT written
+    by a model that has just read an untrusted diff, so it crosses the same
+    boundary `build_verdict` holds for a finding's message, with the same
+    split between collapsing what has a benign reading and refusing what
+    does not:
 
     * `<!--` OR `-->` REFUSES THE NOTE, exactly `MARKER_DELIMS`, exactly
       `build_verdict`'s rule. The state marker is an HTML comment and
@@ -1378,38 +1411,56 @@ def load_notes(path: str) -> tuple:
       paragraph, so a backtick is text like any other. The rule cost the
       reviewer a failed tool call for quoting a fenced block it had just
       read.
-    * OVER `NOTE_LIMIT` REFUSES THE NOTE, as the second witness to the
-      bound `review-note` enforces. Measured on the RAW line, before any
-      collapsing, because that is the string the wrapper measured.
+    * AN ITEM THAT IS NOT A STRING REFUSES, and so does one OVER
+      `NOTE_LIMIT` -- the second witness to the two bounds the schema
+      declares. The length is measured on the RAW string, before any
+      collapsing, because that is the string the schema measured.
     * EVERY OTHER CONTROL CHARACTER IS COLLAPSED to a space, as in a
-      message. `splitlines` has already taken the line breaks, so what is
-      left is a tab or a stray C0 byte inside one note, and that is a note
-      written badly rather than a note doing something.
+      message. A newline inside a note is one of these now rather than a
+      note boundary, which is the one behaviour the array changed: the
+      channel used to be a file, so a line break ENDED the note and the
+      remainder became a note of its own, unmeasured against `NOTE_LIMIT`.
 
-    A blank line is not a note and is not a refusal; `review-note` cannot
-    write one, and counting it would report a refusal nobody made.
+    ANYTHING THE SCHEMA ALREADY FORBIDS IS A REFUSAL, NOT A SKIP -- a note
+    that is not a string, one that collapses to nothing, and every note
+    past `NOTE_COUNT_LIMIT`. Each is this program and the CLI disagreeing
+    about an object the CLI validated, and a disagreement that published
+    nothing and counted nothing is one nobody would ever see. ~~A blank was
+    silently dropped~~, which was right while `review-note` could not write
+    one and is not right now that the model supplies the array itself.
+
+    EVERY REFUSAL HERE IS SILENT TO THE MODEL, which the wrapper's
+    non-zero exit was not. The prompt therefore has to carry what a refusal
+    COSTS -- a run whose every note is refused publishes as having
+    established nothing -- because nothing in the turn will tell it.
 
     A refusal is counted and disclosed in the section, which is the
     accounting every other withholding in this program goes through.
     """
-    if not path or not os.path.exists(path):
-        return [], 0
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            raw = handle.read()
-    except OSError:
+    if not isinstance(value, list):
         return [], 0
     notes, refused = [], 0
-    for line in raw.splitlines():
-        if len(line) > NOTE_LIMIT:
+    for index, item in enumerate(value):
+        if index >= NOTE_COUNT_LIMIT:
             refused += 1
             continue
-        if any(delim in line for delim in MARKER_DELIMS):
+        # ONE BRANCH PER CAUSE, not one per condition. These two were an
+        # `or`, which made five causes into four sites and left the suite's
+        # count tripwire unable to say how many the warning owes a clause.
+        if not isinstance(item, str):
             refused += 1
             continue
-        clean = " ".join(CONTROL_CHARS.sub(" ", line).split())
+        if len(item) > NOTE_LIMIT:
+            refused += 1
+            continue
+        if any(delim in item for delim in MARKER_DELIMS):
+            refused += 1
+            continue
+        clean = " ".join(CONTROL_CHARS.sub(" ", item).split())
         if clean:
             notes.append(clean)
+        else:
+            refused += 1
     return notes, refused
 
 
@@ -1490,12 +1541,20 @@ def notes_section(shown: list, withheld: int, refused: int):
         tail.append(f"{withheld} further {noun} withheld for the comment's size")
     if refused:
         noun = "note was" if refused == 1 else "notes were"
-        tail.append(
-            f"{refused} {noun} refused for text that would forge the"
-            " comment's own structure"
-        )
+        # ~~"refused for text that would forge the comment's own
+        # structure"~~, with "Every note is in the job log." after it.
+        # CORRECTED: `clean_notes` refuses on FIVE grounds and only one is
+        # a forgery; `log_notes` cannot print three of them, so the promise
+        # was false in exactly the case a reader would follow it.
+        #
+        # IT NAMES THE CLASS, NOT THE CAUSES. An enumeration here is a
+        # fourth copy of `clean_notes`' branches that nothing keeps in step
+        # -- this sentence has now gone stale twice, once per round of
+        # widening. `clean_notes` is the list; this says only that the note
+        # did not conform and where to look.
+        tail.append(f"{refused} {noun} refused as text this comment cannot carry")
     if tail:
-        blocks.append("-- " + "; ".join(tail) + ". Every note is in the job log.")
+        blocks.append("-- " + "; ".join(tail) + ". See the job log.")
     if not blocks:
         return None
     return (NOTES_LABEL, "\n\n".join(blocks), True)
@@ -1518,10 +1577,10 @@ def fit_notes(notes: list, refused: int, kept: list, sections: list, render) -> 
     piece of evidence and a count saying so.
 
     THE CHEAP PREFIX CUT IS NOT AN OPTIMISATION, IT IS WHAT BOUNDS THE
-    LOOP. `review-note` caps the notes FILE at 65,536 bytes, so a file of
-    one-character notes would otherwise compose a 4,000-character body tens
-    of thousands of times. No note beyond the first BODY_LIMIT characters
-    can fit in a BODY_LIMIT body, so cutting there changes no outcome.
+    LOOP. `clean_notes` passes up to NOTE_COUNT_LIMIT notes, so a run of
+    one-character ones would otherwise compose a 4,000-character body a
+    hundred-odd times. No note beyond the first BODY_LIMIT characters can
+    fit in a BODY_LIMIT body, so cutting there changes no outcome.
 
     `not shown` ends it rather than `len(shown) <= 1`: unlike a finding, a
     note is not the review's subject, so there is nothing a comment must
@@ -1725,8 +1784,10 @@ def notes_body(notes: list, counts: dict, kept: list, sections: list, render):
     it would read as support for a verdict that was never reached, which is
     mechanism 6's mistake one level down. And a run that produced no
     structured output adjudicated NOTHING, so it has no verdict for evidence
-    to support -- its notes could be the model's last act before the run
-    failed to produce an object at all.
+    to support. ~~Its notes could be the model's last act before the run
+    failed to produce an object at all.~~ CORRECTED: the notes ARE part of
+    that object, so a run that produced none produced no notes either and
+    this branch is unreachable from the evidence side.
 
     A VERDICT CARRYING FINDINGS IS EXCLUDED TOO, and that was re-argued on
     2026-11-07 against publishing notes whenever any exist. The
@@ -1737,9 +1798,12 @@ def notes_body(notes: list, counts: dict, kept: list, sections: list, render):
     was considered as a second trigger and rejected: it needs a threshold,
     and coverage does not predict diligence well enough
     to gate on -- one measured review opened 11 of 44 supplied files and
-    produced two correct, non-obvious findings. `REVIEW_NOTES_RECORDED` is
-    what makes the silence measurable instead, and it is written on every
-    run.
+    produced two correct, non-obvious findings. ~~`REVIEW_NOTES_RECORDED`
+    is what makes the silence measurable instead.~~ CORRECTED: the schema
+    requires at least one note, so a conforming response cannot be silent
+    and that metric now measures the three ways it can still read zero --
+    the two witnesses disagreeing, every note refused, or no structured
+    output at all. It is still written on every run.
     """
     if kept or dropped_total(counts, DISCLOSED) or counts["no_verdict"]:
         return None
@@ -1749,7 +1813,7 @@ def notes_body(notes: list, counts: dict, kept: list, sections: list, render):
     return body
 
 
-def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
+def build(argv: list, findings: list, counts: dict, sections: list, raw) -> tuple:
     """(comment body, the findings it actually carries).
 
     The header and the marker are rendered from whatever survives trimming
@@ -1762,7 +1826,7 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
     `notes_body`, which decides, and the module docstring for why.
     """
     survived = rank(findings)
-    # LOADED BEFORE THE FIRST RENDER, not inside `notes_body`. `assemble`
+    # COUNTED BEFORE THE FIRST RENDER, not inside `notes_body`. `assemble`
     # renders the header while deciding what fits, so a count set afterwards
     # reaches the headline of the clean body and not of any other -- and the
     # clean body is re-composed from it. Both must see the same number.
@@ -1770,17 +1834,21 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
     # HOW MANY THE RUN PRODUCED AT ALL, published or not. The other three
     # note counts are zero on every review that carries findings, so without
     # this one the fleet has no signal for the defect that prompted the
-    # mechanism: on the measured run the notes file was created, passed to
-    # this step, and the model never called `review-note` once. "Published
-    # none" and "wrote none" are different failures and only one is ours.
-    notes, counts["note_refused"] = load_notes(_flag(argv, "--notes"))
+    # mechanism: on the measured run the model emitted `{"findings": []}`
+    # and no evidence at all. "Published none" and "wrote none" are
+    # different failures and only one is ours.
+    #
+    # ~~IT IS WHAT MAKES THE SILENCE MEASURABLE.~~ CORRECTED: the schema
+    # requires at least one note, so a CONFORMING response can no longer be
+    # silent and this count can only reach zero three ways -- the two
+    # witnesses disagreeing, every note refused as unsafe or malformed, or
+    # no structured output at all. It now measures those, not silence.
+    notes, counts["note_refused"] = clean_notes(raw)
     counts["notes_recorded"] = len(notes)
     counts["notes"] = 0
     counts["notes_withheld"] = 0
     lane = _flag(argv, "--lane", "B")
     head = _flag(argv, "--head", "unknown")
-    read = _flag(argv, "--coverage-read", "0")
-    total = _flag(argv, "--coverage-total", "0")
     summary = _flag(argv, "--summary")
     # READ ONCE, not per render. `assemble` calls `render` again after every
     # trim, so a clock read inside it can change the body between iterations
@@ -1803,13 +1871,14 @@ def build(argv: list, findings: list, counts: dict, sections: list) -> tuple:
             adjudged=dropped_total(counts, DISCLOSED),
             recorded=dropped_total(counts, RECORDED),
             space=len(survived) - len(shown),
-            read=read,
-            total=total,
+            # Read here rather than hoisted: unlike the clock these are
+            # constant strings, so re-reading them per render cannot change
+            # the body. `--truncated` is validated, not just defaulted --
+            # see `counter_flag`.
+            read=_flag(argv, "--coverage-read", "0"),
+            total=_flag(argv, "--coverage-total", "0"),
             supplied=counts.get("supplied", -1),
             rows=counts.get("rows", -1),
-            # Read here rather than hoisted: unlike the clock this is a
-            # constant string, so re-reading it per render cannot change
-            # the body. Validated, not just defaulted -- see `counter_flag`.
             truncated=counter_flag(argv, "--truncated"),
             proved=counts["notes_recorded"],
         )
@@ -1912,7 +1981,7 @@ def main(argv: list) -> int:
         print(USAGE, file=sys.stderr)
         return 2
 
-    findings, refused, supplied = load(found)
+    findings, refused, supplied, raw_notes = load(found)
     rows = manifest_rows(manifest)
     restored = tuple(_flag(argv, "--restored").split())
     counts = adjudicate(
@@ -1931,19 +2000,19 @@ def main(argv: list) -> int:
     # which is a verdict and must not be confused with the first.
     counts["no_verdict"] = int(not supplied)
 
-    sections = read_sections(_flag(argv, "--sections"))
-    if dropped_total(counts, DISCLOSED):
-        sections.append(drop_section(counts))
-    if counts["duplicate"]:
-        sections.append(duplicate_section(counts["duplicate"]))
-    if counts["unverified"]:
-        sections.append(restored_section(counts["unverified"]))
-    body, kept = build(argv, findings, counts, sections)
+    body, kept = build(
+        argv,
+        findings,
+        counts,
+        disclosures(argv, counts),
+        raw_notes,
+    )
 
     with open(out, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(body)
 
     report(kept, findings, counts, len(body))
+    log_notes(raw_notes)
     return metrics(argv, kept, counts, len(body))
 
 
@@ -2050,11 +2119,18 @@ def note_report(kept: list, counts: dict) -> None:
     never read as evidence lost on the way.
     """
     if counts.get("note_refused"):
+        # THE ONLY SITE THAT STILL ENUMERATES, and so the only one that can
+        # go stale: the comment tail and the skipped line name a class now.
+        # One cause per `clean_notes` branch, in its order. ~~It named four
+        # of five and called them all schema violations~~: `not a string`
+        # was missing, and a blank note conforms to `minLength: 1` -- it is
+        # refused for collapsing to nothing, which the schema cannot say.
         print(
             f"::warning::{counts['note_refused']} reviewer note(s) were not"
-            " rendered: an HTML comment in the text would"
-            " forge the comment's own structure, and a note over"
-            f" {NOTE_LIMIT} characters did not come through review-note"
+            f" rendered: past the {NOTE_COUNT_LIMIT}th, not a string, over"
+            f" {NOTE_LIMIT} characters, an HTML comment in the text that"
+            " would forge the comment's own structure, or blank once"
+            " control characters are collapsed"
         )
     if counts.get("notes_withheld"):
         print(
@@ -2078,25 +2154,68 @@ def note_report(kept: list, counts: dict) -> None:
         )
 
 
+def log_notes(raw) -> None:
+    """Every note the run recorded, as written, for the job log.
+
+    THE RAW ARRAY, not what `clean_notes` passed: this is the only place a
+    refused note is visible at all, and a log printing only the publishable
+    ones would hide exactly the note whose wording has to change. Bounded
+    by NOTE_COUNT_LIMIT for the same reason the render is -- the array is
+    model text and the job log is unbounded.
+
+    WHAT IT CANNOT PRINT, IT COUNTS, so the listing reconciles against
+    REVIEW_NOTES_REFUSED. ~~"the two refusals only this second witness can
+    ever see"~~ was two of three: an EMPTY STRING also prints nothing,
+    because `"".splitlines()` is `[]`, and it was neither listed nor
+    counted -- the one item that could vanish from both.
+    """
+    lines, skipped = [], 0
+    for index, item in enumerate(list(raw)):
+        if index >= NOTE_COUNT_LIMIT or not isinstance(item, str):
+            skipped += 1
+            continue
+        if not item.splitlines():
+            skipped += 1
+            continue
+        # `| ` on every line. The runner strips leading whitespace before
+        # testing for `::`, so indenting is not enough: a note beginning
+        # `::add-mask::` or `::error::` would RUN as a workflow command,
+        # and the reviewer writing these notes is reading the pull request
+        # under review. A note carrying a newline is several lines here and
+        # one note to `clean_notes`, which collapses it.
+        lines.extend(item.splitlines())
+    if not lines and not skipped:
+        return
+    if lines:
+        # ~~"kept off the pull request"~~. They are published on a clean
+        # verdict; this is every note the run recorded, including any the
+        # comment refused or could not fit.
+        print("\nReviewer notes (every one recorded, as written):")
+        for line in lines:
+            print(f"| {line}")
+    if skipped:
+        print(
+            f"\n{skipped} further item(s) in the `notes` array were neither"
+            f" listed nor published: empty, past the {NOTE_COUNT_LIMIT}-note"
+            " bound, or not a string. The output schema forbids all three,"
+            " so this is the CLI's validation and this program disagreeing."
+        )
+
+
+def disclosures(argv: list, counts: dict) -> list:
+    """Every row the comment owes: the workflow's, then adjudication's."""
+    sections = read_sections(_flag(argv, "--sections"))
+    if dropped_total(counts, DISCLOSED):
+        sections.append(drop_section(counts))
+    if counts["duplicate"]:
+        sections.append(duplicate_section(counts["duplicate"]))
+    if counts["unverified"]:
+        sections.append(restored_section(counts["unverified"]))
+    return sections
+
+
 def metrics(argv: list, kept: list, counts: dict, size: int) -> int:
     """Append the numeric metrics, and warn on a longer-but-emptier run."""
-    notes = _flag(argv, "--notes")
-    if notes and os.path.exists(notes):
-        with open(notes, "r", encoding="utf-8", errors="replace") as handle:
-            text = handle.read()
-        if text.strip():
-            # `| ` on every line. The runner strips leading whitespace before
-            # testing for `::`, so indenting is not enough: a note beginning
-            # `::add-mask::` or `::error::` would RUN as a workflow command,
-            # and the reviewer writing these notes is reading the pull
-            # request under review.
-            # ~~"kept off the pull request"~~. They are published on a
-            # clean verdict; this is every note the run recorded, including
-            # any the comment refused or could not fit.
-            print("\nReviewer notes (every one recorded, as written):")
-            for line in text.splitlines():
-                print(f"| {line}")
-
     prev_chars, prev_findings = previous_stats(_flag(argv, "--previous"))
     regression = int(
         prev_findings >= 0 and size > prev_chars and len(kept) < prev_findings
