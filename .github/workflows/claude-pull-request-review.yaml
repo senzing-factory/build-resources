@@ -788,7 +788,7 @@ jobs:
             claude/review-schema.json \
             claude/review_coverage.py claude/review_output.py \
             claude/review_text.py claude/resolve_refs.py \
-            claude/review-note claude/review-git; do
+            claude/review-git; do
             if [ ! -f "build-resources/$f" ]; then
               MISSING="${MISSING} ${f}"
             fi
@@ -1623,24 +1623,23 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           rm "$INSTALLER"
 
-          # The reviewer's private bin. Exactly two executables in a directory
-          # of its own, rather than putting build-resources/claude on PATH, so
-          # that each `Bash(...:*)` grant reaches exactly one program and
-          # nothing else in that checkout becomes runnable by name.
+          # The reviewer's private bin. ~~Two executables~~ -- one now that
+          # the reviewer's evidence is a property of its structured output
+          # instead of a file a wrapper appended to. A directory of its own,
+          # rather than putting build-resources/claude on PATH, so that the
+          # `Bash(...:*)` grant reaches exactly one program and nothing else
+          # in that checkout becomes runnable by name.
           #
           # 555, NOT 755. `review-git log --output=<path>` truncates its
           # target in place and preserves its mode, so a writable wrapper is a
-          # way to replace the program the NEXT call runs -- which is how
-          # `review-note` was reachable while being sound about its own argv.
-          # Defence in depth, not the fix: these are owned by the runner user,
-          # whose own permission bits apply to it. The fix is that review-git
-          # refuses the argument.
+          # way to replace the program the NEXT call runs. Defence in depth,
+          # not the fix: these are owned by the runner user, whose own
+          # permission bits apply to it. The fix is that review-git refuses
+          # the argument.
           mkdir -p "$RUNNER_TEMP/bin"
-          cp build-resources/claude/review-note "$RUNNER_TEMP/bin/review-note"
           cp build-resources/claude/review-git "$RUNNER_TEMP/bin/review-git"
-          chmod 555 "$RUNNER_TEMP/bin/review-note" "$RUNNER_TEMP/bin/review-git"
+          chmod 555 "$RUNNER_TEMP/bin/review-git"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          : > "$RUNNER_TEMP/review-notes.txt"
 
       - name: Verify Claude CLI installation
         if: env.REVIEW_OUTCOME == 'reviewed'
@@ -1798,7 +1797,6 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           MODEL: ${{ inputs.model }}
-          REVIEW_NOTES: ${{ runner.temp }}/review-notes.txt
         run: |
           echo "Running Claude code review..."
 
@@ -1831,8 +1829,13 @@ jobs:
           # `git log -p --ext-diff` then executes. A wrapper is sound where a
           # prefix is not, because the wrapper validates its own arguments --
           # review-git allows three subcommands and refuses the flags that
-          # write files or run programs, and review-note takes its destination
-          # from the environment so no argument can redirect the write.
+          # write files or run programs.
+          #
+          # ~~A second grant, `Bash(review-note:*)`~~, carried the reviewer's
+          # evidence to a file. That is a required property of the structured
+          # output now, so the grant and the wrapper are gone: one fewer
+          # program a model reading an untrusted diff can reach, and one
+          # fewer file it can cause to be written on the runner.
           #
           # `git status` and `git rev-parse` were dropped rather than wrapped:
           # the run context appended to the prompt already states what the
@@ -1849,7 +1852,6 @@ jobs:
           # and the prompt forbids any finding that would need one.
           ALLOWED_TOOLS="Read,Glob,Grep"
           ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(review-git:*)"
-          ALLOWED_TOOLS="${ALLOWED_TOOLS},Bash(review-note:*)"
 
           # The cwd is the PULL REQUEST's checkout, which is untrusted:
           # without these two flags that branch's own CLAUDE.md,
@@ -2057,7 +2059,6 @@ jobs:
             --base "$MERGE_BASE" \
             --out "$RUNNER_TEMP/body.md" \
             --sections "$RUNNER_TEMP/sections.tsv" \
-            --notes "$RUNNER_TEMP/review-notes.txt" \
             --previous "$RUNNER_TEMP/previous.md" \
             --metrics "$GITHUB_ENV" \
             --head "$HEAD_SHA" \

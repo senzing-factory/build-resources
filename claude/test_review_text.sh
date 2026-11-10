@@ -168,13 +168,20 @@ check "a later result with no object does not fall back to an earlier one" \
 # other adjudicated everything and found nothing. They must never collapse
 # into each other, in either direction.
 
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"structured_output":{"findings":[]}}' \
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"structured_output":{"findings":[],"notes":["the only changed line is a version pin and it resolves"]}}' \
   > "$WORK/clean.jsonl"
 printf '%s\n' '{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Error: exceeded max turns"}' \
   > "$WORK/maxturns.jsonl"
 
 check "a clean review is an empty findings array, not an empty stream" \
-  '{"findings": []}' "$(rrun clean.jsonl)"
+  '{"findings": [], "notes": ["the only changed line is a version pin and it resolves"]}' "$(rrun clean.jsonl)"
+# THE EVIDENCE IS PART OF THE OBJECT, so this program carries it across the
+# seam untouched. It validates nothing and renders nothing -- `clean_notes`
+# in review_output.py is the only thing that reads a note -- but if the key
+# were dropped here the comment would withhold the tick from every correct
+# clean verdict in the fleet and nothing would say why.
+check "and the notes come across with it, whole" \
+  '1' "$(rrun clean.jsonl | grep -c '"notes": \["the only changed line is a version pin and it resolves"\]')"
 check "a clean review says nothing on stderr" '' "$(stderr_of clean.jsonl)"
 check "error_max_turns with no structured output emits nothing at all" \
   '' "$(rrun maxturns.jsonl)"
@@ -217,17 +224,13 @@ check "and the CLI's own diagnostic is not emitted as a review" \
   git commit -qm base
 ) > /dev/null
 printf 'modified\t1\treal.go\tpr-files/0001.patch\n' > "$WORK/manifest.tsv"
-# THE EVIDENCE A CLEAN VERDICT NEEDS. review_output.py withholds the tick
-# from a run that recorded no `review-note`, so a seam fixture asserting the
-# clean headline has to supply one or it asserts the defect instead.
-printf 'the only changed line is a version pin and it resolves\n' > "$WORK/seam_note.txt"
 
 seam() { # seam <transcript> <body> -> runs both programs over one transcript
   ( cd "$WORK" && python3 "$SCRIPT" "$1" > "findings-$1.json" 2>/dev/null
     cd "$WORK" && python3 "$OUTPUT" --findings "findings-$1.json" \
       --manifest manifest.tsv --base HEAD --out "$2" --metrics "metrics-$1.env" \
       --head abc --lane B --coverage-read 1 --coverage-total 1 \
-      --notes seam_note.txt --summary '1 file, +1/-1.' ) > /dev/null
+      --summary '1 file, +1/-1.' ) > /dev/null
 }
 : > "$WORK/metrics-clean.jsonl.env"
 : > "$WORK/metrics-maxturns.jsonl.env"
@@ -236,6 +239,13 @@ seam maxturns.jsonl maxturns_body.md
 check "a clean transcript becomes a clean verdict on the pull request" \
   '1' "$(grep -c '^✅ \*\*No blocking findings in the 1 of 1 file opened\.\*\* 1 file, +1/-1\.$' \
     "$WORK/clean_body.md")"
+# AND IT IS CLEAN BECAUSE OF WHAT THE TRANSCRIPT CARRIED. The tick is
+# withheld from a run that recorded nothing, so this one assertion is the
+# end-to-end proof that the evidence travels in the structured output: the
+# CLI validated it, this program passed it through, and the adjudicator
+# published it. Nothing on disk beside the transcript was involved.
+check "and the evidence it carried is published beneath it" \
+  '1' "$(grep -c '^the only changed line is a version pin and it resolves$' "$WORK/clean_body.md")"
 check "an errored transcript says nothing was adjudicated instead" \
   '1' "$(grep -c '^\*\*The reviewer produced no structured output\.\*\*' \
     "$WORK/maxturns_body.md")"

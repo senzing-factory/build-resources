@@ -508,6 +508,50 @@ done
 check "every fixture suite present on disk is wired into the lint workflow" \
   '' "$UNWIRED"
 
+# ---------------------------------------------------------------------------
+# THE MODEL'S TOOL GRANT, PINNED
+# ---------------------------------------------------------------------------
+#
+# This is the reviewer's whole attack surface outside `Read`/`Glob`/`Grep`:
+# a model that has just read an untrusted diff, deciding what to run. Every
+# `Bash` grant is a wrapper because `Bash(cmd:*)` bounds the START of the
+# command string and nothing after it, and each wrapper is one more program
+# that has to stay sound about its own argv.
+#
+# A LITERAL LIST, not a property. "Each grant names a wrapper that exists"
+# would pass for any number of them, and the number is the thing worth
+# noticing: a grant added here reaches every consuming repository at once,
+# with no pull request to any of them. `review-note` was the second one and
+# is gone, because the evidence it carried is a required property of the
+# structured output now.
+#
+# READ OFF THE ASSIGNMENT, not off the step. The first form grepped the
+# whole extracted shell and matched `Bash(cmd:*)` out of the comment that
+# explains why wrappers exist -- a fixture reading the prose beside the
+# value instead of the value.
+REVIEW_STEP="$WORK/review_step.sh"
+extract_step "Run Claude Code Review" > "$REVIEW_STEP"
+check "the reviewer step's shell was found in the workflow file" \
+  '1' "$([ -s "$REVIEW_STEP" ] && echo 1 || echo 0)"
+check "the reviewer is granted exactly one Bash wrapper" \
+  'Bash(review-git:*)' \
+  "$(grep -E '^ALLOWED_TOOLS=' "$REVIEW_STEP" \
+    | grep -oE 'Bash\([a-z-]+:\*\)' | sort -u | paste -sd' ' -)"
+
+# AND THE PRIVATE BIN HOLDS EXACTLY THE PROGRAMS THOSE GRANTS NAME. The two
+# live in different steps, so they can drift in either direction: a grant
+# with no program is a tool call that fails for the model, and a program
+# with no grant is one copied onto PATH that nobody asked to be runnable.
+INSTALL_STEP="$WORK/install_step.sh"
+extract_step "Install Claude Code CLI" > "$INSTALL_STEP"
+check "the install step's shell was found in the workflow file" \
+  '1' "$([ -s "$INSTALL_STEP" ] && echo 1 || echo 0)"
+check "the private bin holds exactly the programs the grants name" \
+  "$(grep -E '^ALLOWED_TOOLS=' "$REVIEW_STEP" | grep -oE 'Bash\([a-z-]+:' \
+    | sed 's/Bash(//; s/:$//' | sort -u | paste -sd' ' -)" \
+  "$(grep -E '^(cp|chmod) ' "$INSTALL_STEP" | grep -oE 'RUNNER_TEMP/bin/[a-z-]+' \
+    | sed 's|.*/||' | sort -u | paste -sd' ' -)"
+
 # super-linter resolves the actionlint config as
 # `${LINTER_RULES_PATH}/${GITHUB_ACTIONS_CONFIG_FILE}` and that variable
 # defaults to `actionlint.yml` -- `lib/globals/linterRules.sh`, tag `v8.7.0`.

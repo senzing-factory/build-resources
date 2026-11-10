@@ -51,11 +51,14 @@ docker run --rm \
     and so are disclosed rather than downgraded
   - `review_text.py` recovers the review from that transcript: the `structured_output` of the last `result` event, which the CLI has already validated against `claude/review-schema.json`. There is no text fallback -- under the schema the findings exist only as the tool call's argument
   - `review-git` is the reviewer's only route to Git history: `log`, `show` and `diff`, with the options that write a file or run a program named by the repository's own config refused and every path argument held inside the checkout. A wrapper rather than a `Bash(git log:*)` prefix, which bounds the start of the command string and nothing after it
-  - `review-note` is where the reviewer puts what it checked and found clean.
-    ~~That text reaches the job log and never the comment.~~ CORRECTED: it
-    reaches the job log on every run, and on a clean verdict the notes are
-    published in the comment as the evidence behind the tick -- a clean verdict
-    with nothing behind it cannot be told from a review that never ran
+  - `notes`, in that same validated object, is what the reviewer checked and
+    found sound. ~~A `review-note` wrapper carried it to a file.~~ CORRECTED:
+    it is a REQUIRED property of the structured output, so a review with no
+    evidence is a response the CLI hands back rather than a weak one the
+    comment explains. It reaches the job log on every run, and on a clean
+    verdict it is published in the comment as the evidence behind the tick --
+    a clean verdict with nothing behind it cannot be told from a review that
+    never ran
   - `review_io.py` holds the file conventions the others share
 - The review **posts a new comment on every run and leaves every earlier one
   standing**, so each review sits at its own time and thread position and
