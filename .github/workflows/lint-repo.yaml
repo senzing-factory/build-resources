@@ -47,6 +47,7 @@ jobs:
         run: |
           ./claude/test_filter_diff.sh
           ./claude/test_pr_discussion.sh
+          ./claude/test_resolve_refs.sh
           ./claude/test_review_coverage.sh
           ./claude/test_review_git.sh
           ./claude/test_review_output.sh
