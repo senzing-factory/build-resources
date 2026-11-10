@@ -53,6 +53,11 @@ jobs:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          # Classic project cards, which live on the repository or the org,
+          # plus reading the merged pull request they are attached to.
+          permission-organization-projects: write
+          permission-pull-requests: read
 
       - name: move PR to done
         if: ${{ github.event.pull_request.merged == true }}

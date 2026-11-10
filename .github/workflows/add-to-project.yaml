@@ -61,6 +61,12 @@ jobs:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ inputs.org }}
+          # Every caller passes vars.SENZING_GITHUB_ACCOUNT_NAME here, which
+          # resolves to the caller's own owner in every org measured -- so the
+          # token scopes to the one repository that needs it.
+          repositories: ${{ github.event.repository.name }}
+          permission-organization-projects: write
+          permission-pull-requests: read
 
       - name: add to project
         uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
