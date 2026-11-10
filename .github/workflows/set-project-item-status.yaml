@@ -65,6 +65,12 @@ jobs:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ inputs.org }}
+          # Every caller passes vars.SENZING_GITHUB_ACCOUNT_NAME here, which
+          # resolves to the caller's own owner in every org measured -- so the
+          # token scopes to the one repository that needs it.
+          repositories: ${{ github.event.repository.name }}
+          permission-organization-projects: write
+          permission-pull-requests: read
 
       - name: Update project item status
         env:
