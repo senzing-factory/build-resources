@@ -941,7 +941,12 @@ def load(path: str) -> tuple:
     comment's own structure, which the schema cannot express and so is not a
     disagreement at all.
     """
-    nothing = ([], dict.fromkeys(REFUSALS, 0), False, {key: [] for key in ARRAYS})
+    nothing: tuple = (
+        [],
+        dict.fromkeys(REFUSALS, 0),
+        False,
+        {key: [] for key in ARRAYS},
+    )
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             raw = handle.read()
