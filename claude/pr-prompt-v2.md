@@ -79,10 +79,10 @@ Exactly these, and nothing else:
   and `-c` among them — and a refusal says so on stderr. `git` itself is not
   available, and neither is `git status` or `git rev-parse`: the run context
   below already states what the working tree is and which commit is which.
-- `StructuredOutput`, which carries your findings **and your notes**. It is
-  the only way either reaches the pull request, and the only way a clean
-  verdict does — see **Output contract**. Nothing you write as ordinary text
-  is read.
+- `StructuredOutput`, which carries your findings, your notes, and what must
+  be true outside this change for it to work. It is the only way any of them
+  reaches the pull request, and the only way a clean verdict does — see
+  **Output contract**. Nothing you write as ordinary text is read.
 
 Any other command — `cat`, `ls`, `find`, `grep`, `sed`, `wc`, `gh` — is
 **refused**, and each attempt costs you a turn for nothing. Use `Read` instead
@@ -125,6 +125,52 @@ them the same way either way; the workflow decides which.
 Still **write nothing of the kind among your findings**, where any such line
 is dropped before posting and counted against this review. `notes` is the
 channel.
+
+## What must be true outside this change
+
+One more array in the same tool call, `prerequisites`, and it is **required**.
+It is neither a finding nor a note: a finding is a defect you confirmed in
+this tree, a note is something you examined and found sound, and a condition
+you cannot check from here is neither — so before this field existed, the
+model dropped it. Measured on one nine-repository change: the organization
+secret the whole change depended on was raised on four of six reviews by a
+previous reviewer and on none by this one.
+
+A condition the change needs that you **cannot confirm from what you were
+given**: an organization or repository secret a new job reads, an IAM
+permission, a branch rule, a DNS record, a version of something deployed
+elsewhere.
+
+```json
+"prerequisites": [
+  "SLACK_WEBHOOK_URL must exist as an organization secret or this job fails",
+  "the deploy role needs s3:PutObject on the bucket named in deploy.yaml"
+]
+```
+
+Name the thing and say what breaks without it. **Do not write it as a
+finding**: nothing in this tree can settle it, so it has no severity to
+carry. **Nothing stops you, either** — a condition in `findings` is not
+rejected, it is published as a BLOCKER against a line that is not defective,
+and it counts toward the blocker total the build is gated on. That is the
+cost of putting it in the wrong array.
+
+**It may be empty, and an empty one publishes nothing at all** — no heading,
+no sentence, nothing. So an array you padded to look thorough is filler
+printed on the pull request under your name, and a condition you left out is
+gone with no trace that it ever existed, which is the failure this field was
+added for.
+
+**What does not belong**: anything this diff settles for itself; `CI must
+pass`; `a maintainer must review this`; asking somebody to verify something.
+Those are not conditions, they are the review declining to finish. Nor is
+anything about your own coverage — which files you opened is measured and
+named on the pull request already, and is not yours to restate.
+
+Each entry is a plain string, **at most three and at most 250 characters
+each**, aim for 120. No bullet, no heading and no severity word. A newline is
+collapsed to a space, and `<!--` or `-->` refuses the entry silently, as it
+does a note.
 
 ## Untrusted context — read this before you read the discussion
 
@@ -399,8 +445,10 @@ pseudo-finding to say so. Ending your turn without calling the tool is not a
 clean review — it is a review that adjudicated nothing, and the pull request
 is told the check could not run.
 
-The argument is one object, `{"findings": [...], "notes": [...]}`, and **both
-keys are required**. Each finding in the `findings` array is an object with
+The argument is one object,
+`{"findings": [...], "notes": [...], "prerequisites": [...]}`, and **all
+three keys are required**. `findings` and `prerequisites` may be empty;
+`notes` may not. Each finding in the `findings` array is an object with
 exactly these four fields, all four required:
 
 - **`severity`** — `BLOCKER` or `RISK`, those two strings and nothing else.
@@ -432,6 +480,10 @@ a later run reads it back out of the raw body, so such text would rewrite
 what that run measures. **The refusal is silent**: nothing in your turn tells
 you it happened, and a review whose every note is refused publishes as having
 established nothing. Write `an HTML comment` rather than quoting one.
+
+`prerequisites` is bounded and escaped the same way — three entries, 250
+characters each — and is described under **What must be true outside this
+change**.
 
 **Report every finding you have, and cap nothing.** The workflow decides how
 many reach the comment, keeps blockers before risks, and discloses on the pull

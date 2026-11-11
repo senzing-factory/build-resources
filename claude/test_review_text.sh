@@ -176,7 +176,7 @@ printf '%s\n' '{"type":"result","subtype":"error_max_turns","is_error":true,"res
 check "a clean review is an empty findings array, not an empty stream" \
   '{"findings": [], "notes": ["the only changed line is a version pin and it resolves"]}' "$(rrun clean.jsonl)"
 # THE EVIDENCE IS PART OF THE OBJECT, so this program carries it across the
-# seam untouched. It validates nothing and renders nothing -- `clean_notes`
+# seam untouched. It validates nothing and renders nothing -- `clean_items`
 # in review_output.py is the only thing that reads a note -- but if the key
 # were dropped here the comment would withhold the tick from every correct
 # clean verdict in the fleet and nothing would say why.

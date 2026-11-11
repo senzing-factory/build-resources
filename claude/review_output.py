@@ -8,13 +8,14 @@
                      [--coverage-read N] [--coverage-total N]
                      [--summary <text>] [--restored "<paths>"]
 
-`--findings` names a JSON file holding `{"findings": [...], "notes": [...]}`,
-written by review_text.py from the `structured_output` of the CLI's terminal
-`result` event. It has already been validated against
-`claude/review-schema.json` by the CLI, which refuses the model's tool call
-and makes it try again until the object conforms. BOTH KEYS ARE REQUIRED
-THERE, so a review that recorded no evidence is a malformed response the CLI
-sends back rather than a weak one this program apologises for.
+`--findings` names a JSON file holding `findings` and the string arrays
+`ARRAYS` names -- three keys -- written by review_text.py from the
+`structured_output` of the CLI's terminal `result` event. It has already
+been validated against `claude/review-schema.json` by the CLI, which refuses
+the model's tool call and makes it try again until the object conforms. ALL
+THREE KEYS ARE REQUIRED THERE, so a review that recorded no evidence is a
+malformed response the CLI sends back rather than a weak one this program
+apologises for.
 
 WHAT THIS IS FOR: four measured complaints about this reviewer, none of which
 a prompt instruction fixed on its own -- tick lines against criteria needing
@@ -109,12 +110,12 @@ nothing. The only output the model was OBLIGED to produce was `findings`, so
 the evidence was the one part it could decline for free. It is a required
 property of the validated object now, and the wrapper, its bounds and its
 tool grant are gone. The containment those bounds existed for did not move:
-it was always duplicated in `clean_notes`, which is now the only witness.
+it was always duplicated in `clean_items`, which is now the only witness.
 
 WHERE THERE ARE FINDINGS, NOTHING CHANGES and no note reaches the comment.
 The tick complaint above is about PADDING a review that already carries
 content; a clean verdict is the one case where the evidence IS the content,
-and the two are not in tension. See `clean_notes`, `notes_section` and
+and the two are not in tension. See `clean_items`, `notes_section` and
 `fit_notes`.
 
 AND A CLEAN VERDICT WITH NO NOTE IS NOT PUBLISHED AS CLEAN. Publishing the
@@ -124,6 +125,28 @@ no note at all, including two consecutive runs over the same one-line diff
 where the first recorded one and the second recorded none. The tick is the
 assurance, so `header` withholds it and says what the review established
 instead. See `header`'s `proved` branch.
+
+WHAT THE CHANGE DEPENDS ON AND THE REVIEW CANNOT CHECK goes in a third
+required array, `prerequisites`, which renders on EVERY verdict rather than
+on the clean one alone. It is a condition outside the diff -- the
+organization secret a new job reads -- and it is neither a defect nor
+something examined and found sound, so it had no field and the model
+dropped it: on one measured nine-repository change the previous reviewer
+raised one on four of six reviews and this one on none, and it was the
+condition the whole change hung on.
+
+IT HAS NO EMPTY FORM. An empty array renders nothing and is read off
+`REVIEW_PREREQUISITES`, because a sentence invented out of the model's
+silence is an assertion this program is not entitled to make -- see
+PREREQUISITE_LABEL, and `prerequisites_section`, which tests the PUBLISHED
+list and so meets a wholly-refused array as an empty one.
+
+~~A `limits` array travelled beside it~~, for what the reviewer read and
+could not settle. BUILT AND WITHDRAWN BEFORE RELEASE, measured on the same
+six reviews: prerequisites appeared in four of them and a limit in one,
+which was half a restatement of the coverage `review_coverage.py` measures
+better. A field with the weaker evidence, and no way to tell its filler
+from its content, is not one to ship.
 
 METRICS are written as `KEY=value` lines for `$GITHUB_ENV`, and every value
 is a NUMBER. A path or a message there is author-controlled text one newline
@@ -568,6 +591,25 @@ NOTE_LIMIT = 500
 # ceiling its bound implied. The channel moved; the ceiling did not.
 NOTE_COUNT_LIMIT = 130
 
+# The bounds on `prerequisites`, witnessed here as the two above are.
+#
+# NOT THE NOTE BOUNDS, because this renders on EVERY comment where a note
+# renders on a clean verdict alone, and `assemble` makes room by dropping
+# FINDINGS -- never a disclosure section. So the count is what the comment
+# can carry beside the findings, MEASURED AGAINST ESCAPED TEXT: a
+# 250-character clause naming a path, a backticked symbol and a version
+# renders at 271, because `escape_markdown` adds a backslash per special.
+#
+# THREE, AND THE SWEEP THAT SETS IT. `MESSAGE_LIMIT` is 2000 where the
+# schema ASKS for 400, so the bound is set at the message length where
+# displacement starts rather than at the aim: at 500 characters a message,
+# five findings and three items compose to 3,782 with nothing withheld and
+# a fourth item drops one. At the 400 aim the same three cost 3,282 and
+# five items still fit. ~~Two~~ was this bound while a `limits` array
+# shared the budget; one array, so it is re-measured rather than inherited.
+PREREQUISITE_LIMIT = 250
+PREREQUISITE_COUNT_LIMIT = 3
+
 # Every C0 control character and DEL. In a message these are collapsed to
 # spaces: the body is assembled LINE BY LINE, so a newline inside a message
 # ends the bullet and whatever follows becomes body text -- a cold review
@@ -585,7 +627,7 @@ MARKER_DELIMS = ("<!--", "-->")
 
 # The fence a DISCLOSURE SECTION's text is rendered inside. Named rather than
 # spelled twice: a second spelling of the delimiter is a second thing to keep
-# in step. ~~`clean_notes` has to refuse what would close it~~ SUPERSEDED:
+# in step. ~~`clean_items` has to refuse what would close it~~ SUPERSEDED:
 # the notes section is no longer fenced, so no note can close anything.
 FENCE = "```"
 
@@ -599,6 +641,23 @@ MD_SPECIALS = re.compile(r"([\\`*_{}\[\]()#+.!|<>&~=-])")
 # reviewer CONCLUDED, not that it looked: "Checked" alone reads as a list of
 # files opened, which `read=R/T` already measures and measures better.
 NOTES_LABEL = "Checked and found sound"
+
+# The heading the prerequisites render under. THERE IS NO EMPTY FORM, and
+# ~~`PREREQUISITE_NONE` published one~~: "the change depends on nothing
+# outside this diff" is an AFFIRMATIVE ALL-CLEAR this program made up out
+# of the model's silence -- and `prerequisites_section` tests the PUBLISHED
+# list, so an array whose every entry was refused rendered that sentence
+# directly above "2 prerequisites were refused". The measured failure this
+# field exists for is a reviewer that did not name the secret the change
+# hung on; an all-clear there is worse than the silence it replaced.
+# `REVIEW_PREREQUISITES` is how none is told from a dropped field, which is
+# the job `REVIEW_NOTES_RECORDED` already does for the notes.
+PREREQUISITE_LABEL = "Must be true outside this change"
+
+# Every string array the response carries, in the order `load` reports them.
+# Named once: three sites used to spell `notes` and would each have had to
+# learn the second.
+ARRAYS = ("notes", "prerequisites")
 
 # The refusal tally `load` returns. Every exit from it carries this shape --
 # an early return of a bare 0 for the count was the same tuple with a
@@ -818,8 +877,38 @@ def normalise(message: str) -> str:
     return NORMALISE.sub(" ", message.lower()).strip()
 
 
+def raw_array(document: dict, key: str) -> list:
+    """The response's `key` array, uninspected, or [] having said why.
+
+    The schema requires all three, so a missing or mistyped one is the two
+    witnesses disagreeing about an object the CLI validated. It reads as a
+    measured empty rather than as an unmeasured run, and it says so on
+    stderr: a disagreement that produced an identical comment to a
+    conforming empty array is one nobody would ever investigate.
+    """
+    value = document.get(key)
+    if isinstance(value, list):
+        return value
+    # THE NOTES CLAUSE IS KEPT, and it is not decoration: `notes` is the
+    # array whose absence costs the comment its tick, and this message was
+    # the only thing saying so. ANY OTHER ARRAY, PRESENT OR FUTURE, gets
+    # the general wording -- which is right for one that is merely missing
+    # and would be wrong for a second array with a consequence of its own.
+    cost = (
+        ", so this run recorded no evidence"
+        if key == "notes"
+        else ", so the two validations disagree"
+    )
+    print(
+        f"review_output: the response carries no `{key}` array; the schema"
+        f" requires one{cost}",
+        file=sys.stderr,
+    )
+    return []
+
+
 def load(path: str) -> tuple:
-    """(findings, {reason: count} refused, True when supplied, raw notes).
+    """(findings, {reason: count} refused, True when supplied, raw arrays).
 
     The file is review_text.py's output: the CLI's `structured_output`, or
     nothing when the run produced none. A missing file, an unreadable one,
@@ -829,12 +918,16 @@ def load(path: str) -> tuple:
     replaces ("no finding parsed, no verdict line, and some stray text") was
     an inference from how prose happened to fail.
 
-    THE NOTES COME BACK RAW, uninspected, because two callers want different
-    things from them: `clean_notes` decides what may be rendered, and the
-    job log prints what the model wrote. A `notes` that is not an array is
-    an empty one -- the schema requires it, so this is the second witness
-    disagreeing, and `header` already withholds the tick from a run that
-    recorded nothing.
+    THE ARRAYS COME BACK RAW, uninspected, because two callers want
+    different things from them: `clean_items` decides what may be rendered,
+    and the job log prints what the model wrote. One that is not an array is
+    an empty one -- see `raw_array` -- and `header` already withholds the
+    tick from a run that recorded no evidence.
+
+    A DICT RATHER THAN A RETURN SLOT PER ARRAY. `notes` and `prerequisites`
+    are one family and every caller takes them by name, where a tuple of
+    two lists and a dict is the transposition hazard `Tally` is
+    keyword-only for. It also costs nothing when the third comes back.
 
     An entry that is not an object of the declared shape is REJECTED and
     counted, never repaired. Repairing one -- a truncation, a default, a
@@ -848,33 +941,32 @@ def load(path: str) -> tuple:
     comment's own structure, which the schema cannot express and so is not a
     disagreement at all.
     """
+    nothing: tuple = (
+        [],
+        dict.fromkeys(REFUSALS, 0),
+        False,
+        {key: [] for key in ARRAYS},
+    )
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             raw = handle.read()
     except OSError:
-        return [], dict.fromkeys(REFUSALS, 0), False, []
+        return nothing
     if not raw.strip():
-        return [], dict.fromkeys(REFUSALS, 0), False, []
+        return nothing
     try:
         document = json.loads(raw)
     except ValueError as exc:
         print(f"review_output: the findings file is not JSON: {exc}", file=sys.stderr)
-        return [], dict.fromkeys(REFUSALS, 0), False, []
+        return nothing
     if not isinstance(document, dict) or not isinstance(document.get("findings"), list):
         print(
             "review_output: the findings file carries no `findings` array",
             file=sys.stderr,
         )
-        return [], dict.fromkeys(REFUSALS, 0), False, []
+        return nothing
 
-    notes = document.get("notes")
-    if not isinstance(notes, list):
-        print(
-            "review_output: the response carries no `notes` array; the schema"
-            " requires one, so this run recorded no evidence",
-            file=sys.stderr,
-        )
-        notes = []
+    arrays = {key: raw_array(document, key) for key in ARRAYS}
 
     findings = []
     refused = dict.fromkeys(REFUSALS, 0)
@@ -886,7 +978,7 @@ def load(path: str) -> tuple:
         if verdict.normalised:
             refused["normalised"] += 1
         findings.append(verdict)
-    return findings, refused, True, notes
+    return findings, refused, True, arrays
 
 
 def build_verdict(entry):
@@ -1390,11 +1482,16 @@ def restored_section(count: int) -> tuple:
     )
 
 
-def clean_notes(value) -> tuple:
-    """(the notes that may be rendered, how many were refused).
+def clean_items(value, count_limit: int, length_limit: int) -> tuple:
+    """(the items that may be rendered, how many were refused).
 
-    `value` is the response's `notes` array. A note is MODEL TEXT written
-    by a model that has just read an untrusted diff, so it crosses the same
+    THE ONE CONTAINMENT PATH FOR EVERY STRING ARRAY the model sends --
+    `notes` and `prerequisites` -- with the bounds passed in because only
+    those differ between them. Written for notes and generalised unchanged:
+    nothing below reads an item's meaning, only its text.
+
+    `value` is one of those arrays. An item is MODEL TEXT written by a
+    model that has just read an untrusted diff, so it crosses the same
     boundary `build_verdict` holds for a finding's message, with the same
     split between collapsing what has a benign reading and refusing what
     does not:
@@ -1411,8 +1508,8 @@ def clean_notes(value) -> tuple:
       paragraph, so a backtick is text like any other. The rule cost the
       reviewer a failed tool call for quoting a fenced block it had just
       read.
-    * AN ITEM THAT IS NOT A STRING REFUSES, and so does one OVER
-      `NOTE_LIMIT` -- the second witness to the two bounds the schema
+    * AN ITEM THAT IS NOT A STRING REFUSES, and so does one over
+      `length_limit` -- the second witness to the two bounds the schema
       declares. The length is measured on the RAW string, before any
       collapsing, because that is the string the schema measured.
     * EVERY OTHER CONTROL CHARACTER IS COLLAPSED to a space, as in a
@@ -1422,8 +1519,8 @@ def clean_notes(value) -> tuple:
       remainder became a note of its own, unmeasured against `NOTE_LIMIT`.
 
     ANYTHING THE SCHEMA ALREADY FORBIDS IS A REFUSAL, NOT A SKIP -- a note
-    that is not a string, one that collapses to nothing, and every note
-    past `NOTE_COUNT_LIMIT`. Each is this program and the CLI disagreeing
+    that is not a string, one that collapses to nothing, and every item
+    past `count_limit`. Each is this program and the CLI disagreeing
     about an object the CLI validated, and a disagreement that published
     nothing and counted nothing is one nobody would ever see. ~~A blank was
     silently dropped~~, which was right while `review-note` could not write
@@ -1441,7 +1538,7 @@ def clean_notes(value) -> tuple:
         return [], 0
     notes, refused = [], 0
     for index, item in enumerate(value):
-        if index >= NOTE_COUNT_LIMIT:
+        if index >= count_limit:
             refused += 1
             continue
         # ONE BRANCH PER CAUSE, not one per condition. These two were an
@@ -1450,7 +1547,7 @@ def clean_notes(value) -> tuple:
         if not isinstance(item, str):
             refused += 1
             continue
-        if len(item) > NOTE_LIMIT:
+        if len(item) > length_limit:
             refused += 1
             continue
         if any(delim in item for delim in MARKER_DELIMS):
@@ -1462,6 +1559,32 @@ def clean_notes(value) -> tuple:
         else:
             refused += 1
     return notes, refused
+
+
+def prerequisites_section(items: list, refused: int):
+    """The prerequisites as a comment row, or None when there are none.
+
+    `notes_section`'s rendering -- an escaped paragraph per item and a tail
+    naming what was refused -- over the other array. AN EMPTY ARRAY RENDERS
+    NOTHING: see PREREQUISITE_LABEL for why there is no empty form, and note
+    that this tests the PUBLISHED list, so a wholly-refused array reaches
+    here empty and must not read as one the model left empty.
+
+    ~~It took a label and a noun~~ while `limits` shared it. One caller, so
+    both are the constants above again: a parameter serving one argument is
+    a thing to keep in step for nothing.
+    """
+    blocks = [escape_markdown(item) for item in items]
+    if refused:
+        was = "was" if refused == 1 else "were"
+        noun = "prerequisite" if refused == 1 else "prerequisites"
+        blocks.append(
+            f"-- {refused} {noun} {was} refused as text this comment"
+            " cannot carry. See the job log."
+        )
+    if not blocks:
+        return None
+    return (PREREQUISITE_LABEL, "\n\n".join(blocks), True)
 
 
 def escape_markdown(text: str) -> str:
@@ -1543,14 +1666,14 @@ def notes_section(shown: list, withheld: int, refused: int):
         noun = "note was" if refused == 1 else "notes were"
         # ~~"refused for text that would forge the comment's own
         # structure"~~, with "Every note is in the job log." after it.
-        # CORRECTED: `clean_notes` refuses on FIVE grounds and only one is
-        # a forgery; `log_notes` cannot print three of them, so the promise
+        # CORRECTED: `clean_items` refuses on FIVE grounds and only one is
+        # a forgery; `log_items` cannot print three of them, so the promise
         # was false in exactly the case a reader would follow it.
         #
         # IT NAMES THE CLASS, NOT THE CAUSES. An enumeration here is a
-        # fourth copy of `clean_notes`' branches that nothing keeps in step
+        # fourth copy of `clean_items`' branches that nothing keeps in step
         # -- this sentence has now gone stale twice, once per round of
-        # widening. `clean_notes` is the list; this says only that the note
+        # widening. `clean_items` is the list; this says only that the note
         # did not conform and where to look.
         tail.append(f"{refused} {noun} refused as text this comment cannot carry")
     if tail:
@@ -1577,7 +1700,7 @@ def fit_notes(notes: list, refused: int, kept: list, sections: list, render) -> 
     piece of evidence and a count saying so.
 
     THE CHEAP PREFIX CUT IS NOT AN OPTIMISATION, IT IS WHAT BOUNDS THE
-    LOOP. `clean_notes` passes up to NOTE_COUNT_LIMIT notes, so a run of
+    LOOP. `clean_items` passes up to NOTE_COUNT_LIMIT notes, so a run of
     one-character ones would otherwise compose a 4,000-character body a
     hundred-odd times. No note beyond the first BODY_LIMIT characters can
     fit in a BODY_LIMIT body, so cutting there changes no outcome.
@@ -1759,8 +1882,9 @@ def compose(kept: list, sections: list, render) -> str:
         parts.append("")
         parts.extend(f.line_out() for f in kept)
     # A row is (label, text) and renders inside FENCE. A third element marks
-    # text that is already markdown, which only `notes_section` sets, because
-    # only it escapes its content first.
+    # text that is already markdown, which `notes_section` and
+    # `prerequisites_section` set because they escape their content first.
+    # Every other row is model-free text from the workflow and is fenced.
     for row in sections:
         label, text, rendered = row[0], row[1], len(row) > 2 and row[2]
         parts.extend(["", f"**{label}**", ""])
@@ -1843,7 +1967,7 @@ def build(argv: list, findings: list, counts: dict, sections: list, raw) -> tupl
     # silent and this count can only reach zero three ways -- the two
     # witnesses disagreeing, every note refused as unsafe or malformed, or
     # no structured output at all. It now measures those, not silence.
-    notes, counts["note_refused"] = clean_notes(raw)
+    notes, counts["note_refused"] = clean_items(raw, NOTE_COUNT_LIMIT, NOTE_LIMIT)
     counts["notes_recorded"] = len(notes)
     counts["notes"] = 0
     counts["notes_withheld"] = 0
@@ -1981,7 +2105,7 @@ def main(argv: list) -> int:
         print(USAGE, file=sys.stderr)
         return 2
 
-    findings, refused, supplied, raw_notes = load(found)
+    findings, refused, supplied, arrays = load(found)
     rows = manifest_rows(manifest)
     restored = tuple(_flag(argv, "--restored").split())
     counts = adjudicate(
@@ -2004,15 +2128,15 @@ def main(argv: list) -> int:
         argv,
         findings,
         counts,
-        disclosures(argv, counts),
-        raw_notes,
+        disclosures(argv, counts, clean_prerequisites(arrays, counts)),
+        arrays["notes"],
     )
 
     with open(out, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(body)
 
     report(kept, findings, counts, len(body))
-    log_notes(raw_notes)
+    log_arrays(arrays)
     return metrics(argv, kept, counts, len(body))
 
 
@@ -2099,6 +2223,7 @@ def report(kept, findings, counts, size) -> None:
         )
     print(f"Comment body: {len(kept)} finding(s), {size} characters.")
     note_report(kept, counts)
+    prerequisite_report(counts)
 
 
 def note_report(kept: list, counts: dict) -> None:
@@ -2121,7 +2246,7 @@ def note_report(kept: list, counts: dict) -> None:
     if counts.get("note_refused"):
         # THE ONLY SITE THAT STILL ENUMERATES, and so the only one that can
         # go stale: the comment tail and the skipped line name a class now.
-        # One cause per `clean_notes` branch, in its order. ~~It named four
+        # One cause per `clean_items` branch, in its order. ~~It named four
         # of five and called them all schema violations~~: `not a string`
         # was missing, and a blank note conforms to `minLength: 1` -- it is
         # refused for collapsing to nothing, which the schema cannot say.
@@ -2154,14 +2279,43 @@ def note_report(kept: list, counts: dict) -> None:
         )
 
 
-def log_notes(raw) -> None:
-    """Every note the run recorded, as written, for the job log.
+def prerequisite_report(counts: dict) -> None:
+    """What the reviewer said the change depends on, for the job log."""
+    print(f"Prerequisites: {counts.get('prerequisites', 0)} recorded.")
+    if counts.get("prerequisites_refused"):
+        # NO ORDINAL. `{PREREQUISITE_COUNT_LIMIT}th` prints "3th" for every
+        # count but 4 to 20, and the number is a constant somebody will move.
+        print(
+            f"::warning::{counts['prerequisites_refused']} prerequisite(s)"
+            f" were not rendered: beyond the {PREREQUISITE_COUNT_LIMIT} this"
+            f" comment carries, not a string, over {PREREQUISITE_LIMIT}"
+            " characters, an HTML comment in the text that would forge the"
+            " comment's own structure, or blank once control characters are"
+            " collapsed"
+        )
 
-    THE RAW ARRAY, not what `clean_notes` passed: this is the only place a
-    refused note is visible at all, and a log printing only the publishable
-    ones would hide exactly the note whose wording has to change. Bounded
-    by NOTE_COUNT_LIMIT for the same reason the render is -- the array is
-    model text and the job log is unbounded.
+
+# The item bound each array is listed under, by name rather than by an
+# `== "notes"` test: an array added to ARRAYS and not to this map raises a
+# KeyError here instead of silently inheriting another array's bound, which
+# is `SEVERITY_MARK`'s rule for the same reason.
+ARRAY_BOUND = {"notes": NOTE_COUNT_LIMIT, "prerequisites": PREREQUISITE_COUNT_LIMIT}
+
+
+def log_arrays(arrays: dict) -> None:
+    """Every array the response carried, as written, for the job log."""
+    for key in ARRAYS:
+        log_items(key, arrays[key], ARRAY_BOUND[key])
+
+
+def log_items(key: str, raw, count_limit: int) -> None:
+    """Every item of one `ARRAYS` member, as written, for the job log.
+
+    THE RAW ARRAY, not what `clean_items` passed: this is the only place a
+    refused item is visible at all, and a log printing only the publishable
+    ones would hide exactly the one whose wording has to change. Bounded by
+    the same count the render is -- the array is model text and the job log
+    is unbounded.
 
     WHAT IT CANNOT PRINT, IT COUNTS, so the listing reconciles against
     REVIEW_NOTES_REFUSED. ~~"the two refusals only this second witness can
@@ -2171,7 +2325,7 @@ def log_notes(raw) -> None:
     """
     lines, skipped = [], 0
     for index, item in enumerate(list(raw)):
-        if index >= NOTE_COUNT_LIMIT or not isinstance(item, str):
+        if index >= count_limit or not isinstance(item, str):
             skipped += 1
             continue
         if not item.splitlines():
@@ -2182,7 +2336,7 @@ def log_notes(raw) -> None:
         # `::add-mask::` or `::error::` would RUN as a workflow command,
         # and the reviewer writing these notes is reading the pull request
         # under review. A note carrying a newline is several lines here and
-        # one note to `clean_notes`, which collapses it.
+        # one note to `clean_items`, which collapses it.
         lines.extend(item.splitlines())
     if not lines and not skipped:
         return
@@ -2190,21 +2344,53 @@ def log_notes(raw) -> None:
         # ~~"kept off the pull request"~~. They are published on a clean
         # verdict; this is every note the run recorded, including any the
         # comment refused or could not fit.
-        print("\nReviewer notes (every one recorded, as written):")
+        print(f"\nReviewer {key} (every one recorded, as written):")
         for line in lines:
             print(f"| {line}")
     if skipped:
         print(
-            f"\n{skipped} further item(s) in the `notes` array were neither"
-            f" listed nor published: empty, past the {NOTE_COUNT_LIMIT}-note"
+            f"\n{skipped} further item(s) in the `{key}` array were neither"
+            f" listed nor published: empty, past the {count_limit}-item"
             " bound, or not a string. The output schema forbids all three,"
             " so this is the CLI's validation and this program disagreeing."
         )
 
 
-def disclosures(argv: list, counts: dict) -> list:
-    """Every row the comment owes: the workflow's, then adjudication's."""
-    sections = read_sections(_flag(argv, "--sections"))
+def clean_prerequisites(arrays: dict, counts: dict) -> list:
+    """The prerequisites that may be rendered, with their counts set.
+
+    CLEANED HERE AND NOT IN `build`, because `disclosures` renders them and
+    this is the last point before it. `notes` stays in `build` for the one
+    reason given there: its count reaches the headline, which `assemble`
+    renders while deciding what fits.
+    """
+    items, counts["prerequisites_refused"] = clean_items(
+        arrays["prerequisites"], PREREQUISITE_COUNT_LIMIT, PREREQUISITE_LIMIT
+    )
+    counts["prerequisites"] = len(items)
+    return items
+
+
+def disclosures(argv: list, counts: dict, prerequisites: list) -> list:
+    """Every row the comment owes: the prerequisites, the workflow's, then
+    adjudication's.
+
+    PREREQUISITES LEAD, because a condition the change depends on is a
+    statement about THIS change that a reader acts on, where every row below
+    is accounting about the review. It is also the only row that renders on
+    a run with findings and on a clean one alike.
+
+    IT DOES NOT RENDER WHERE NOTHING WAS ADJUDICATED, and it does not render
+    empty. A run that produced no structured output produced no array
+    either, and an empty array is a count rather than a sentence -- see
+    PREREQUISITE_LABEL for why this program may not speak for the model's
+    silence.
+    """
+    row = None
+    if not counts["no_verdict"]:
+        row = prerequisites_section(prerequisites, counts["prerequisites_refused"])
+    sections = [row] if row else []
+    sections.extend(read_sections(_flag(argv, "--sections")))
     if dropped_total(counts, DISCLOSED):
         sections.append(drop_section(counts))
     if counts["duplicate"]:
@@ -2250,6 +2436,11 @@ def metrics(argv: list, kept: list, counts: dict, size: int) -> int:
                 ("REVIEW_NOTES", counts.get("notes", 0)),
                 ("REVIEW_NOTES_WITHHELD", counts.get("notes_withheld", 0)),
                 ("REVIEW_NOTES_REFUSED", counts.get("note_refused", 0)),
+                ("REVIEW_PREREQUISITES", counts.get("prerequisites", 0)),
+                (
+                    "REVIEW_PREREQUISITES_REFUSED",
+                    counts.get("prerequisites_refused", 0),
+                ),
                 ("REVIEW_DROPPED_FOR_SPACE", counts.get("space", 0)),
                 ("REVIEW_CHARS", size),
                 ("REVIEW_PREV_CHARS", prev_chars),
