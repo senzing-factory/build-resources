@@ -59,6 +59,16 @@ docker run --rm \
     verdict it is published in the comment as the evidence behind the tick --
     a clean verdict with nothing behind it cannot be told from a review that
     never ran
+  - `prerequisites`, a third required array in that object, is what the
+    change depends on and the review cannot check -- an organization secret
+    a new job reads. It renders on EVERY verdict, not on the clean one
+    alone, and an empty array renders NOTHING: a sentence invented out of
+    the model's silence would be an assertion the program is not entitled
+    to make, so `REVIEW_PREREQUISITES` is how none is told from a dropped
+    field. A `limits` array was BUILT AND WITHDRAWN BEFORE RELEASE, for
+    what the reviewer read and could not settle: across six measured
+    reviews prerequisites appeared in four and a limit in one, and that one
+    restated coverage `review_coverage.py` measures better
   - `review_io.py` holds the file conventions the others share
 - The review **posts a new comment on every run and leaves every earlier one
   standing**, so each review sits at its own time and thread position and

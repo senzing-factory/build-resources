@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["findings", "notes"],
+  "required": ["findings", "notes", "prerequisites"],
   "properties": {
     "findings": {
       "type": "array",
@@ -43,6 +43,18 @@
         "minLength": 1,
         "maxLength": 500,
         "description": "One note. No markdown bullet, no heading and no severity word: each is rendered on its own. A newline or any other control character is collapsed to a space. `<!--` or `-->` REFUSES the note, and so does a note over 500 characters: the comment carries a state marker that is an HTML comment, read back out of the raw body, so that text would rewrite what a later run measures. A refusal is SILENT -- nothing in your turn says it happened -- and a review whose every note is refused publishes as having established nothing. Write `an HTML comment` rather than quoting one. Aim for 120 characters."
+      }
+    },
+    "prerequisites": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 3,
+      "description": "What must be true OUTSIDE this diff for the change to work, and cannot be confirmed from what you were given: an organization secret a new job reads, an IAM permission, a branch rule, a DNS record, a version of something deployed elsewhere. One condition each. REQUIRED and MAY BE EMPTY -- an empty array publishes nothing at all, so leaving out the one condition the change hangs on loses it silently, and padding the array to look thorough puts your filler on the pull request. A PREREQUISITE IS NOT A FINDING. A finding is a defect you confirmed in this tree; this is a condition you cannot check from here, so it has no severity to carry. NOTHING REJECTS IT IF YOU WRITE IT AS ONE: it is published as a BLOCKER against a line that is not defective, and it counts toward the blocker total the build is gated on. Not for anything the diff itself settles, not for `CI must pass` or `a maintainer must review this`, and not for asking somebody to verify something.",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 250,
+        "description": "One condition. Name the thing -- the secret, the permission, the record, the version -- and say what breaks when it is not true. No markdown bullet, no heading and no severity word: each is rendered on its own. A newline or any other control character is collapsed to a space. `<!--` or `-->` REFUSES it, silently, exactly as it does a note. Aim for 120 characters; 250 is the hard limit."
       }
     }
   }
