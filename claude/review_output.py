@@ -203,6 +203,12 @@ SEVERITY_MARK = {"BLOCKER": "❌", "RISK": "⚠️"}
 # reads as a pass for a review that did not happen.
 CLEAN_MARK = "✅"
 
+# Prerequisites are neither broken nor proved, so neither ❌ nor ✅ fits and
+# ⚠️ is taken by RISK. A key: something that must be held for the change to
+# work. The mark leads the paragraph rather than a list item -- see
+# `notes_section` for why a bullet is not an option here.
+PREREQUISITE_MARK = "🔑"
+
 # What the reviewer says it could not do.
 BLIND_VERBS = r"(?:see|confirm|verify|determine|assess|review|read|open|tell)"
 
@@ -1574,7 +1580,7 @@ def prerequisites_section(items: list, refused: int):
     both are the constants above again: a parameter serving one argument is
     a thing to keep in step for nothing.
     """
-    blocks = [escape_markdown(item) for item in items]
+    blocks = [f"{PREREQUISITE_MARK} {escape_markdown(item)}" for item in items]
     if refused:
         was = "was" if refused == 1 else "were"
         noun = "prerequisite" if refused == 1 else "prerequisites"
@@ -1656,8 +1662,14 @@ def notes_section(shown: list, withheld: int, refused: int):
     characters were DELETED from the evidence the tick rests on. A paragraph
     wraps identically, keeps `\\[ \\]` literal, and needs no separator before
     the tail. Do not restore the bullet.
+
+    EACH PARAGRAPH LEADS WITH `CLEAN_MARK`, which is what a bullet was wanted
+    for -- a column the eye can run down -- without a list marker for the
+    task-list filter to key on. A mark cannot be first on a LIST ITEM either:
+    `- ✅ [ ] x` would be safe, but the rule above is about not relying on
+    where that filter looks.
     """
-    blocks = [escape_markdown(note) for note in shown]
+    blocks = [f"{CLEAN_MARK} {escape_markdown(note)}" for note in shown]
     tail = []
     if withheld:
         noun = "note" if withheld == 1 else "notes"
