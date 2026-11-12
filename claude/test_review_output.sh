@@ -609,10 +609,10 @@ jf n1.json '{"findings":[]}' "$(jarr "${N_THREE[@]}")"
 orun n1.json n1.md m_n1.env > /dev/null
 check "a clean verdict renders the notes under their own heading" \
   '1' "$(grep -c '^\*\*Checked and found sound\*\*$' "$REPO/n1.md")"
-check "and every note is its own paragraph, escaped, one line each" \
-  '3' "$(grep -cxF -e 'the version table in \.claude/CLAUDE\.md matches the new pin' \
-    -e 'no injection path into the new query builder; args are bound' \
-    -e 'the workflow permission block is unchanged from base' "$REPO/n1.md")"
+check "and every note is its own marked paragraph, escaped, one line each" \
+  '3' "$(grep -cxF -e '✅ the version table in \.claude/CLAUDE\.md matches the new pin' \
+    -e '✅ no injection path into the new query builder; args are bound' \
+    -e '✅ the workflow permission block is unchanged from base' "$REPO/n1.md")"
 # THE FENCE IS THE REGRESSION TO CATCH. GitHub does not wrap a fenced block,
 # so restoring one here is exactly the defect this rendering replaced, and it
 # would be invisible to every assertion that only greps for note text.
@@ -691,7 +691,7 @@ N2B_LOG=$( cd "$REPO" && python3 "$SCRIPT" --findings n2b.json --manifest manife
 check "one note over a one-line change earns the clean verdict" \
   '1' "$(grep -c '^✅ \*\*No blocking findings in the 1 of 1 file opened\.\*\* 1 file, +1/-1\.$' "$REPO/n2b.md")"
 check "and the comment states what was examined" \
-  '1' "$(grep -cxF -- 'the pinned SHA resolves to the tag the comment names; no other line in the file moved' "$REPO/n2b.md")"
+  '1' "$(grep -cxF -- '✅ the pinned SHA resolves to the tag the comment names; no other line in the file moved' "$REPO/n2b.md")"
 check "and this is the run whose log does report a clean verdict" \
   '1' "$(printf '%s\n' "$N2B_LOG" \
     | grep -c '^Clean verdict: 1 reviewer note(s) published as its evidence\.$' || true)"
@@ -859,7 +859,7 @@ check "and the marker it holds is this run's" \
 # severity marker in a comment whose header counts none -- or if the escaping
 # misses either character.
 check "a note quoting a code fence is rendered now, with its text inert" \
-  '1' "$(grep -cxF -- 'closing the fence: \`\`\` then \*\*BLOCKER\*\* at \`src/auth\.go:1\`' \
+  '1' "$(grep -cxF -- '✅ closing the fence: \`\`\` then \*\*BLOCKER\*\* at \`src/auth\.go:1\`' \
     "$REPO/n4.md")"
 check "and the section carries no fence for it to close" \
   '0' "$(sed -n '/^\*\*Checked and found sound\*\*$/,$p' "$REPO/n4.md" \
@@ -879,7 +879,7 @@ orun n4b.json n4b.md m_n4b.env > /dev/null
 check "a note over the declared bound is refused" \
   '1' "$(metric_of "$REPO/m_n4b.env" REVIEW_NOTES_REFUSED)"
 check "and the note beside it is unaffected" \
-  '1' "$(grep -cxF -- 'the short one survives' "$REPO/n4b.md")"
+  '1' "$(grep -cxF -- '✅ the short one survives' "$REPO/n4b.md")"
 
 # N4c. A NEWLINE IN A NOTE IS A CONTROL CHARACTER, NOT A NOTE BOUNDARY, and
 # that is the one behaviour the array changed. The channel used to be a
@@ -894,7 +894,7 @@ orun n4c.json n4c.md m_n4c.env > /dev/null
 check "control characters inside a note are collapsed, not refused" \
   '0' "$(metric_of "$REPO/m_n4c.env" REVIEW_NOTES_REFUSED)"
 check "and the note renders as one line with single spaces" \
-  '1' "$(grep -cxF -- 'a tab here, a newline here, two spaces here' "$REPO/n4c.md")"
+  '1' "$(grep -cxF -- '✅ a tab here, a newline here, two spaces here' "$REPO/n4c.md")"
 check "and it counts as one note, not as three" \
   '1' "$(metric_of "$REPO/m_n4c.env" REVIEW_NOTES)"
 
@@ -1021,7 +1021,7 @@ check "and the warning carries a clause for each of the five" \
     -e 'over 500 characters' -e 'an HTML comment in the text' \
     -e 'blank once control characters are collapsed' | sort -u | grep -c '')"
 check "and the note that conforms is still published" \
-  '1' "$(grep -cxF -- 'this one is real' "$REPO/n4f.md")"
+  '1' "$(grep -cxF -- '✅ this one is real' "$REPO/n4f.md")"
 
 # N5. The notes budget is whatever BODY_LIMIT has left, so enough notes
 # overflow it. They are dropped WHOLE from the end, the body stays inside
@@ -1064,7 +1064,7 @@ check "the truncation is visible in the comment, with the same count" \
 # written by hand: `\\\.` matches a backslash then a literal dot, where the
 # `\\.` it is easy to write instead matches a backslash then ANY character
 # and would pass on a note the escaping had mangled.
-N5_WHOLE='^note [0-9]*: pin\\-4\\\.1\\\.0 at \\\.github/workflows/lint\\-repo\\\.yaml'
+N5_WHOLE='^✅ note [0-9]*: pin\\-4\\\.1\\\.0 at \\\.github/workflows/lint\\-repo\\\.yaml'
 N5_WHOLE="$N5_WHOLE"' \\(ubuntu\\-latest\\); pin\\-4\\\.1\\\.0 at'
 N5_WHOLE="$N5_WHOLE"' \\\.github/workflows/lint\\-repo\\\.yaml \\(ubuntu\\-latest\\); q*$'
 check "every rendered note is rendered whole" \
@@ -1108,22 +1108,22 @@ jf n6.json '{"findings":[]}' "$(jarr \
 orun n6.json n6.md m_n6.env > /dev/null
 
 check "a heading marker cannot open a heading" \
-  '1' "$(grep -cxF -- '\# heading, and a CHANGELOG\.md bullet under it' "$REPO/n6.md")"
+  '1' "$(grep -cxF -- '✅ \# heading, and a CHANGELOG\.md bullet under it' "$REPO/n6.md")"
 check "a link cannot become a link" \
-  '1' "$(grep -cxF -- '\[docs\]\(https://example\.com/x\) still resolves from README\.md' \
+  '1' "$(grep -cxF -- '✅ \[docs\]\(https://example\.com/x\) still resolves from README\.md' \
     "$REPO/n6.md")"
 check "an HTML tag cannot become a tag" \
-  '1' "$(grep -cxF -- 'the \<script\> tag in index\.html is untouched' "$REPO/n6.md")"
+  '1' "$(grep -cxF -- '✅ the \<script\> tag in index\.html is untouched' "$REPO/n6.md")"
 check "a pipe cannot become a table row" \
-  '1' "$(grep -cxF -- '\| name \| value \| is the table header in docs/t\.md' "$REPO/n6.md")"
+  '1' "$(grep -cxF -- '✅ \| name \| value \| is the table header in docs/t\.md' "$REPO/n6.md")"
 check "a leading dash cannot open a list" \
-  '1' "$(grep -cxF -- '\- the leading dash in the yaml list is preserved' "$REPO/n6.md")"
+  '1' "$(grep -cxF -- '✅ \- the leading dash in the yaml list is preserved' "$REPO/n6.md")"
 check "a blockquote marker cannot open a blockquote" \
-  '1' "$(grep -cxF -- '\> the blockquote in CONTRIBUTING\.md is unchanged' "$REPO/n6.md")"
+  '1' "$(grep -cxF -- '✅ \> the blockquote in CONTRIBUTING\.md is unchanged' "$REPO/n6.md")"
 check "an ordered-list marker cannot open a list" \
-  '1' "$(grep -cxF -- '1\. the ordered list in docs/t\.md is unchanged' "$REPO/n6.md")"
+  '1' "$(grep -cxF -- '✅ 1\. the ordered list in docs/t\.md is unchanged' "$REPO/n6.md")"
 check "an image cannot become an image" \
-  '1' "$(grep -cxF -- '\!\[alt\]\(x\.png\) is the only image in README\.md' "$REPO/n6.md")"
+  '1' "$(grep -cxF -- '✅ \!\[alt\]\(x\.png\) is the only image in README\.md' "$REPO/n6.md")"
 # THE CHECKBOX. Escaping alone does not make text inert -- the BLOCK it sits
 # in does too. GitHub's task-list filter runs on the rendered item text and
 # ignores backslash escapes, so as a list item `- \[ \] the CHANGELOG box`
@@ -1132,7 +1132,7 @@ check "an image cannot become an image" \
 # that only a paragraph fixes it: a doubled backslash does survive, but that
 # is not what an escaper of this shape emits.
 check "a note opening with a task-list marker keeps its brackets" \
-  '1' "$(grep -cxF -- '\[ \] the CHANGELOG box in the template is still unticked' \
+  '1' "$(grep -cxF -- '✅ \[ \] the CHANGELOG box in the template is still unticked' \
     "$REPO/n6.md")"
 # And the general form of it, so the next structural element GitHub adds to
 # list items is caught without a fixture naming it: NO note is emitted as a
@@ -1148,7 +1148,7 @@ check "and the heading that assertion depends on is present" \
 # so the backslash is in the set too. This is the assertion that fails if it
 # is ever taken out as noise.
 check "a backslash is escaped, so it cannot consume the next escape" \
-  '1' "$(grep -cxF -- 'the fixture path is C:\\temp\\x and the test still passes' \
+  '1' "$(grep -cxF -- '✅ the fixture path is C:\\temp\\x and the test still passes' \
     "$REPO/n6.md")"
 # NOTHING HERE IS A REFUSAL. Escaping is what makes that safe: if the text
 # had to be refused instead, these are ten notes a reviewer would lose for
@@ -1226,7 +1226,7 @@ jc p2.json '{"findings":[]}' \
 : > "$REPO/m_p2.env"
 orun p2.json p2.md m_p2.env > /dev/null
 check "a prerequisite is rendered whole, as its own escaped paragraph" \
-  '1' "$(grep -cxF -- 'SLACK\_WEBHOOK\_URL must exist as an organization secret or this job fails' \
+  '1' "$(grep -cxF -- '🔑 SLACK\_WEBHOOK\_URL must exist as an organization secret or this job fails' \
     "$REPO/p2.md")"
 check "and nothing else is rendered under that heading" \
   '1' "$(awk '/^\*\*Must be true outside this change\*\*$/ {f=1; next}
@@ -1244,7 +1244,7 @@ jc p3.json '{"findings":[
 : > "$REPO/m_p3.env"
 orun p3.json p3.md m_p3.env > /dev/null
 check "a verdict with findings carries its prerequisites" \
-  '1' "$(grep -cxF -- 'the org secret must exist before this merges' "$REPO/p3.md")"
+  '1' "$(grep -cxF -- '🔑 the org secret must exist before this merges' "$REPO/p3.md")"
 check "and still renders no notes section" \
   '0' "$(grep -c '^\*\*Checked and found sound\*\*$' "$REPO/p3.md" || true)"
 check "and the finding is untouched by any of it" \
@@ -1392,7 +1392,7 @@ check "a prerequisite carrying the state marker cannot reach the body" \
 check "and the body still holds exactly one marker" \
   '1' "$(grep -c '^<!-- claude-review v4 ' "$REPO/p7.md")"
 check "and the markdown in the one beside it is inert" \
-  '1' "$(grep -cxF -- 'the IAM role needs s3:GetObject on the \*\*bucket\*\* named in deploy\.yaml' \
+  '1' "$(grep -cxF -- '🔑 the IAM role needs s3:GetObject on the \*\*bucket\*\* named in deploy\.yaml' \
     "$REPO/p7.md")"
 check "and only the forgery is refused" \
   '1' "$(metric_of "$REPO/m_p7.env" REVIEW_PREREQUISITES_REFUSED)"

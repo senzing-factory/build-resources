@@ -335,7 +335,7 @@ Report:
   on judgement — an `Authorization:`/`Bearer`/`token=`/`api_key=`/`password=`
   substring, a URI with a password in it, or a `ghp_`/`ghs_`/`github_pat_`/
   `sk-`/`AKIA`/`xoxb-`/`-----BEGIN` prefix anywhere inside a rule.
-- `.claude/settings.local.json` tracked by git — always a BLOCKER, whatever it
+- `.claude/settings.local.json` tracked by Git — always a BLOCKER, whatever it
   contains today. It is per-developer and belongs in `.gitignore`; a clean copy
   today is the file that carries the next secret. Being added with `git add -f`
   past an ignore rule is the same finding, not an exemption.
