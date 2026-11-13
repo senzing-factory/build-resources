@@ -245,7 +245,7 @@ check "a clean transcript becomes a clean verdict on the pull request" \
 # CLI validated it, this program passed it through, and the adjudicator
 # published it. Nothing on disk beside the transcript was involved.
 check "and the evidence it carried is published beneath it" \
-  '1' "$(grep -c '^the only changed line is a version pin and it resolves$' "$WORK/clean_body.md")"
+  '1' "$(grep -c '^✅ the only changed line is a version pin and it resolves$' "$WORK/clean_body.md")"
 check "an errored transcript says nothing was adjudicated instead" \
   '1' "$(grep -c '^\*\*The reviewer produced no structured output\.\*\*' \
     "$WORK/maxturns_body.md")"
