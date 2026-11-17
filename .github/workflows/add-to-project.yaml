@@ -69,6 +69,9 @@ jobs:
           # token scopes to the one repository that needs it.
           repositories: ${{ github.event.repository.name }}
           permission-organization-projects: write
+          # Both, because addProjectV2ItemById must resolve the node it links:
+          # every caller but the dependabot wrapper fires on `issues`.
+          permission-issues: read
           permission-pull-requests: read
 
       - name: add to project
