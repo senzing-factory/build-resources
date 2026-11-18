@@ -729,7 +729,11 @@ jobs:
           # the default branch -- measured 2026-10-29, five runs pinned at a
           # branch that every one of them ignored.
           ACTUAL_SHA=$(git -C build-resources rev-parse HEAD 2>/dev/null || echo "")
-          echo "build-resources expected: ${EXPECTED_SHA:-<empty>}"
+          # `job.workflow_sha` is the REF's object, and for an ANNOTATED tag --
+          # which `v4` is -- that is the tag object. checkout dereferences it to
+          # a commit, so comparing the raw values can never match. Fails closed.
+          EXPECTED_COMMIT=$(git -C build-resources rev-parse -q --verify "${EXPECTED_SHA}^{commit}" 2>/dev/null || echo "$EXPECTED_SHA")
+          echo "build-resources expected: ${EXPECTED_SHA:-<empty>} -> ${EXPECTED_COMMIT:-<unresolved>}"
           echo "build-resources actual:   ${ACTUAL_SHA:-<no checkout>}"
           echo "called from:              ${CALLER_REPO}"
           echo "workflow file's repo:     ${WORKFLOW_REPO:-<not supplied>}"
@@ -762,11 +766,11 @@ jobs:
 
           # The mismatch check, kept: a resolved pin that the checkout did
           # not honour is the same hazard arriving by another route.
-          if [ -n "$EXPECTED_SHA" ] && [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-            echo "::warning::build-resources is not at the pinned commit"
+          if [ -n "$EXPECTED_SHA" ] && [ "$ACTUAL_SHA" != "$EXPECTED_COMMIT" ]; then
+            echo "::warning::build-resources is not at the commit its ref resolves to"
             {
               echo "REVIEW_OUTCOME=error"
-              echo "REVIEW_ERROR=the reviewer's own resources are not at the pinned commit (expected ${EXPECTED_SHA}, got ${ACTUAL_SHA:-nothing})"
+              echo "REVIEW_ERROR=the reviewer's own resources are not at the commit its ref resolves to (expected ${EXPECTED_COMMIT}, got ${ACTUAL_SHA:-nothing})"
             } >> "$GITHUB_ENV"
             exit 0
           fi
