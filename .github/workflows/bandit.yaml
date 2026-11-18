@@ -13,7 +13,7 @@ on:
         description: Space-separated list of directories to scan
         required: false
         type: string
-      configfile:
+      config-file:
         default: ""
         description: Config file to read. Empty means none. A pyproject.toml
           with no [tool.bandit] section is accepted and silently ignored.
@@ -44,11 +44,11 @@ jobs:
       - name: Run Bandit
         env:
           BANDIT_TARGETS: ${{ inputs.targets }}
-          BANDIT_CONFIGFILE: ${{ inputs.configfile }}
+          BANDIT_CONFIG_FILE: ${{ inputs.config-file }}
         run: |
-          # bandit reads TOML from stdlib on 3.11+; the extra covers 3.9/3.10.
+          # Python 3.11 and later read TOML natively; the extra covers 3.9/3.10.
           pip install 'bandit[toml]'
           IFS=' ' read -ra targets <<< "$BANDIT_TARGETS"
           args=(-r "${targets[@]}")
-          [ -n "$BANDIT_CONFIGFILE" ] && args=(-c "$BANDIT_CONFIGFILE" "${args[@]}")
+          [ -n "$BANDIT_CONFIG_FILE" ] && args=(-c "$BANDIT_CONFIG_FILE" "${args[@]}")
           bandit "${args[@]}"

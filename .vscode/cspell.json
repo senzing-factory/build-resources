@@ -115,6 +115,7 @@
     "pycache",
     "pyeof",
     "Pylint",
+    "pyproject",
     "quotePath",
     "redoer",
     "returncode",
