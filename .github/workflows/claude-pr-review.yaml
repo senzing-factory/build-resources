@@ -16,7 +16,7 @@ jobs:
     # rolled-back 4.5.1, so this repository has been reviewing its own changes
     # to the reviewer with a version from before every rewrite -- including
     # the two most recent, which it therefore never exercised.
-    uses: senzing-factory/build-resources/.github/workflows/claude-pull-request-review.yaml@0dc7676da80e9fca2726de3fb98019bb5912ca5f # 4.10.4
+    uses: senzing-factory/build-resources/.github/workflows/claude-pull-request-review.yaml@0707e20ef8c2a57a5ff0904d8f6ff810b0650682 # 4.10.5
     permissions:
       contents: read
       pull-requests: write
