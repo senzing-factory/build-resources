@@ -298,18 +298,26 @@ defect hunt, per the next section.
 defect hunt as Lane B**, per the next section. Size changes the ORDER you work
 in; it never changes whether a file is reviewed.
 
-Rank by the `changes` column and start with the files that carry behavior.
-Fixtures, generated output and documentation come last — after the code, not
-instead of it. If a patch is plainly machine-generated, read enough to confirm
-that and move on; the exclude globs are a path-glob list and they miss
-generated files that do not sit under a matching directory (`*.pb.go`,
-`*_gen.rs`, a schema dump, an API client).
+**NEITHER LANE B NOR LANE C LICENSES A SHORT REVIEW.** The defects are in the
+files that carry behavior, so a review that did not open them has not
+happened. Reporting one finding from a documentation file while the source
+goes unread is a failed review, not a terse one — and the coverage count names
+the files you did not open, on the pull request. The requirement is identical
+in both lanes; the ordering below is the only thing size changes.
 
-**A large change does not license a short review.** On a change this size the
-defects are in the largest behavior files, so a review that did not open them
-has not happened. Reporting one finding from a documentation file while the
-source goes unread is a failed review, not a terse one — and the coverage count
-names, on the pull request, every file you did not open.
+> **UNVERIFIED, and knowingly so.** Nothing in this repository can execute a
+> prompt, so moving this paragraph out of Lane C is reasoning about
+> instruction text. What was lane-scoped was one RESTATEMENT -- the
+> unconditional "open every row it lists" near the top of this file reaches
+> every lane and always did. Treat this as a hypothesis until two runs on a
+> comparable Lane B diff say otherwise.
+
+Rank by the `changes` column, largest first, and start with the files that
+carry behavior. Fixtures, generated output and documentation come last —
+after the code, not instead of it. If a patch is plainly machine-generated,
+read enough to confirm that and move on; the exclude globs are a path-glob
+list and they miss generated files that do not sit under a matching
+directory (`*.pb.go`, `*_gen.rs`, a schema dump, an API client).
 
 **Never split your review into parts and never produce more than one comment.**
 One review is one `StructuredOutput` call carrying every finding you have.
