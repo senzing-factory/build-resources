@@ -84,7 +84,7 @@ jobs:
         if: >-
           (failure() || cancelled())
           && (env.SLACK_BOT_TOKEN != '' || env.SLACK_WEBHOOK_URL != '')
-        uses: senzing-factory/build-resources/slack-failure-notification@0707e20ef8c2a57a5ff0904d8f6ff810b0650682 # 4.10.5
+        uses: senzing-factory/build-resources/slack-failure-notification@2229049ffa07d2ddb3cafca320f83d2145ce1819 # 4.11.2
         with:
           job-status: ${{ job.status }}
           slack-channel: ${{ secrets.SLACK_CHANNEL }}
