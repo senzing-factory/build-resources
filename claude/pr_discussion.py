@@ -19,8 +19,9 @@ boundary is worth having in its own file.
 THREE INDEPENDENT DEFENCES, because any one of them can have a bug:
 
   1. EVERY AUTHOR LINE IS PREFIXED `| `, and this program's own lines
-     `|= `. `_quote_block` emits `| ` or a bare `|` and nothing else, so no
-     body line can begin `|=` -- which makes the attribution headers
+     `|= `. `review_io.quote_block` emits `| ` or a bare `|` and nothing
+     else, so no body line can begin `|=` -- which makes the attribution
+     headers
      unforgeable by construction rather than by sanitising. That matters
      because the prompt lets a MAINTAINER's stated rationale retire a
      finding, so a commenter who could forge a header could put words in an
@@ -66,14 +67,9 @@ USAGE = "usage: pr_discussion.py <out_file> <pr_json> <issue_json> <review_json>
 #
 # The prefixing alone was the earlier design. A nonce is what makes the
 # fence sound under a future change to the quoting -- a bug in
-# `_quote_block`, a new entry kind that forgets to call it -- rather than
-# only as long as that one function stays correct.
+# `review_io.quote_block`, a new entry kind that forgets to call it --
+# rather than only as long as that one function stays correct.
 DISCUSSION_FENCE = "===== {} UNTRUSTED PR DISCUSSION {} ====="
-
-# The nonce's shape. Validated rather than trusted, because it arrives
-# through the environment: a caller that set it to prose, or to something
-# containing a newline, would produce a fence the prompt cannot describe.
-NONCE_PATTERN = re.compile(r"\A[0-9a-f]{8,64}\Z")
 
 # GitHub's fixed vocabulary. Anything else is an author-supplied surprise
 # and is reported as UNKNOWN rather than echoed.
@@ -283,40 +279,6 @@ def sanitiser_notice(counts: dict) -> str:
     return "|= sanitised: removed " + ", ".join(parts) + "\n"
 
 
-def run_nonce() -> str:
-    """The fence nonce for this run, from DISCUSSION_NONCE or generated.
-
-    Generated when absent rather than refused, so the program is usable
-    standalone and in its fixtures; the workflow always supplies one, and
-    one it generated per run is the only kind that is unguessable to an
-    author writing a comment before the run starts.
-    """
-    supplied = os.environ.get("DISCUSSION_NONCE", "")
-    if NONCE_PATTERN.match(supplied):
-        return supplied
-    if supplied:
-        print(
-            "DISCUSSION_NONCE must be 8-64 lowercase hex digits; generating"
-            " one instead",
-            file=sys.stderr,
-        )
-    return os.urandom(8).hex()
-
-
-def _quote_block(text: str) -> str:
-    """Prefix every author line with "| ", so no data line can be a delimiter.
-
-    The prefix is exactly "| " (or a bare "|" for an empty line), which is
-    what makes the "|= " channel in render_entry unforgeable: author text
-    can never produce a line whose second character is "=".
-    """
-    flat = text.replace("\r\n", "\n").replace("\r", "\n")
-    out = []
-    for line in flat.split("\n"):
-        out.append(f"| {line}\n" if line else "|\n")
-    return "".join(out)
-
-
 def _login(value) -> str:
     """A GitHub login, reduced to the characters a login can contain."""
     text = "".join(c for c in str(value or "") if c.isalnum() or c in "-_[]")
@@ -414,7 +376,8 @@ def render_entry(entry: dict, index: int, total: int, cap: int) -> str:
     words in an OWNER's mouth -- which this prompt lets RETIRE a finding.
 
     Program-written lines therefore go on "|= " and author text on "| ".
-    _quote_block emits "| " or a bare "|" and nothing else, so no body line
+    review_io.quote_block emits "| " or a bare "|" and nothing else, so no body
+    line
     can begin "|=". Unforgeable by construction rather than by sanitizing.
     """
     body = entry["body"].strip()
@@ -433,7 +396,7 @@ def render_entry(entry: dict, index: int, total: int, cap: int) -> str:
     # text it was removed from.
     head += sanitiser_notice(entry.get("removed") or {})
     tail = "|= entry truncated to fit the byte budget\n" if truncated else ""
-    return head + _quote_block(body) + tail + "|\n"
+    return head + review_io.quote_block(body) + tail + "|\n"
 
 
 def _keep_from(rendered: list, budget: int) -> int:
@@ -498,7 +461,7 @@ def write_fenced(out_path: str, summary: str, blocks: list) -> None:
     preamble naming one value and a fence carrying another would tell the
     reviewer to distrust the real fence and trust whatever an author wrote.
     """
-    nonce = run_nonce()
+    nonce = review_io.run_nonce("DISCUSSION_NONCE")
     begin = DISCUSSION_FENCE.format("BEGIN", nonce)
     end = DISCUSSION_FENCE.format("END", nonce)
     with open(out_path, "w", encoding="utf-8", newline="\n") as handle:

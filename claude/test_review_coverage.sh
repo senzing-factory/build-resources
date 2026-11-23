@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cspell:ignore crun jsonl  -- test fixture / local constant names, not vocabulary
+# cspell:ignore crun jsonl noledger NOLEDGER BADLEDGER  -- test fixture / local constant names, not vocabulary
 # Fixture tests for review_coverage.py. No framework: builds a manifest and a
 # Claude Code stream-json transcript, runs the checker, and checks the count
 # and the named misses.
@@ -29,6 +29,14 @@
 # transcript, and demanding a read
 # of a row that nothing could ever open -- a deleted file or a binary one --
 # which would make every pull request containing one permanently uncovered.
+#
+# AND THE QUESTION SPLIT IN TWO when the patches moved into the prompt. A
+# supplied row has nothing left for the model to fetch, so a `Read` count
+# over it is a measured zero on a review that saw everything; the fixtures
+# below therefore assert that `--supplied` takes those rows OUT of the read
+# population, that it leaves the budget-dropped and no-patch rows IN it, and
+# that the two numbers are never added together. Without the flag this is
+# the program it was before, which the rest of the fixtures still exercise.
 #
 # Usage:  ./test_review_coverage.sh     # from anywhere; exits non-zero on failure
 set -euo pipefail
@@ -549,17 +557,27 @@ check "the deletion as [DELETED]" \
 check "the restored path as [RESTORED]" \
   '1' "$(printf '%s\n' "$WITHHELD_LOG" | grep -c '^  = \.claude/agents/big\.md \[RESTORED\]$')"
 
-# TWO COPIES OF ONE TOKEN SET, in two modules, with nothing asserting they
-# match. review_coverage.NO_PATCH decides whether a row is openable;
+# TWO LISTS OF ONE TOKEN SET, with nothing asserting they match.
+# `review_io.NO_PATCH` decides whether a row is openable;
 # review_output.REASONS maps the same tokens to coverage reason codes. Add a
 # token to one and not the other and nothing errors: a row would be openable
 # here and report `UNREAD` there, or the reverse. The per-file cap's token
 # was removed from both by hand when truncation replaced withholding, which
 # is exactly the move that gets forgotten next time.
-CROSS=$(cd "$HERE" && python3 -c 'import review_coverage, review_output
-print("same" if sorted(review_coverage.NO_PATCH) == sorted(review_output.REASONS)
-      else f"{sorted(review_coverage.NO_PATCH)} != {sorted(review_output.REASONS)}")')
+#
+# ~~review_coverage.NO_PATCH~~ was a THIRD copy, declared alongside
+# patch_block's own; both now read review_io's, so only the mapping below
+# can still drift.
+CROSS=$(cd "$HERE" && python3 -c 'import review_io, review_output
+print("same" if sorted(review_io.NO_PATCH) == sorted(review_output.REASONS)
+      else f"{sorted(review_io.NO_PATCH)} != {sorted(review_output.REASONS)}")')
 check "NO_PATCH and REASONS cover exactly the same tokens" 'same' "$CROSS"
+# AND THE TWO READERS OF THE MANIFEST SHARE ONE OBJECT, not two equal ones.
+SAME_OBJECT=$(cd "$HERE" && python3 -c 'import patch_block, review_coverage, review_io
+print(patch_block.review_io.NO_PATCH is review_io.NO_PATCH
+      and review_coverage.review_io.NO_PATCH is review_io.NO_PATCH)')
+check "patch_block and review_coverage read the same no-patch tokens" \
+  'True' "$SAME_OBJECT"
 
 # Segment-wise, or `.husky-local/` would ride in on `.husky`.
 printf 'modified\t5\t.husky-local/y.md\t-\n' > "$WORK/near.tsv"
@@ -703,6 +721,193 @@ check "the off-workspace cause is escaped the same way" \
 # ignored".
 check "one openable row and the unreadable envelope is unmeasured again" \
   'unmeasured' "$(coverage_of "$(crun manifest.tsv noblocks.jsonl)")"
+
+# ---------------------------------------------------------------------------
+# THE SUPPLY LEDGER. patch_block.py writes one row per manifest row saying
+# whether that row's patch reached the prompt; this program divides by it.
+# ---------------------------------------------------------------------------
+sup() { # sup <ledger> <manifest> <transcript> -> the program's stdout
+  python3 "$SCRIPT" "$WORK/$2" "$WORK/$3" --workspace "$W" \
+    --supplied "$WORK/$1"
+}
+supplied_of() {
+  printf '%s\n' "$1" | sed -n 's/^Supplied into the prompt: \([^ ]*\).*/\1/p'
+}
+
+# Every row with a patch supplied; the `-` row has none and still has to be
+# read. The thin transcript opened STATUS.md and nothing else.
+printf '%s\n' \
+  'supplied	900	.claude/STATUS.md	pr-files/0002.patch' \
+  'unpatched	0	crates/analyzer/src/analyzer.rs	-' \
+  'supplied	800	crates/analyzer/src/report.rs	pr-files/0018.patch' \
+  'supplied	700	crates/analyzer/src/catalog.rs	pr-files/0016.patch' \
+  'supplied	600	crates/analyzer/tests/parity/run_parity.py	pr-files/0032.patch' \
+  > "$WORK/ledger_all.tsv"
+
+ALL_SUPPLIED=$(sup ledger_all.tsv manifest.tsv thin.jsonl)
+check "a supplied row leaves the read population" \
+  '0/1' "$(coverage_of "$ALL_SUPPLIED")"
+check "and the supply number is reported separately" \
+  '4/4' "$(supplied_of "$ALL_SUPPLIED")"
+# THE ONE ROW LEFT is the one with no patch -- the 2,145-line file the
+# original failure turned on. Supplying four patches must not retire it.
+check "the row nothing could supply is still named unopened" \
+  'crates/analyzer/src/analyzer.rs [WORKTREE]' "$(missed_of "$ALL_SUPPLIED")"
+
+# THE BUDGET-DROPPED ROW stays in the read population, and its patch file is
+# what the prompt sent the reviewer to open.
+printf '%s\n' \
+  'supplied	900	.claude/STATUS.md	pr-files/0002.patch' \
+  'unpatched	0	crates/analyzer/src/analyzer.rs	-' \
+  'dropped	400000	crates/analyzer/src/report.rs	pr-files/0018.patch' \
+  'supplied	700	crates/analyzer/src/catalog.rs	pr-files/0016.patch' \
+  'supplied	600	crates/analyzer/tests/parity/run_parity.py	pr-files/0032.patch' \
+  > "$WORK/ledger_dropped.tsv"
+DROPPED=$(sup ledger_dropped.tsv manifest.tsv thin.jsonl)
+check "a dropped row stays in the read population" \
+  '0/2' "$(coverage_of "$DROPPED")"
+check "and is not counted as supplied" \
+  '3/4' "$(supplied_of "$DROPPED")"
+check "and is named, with the patch it was told to open" \
+  'crates/analyzer/src/analyzer.rs [WORKTREE],crates/analyzer/src/report.rs [PATCH]' \
+  "$(missed_of "$DROPPED")"
+check "the dropped row is listed under supply too" \
+  '1' "$(printf '%s\n' "$DROPPED" | grep -c '^  % crates/analyzer/src/report\.rs$')"
+
+# AN UNREADABLE ROW IS NOT SUPPLIED EITHER. patch_block.py records a row
+# whose patch FILE would not open as `unreadable`; a state this program did
+# not branch on would leave the row in neither supply list, so the supply
+# number would read 3 of 3 over a change one patch short.
+printf '%s\n' \
+  'supplied	900	.claude/STATUS.md	pr-files/0002.patch' \
+  'unpatched	0	crates/analyzer/src/analyzer.rs	-' \
+  'unreadable	0	crates/analyzer/src/report.rs	pr-files/0018.patch' \
+  'supplied	700	crates/analyzer/src/catalog.rs	pr-files/0016.patch' \
+  'supplied	600	crates/analyzer/tests/parity/run_parity.py	pr-files/0032.patch' \
+  > "$WORK/ledger_unread.tsv"
+UNREAD=$(sup ledger_unread.tsv manifest.tsv thin.jsonl)
+check "an unreadable row is not counted as supplied" \
+  '3/4' "$(supplied_of "$UNREAD")"
+check "and stays in the read population" \
+  '0/2' "$(coverage_of "$UNREAD")"
+check "and is listed under supply as missing" \
+  '1' "$(printf '%s\n' "$UNREAD" | grep -c '^  % crates/analyzer/src/report\.rs$')"
+# AND IT GETS ITS OWN REASON CODE. ~~It rendered `[PATCH]`~~ -- literally
+# true, a patch file WAS written for the row -- so the same comment carried
+# `report.rs [PATCH]` under "Files the reviewer did not open" beside a
+# section row saying that file's patch could not be read: two accounts of
+# one path, the self-contradiction class this whole change is about. The
+# ledger already holds the answer, so the code is read off it.
+check "an unreadable row is not blamed on the reviewer" \
+  'crates/analyzer/src/analyzer.rs [WORKTREE],crates/analyzer/src/report.rs [UNREADABLE]' \
+  "$(missed_of "$UNREAD")"
+check "and no unreadable row still reads as a patch it declined to open" \
+  '0' "$(printf '%s\n' "$UNREAD" | grep -c '^  ? crates/analyzer/src/report\.rs \[PATCH\]$' || true)"
+check "the legend explains the new code beside the other two" \
+  '1' "$(printf '%s\n' "$UNREAD" | grep -c 'UNREADABLE = its patch file could not be read')"
+
+# A TRUNCATED ROW IS IN BOTH. Its patch reached the prompt and the patch is
+# only part of the change, so it counts as supplied and still needs a read.
+printf '%s\n' \
+  'truncated	900	.claude/STATUS.md	pr-files/0002.patch' \
+  'unpatched	0	crates/analyzer/src/analyzer.rs	-' \
+  'supplied	800	crates/analyzer/src/report.rs	pr-files/0018.patch' \
+  'supplied	700	crates/analyzer/src/catalog.rs	pr-files/0016.patch' \
+  'supplied	600	crates/analyzer/tests/parity/run_parity.py	pr-files/0032.patch' \
+  > "$WORK/ledger_cut.tsv"
+CUT=$(sup ledger_cut.tsv manifest.tsv thin.jsonl)
+check "a truncated row counts as supplied" \
+  '4/4' "$(supplied_of "$CUT")"
+check "and still has to be read -- here it was" \
+  '1/2' "$(coverage_of "$CUT")"
+
+# THE COUNTS THE WORKFLOW READS, and the supply three are never the token:
+# they come from the ledger, so no failure of the transcript can make them
+# unknown. Here the envelope is unreadable and they stand anyway.
+: > "$WORK/supply_env.txt"
+python3 "$SCRIPT" "$WORK/manifest.tsv" "$WORK/noblocks.jsonl" \
+  --workspace "$W" --supplied "$WORK/ledger_all.tsv" \
+  --github-env "$WORK/supply_env.txt" > /dev/null
+check "an unreadable envelope withholds the read counts and not the supply ones" \
+  'COVERAGE_TOTAL=unmeasured COVERAGE_READ=unmeasured COVERAGE_UNCOVERED=unmeasured COVERAGE_EXEMPT=unmeasured SUPPLY_TOTAL=4 SUPPLY_SUPPLIED=4 SUPPLY_MISSING=0' \
+  "$(tr '\n' ' ' < "$WORK/supply_env.txt" | sed 's/ $//')"
+
+# NO LEDGER IS NOT AN EMPTY LEDGER. Without the flag every openable row is
+# in the read population -- the pre-inlining behaviour -- and no SUPPLY
+# count is written at all, because `0 of 0` would say no row had a patch.
+: > "$WORK/noledger_env.txt"
+NOLEDGER=$(python3 "$SCRIPT" "$WORK/manifest.tsv" "$WORK/thin.jsonl" \
+  --workspace "$W" --github-env "$WORK/noledger_env.txt")
+check "no ledger puts every openable row back in the read population" \
+  '1/5' "$(coverage_of "$NOLEDGER")"
+check "and writes no supply count to pretend to one" \
+  '0' "$(grep -c '^SUPPLY_' "$WORK/noledger_env.txt" || true)"
+check "and says so rather than reporting zero supplied" \
+  '1' "$(printf '%s\n' "$NOLEDGER" | grep -c '^Supplied into the prompt: not measured')"
+
+# A LEDGER THAT CANNOT BE READ is the same as none, not every row missing:
+# calling every row not supplied because a file is missing would fail the
+# change for a defect in the tooling.
+BADLEDGER=$(python3 "$SCRIPT" "$WORK/manifest.tsv" "$WORK/thin.jsonl" \
+  --workspace "$W" --supplied "$WORK/does_not_exist.tsv" 2>/dev/null)
+check "an unreadable ledger degrades to no ledger" \
+  '1/5' "$(coverage_of "$BADLEDGER")"
+
+# ---------------------------------------------------------------------------
+# AN EMPTY READ POPULATION HAS THREE CAUSES NOW, AND THE ESCAPE MUST NAME
+# THE RIGHT ONE.
+# ---------------------------------------------------------------------------
+#
+# THE DEFECT. Both escapes above gated on "no row was covered or uncovered",
+# which used to mean "nothing was openable" and now is also satisfied
+# whenever every openable row was SUPPLIED -- which, since the patches moved
+# into the prompt, is most pull requests. A two-file change with both patches
+# in the prompt and an unreadable transcript envelope printed "No manifest
+# row was openable, so the counts stand" beside `Exempt: 0`, which
+# contradicts it, and told whoever read it to disregard the one diagnostic
+# that catches a stream-json envelope regression.
+printf '%s\n' \
+  'modified	812	.claude/STATUS.md	pr-files/0002.patch' \
+  'modified	424	crates/analyzer/src/report.rs	pr-files/0018.patch' \
+  > "$WORK/two_file.tsv"
+printf '%s\n' \
+  'supplied	900	.claude/STATUS.md	pr-files/0002.patch' \
+  'supplied	800	crates/analyzer/src/report.rs	pr-files/0018.patch' \
+  > "$WORK/ledger_two.tsv"
+: > "$WORK/all_sup_env.txt"
+ALL_SUP=$(python3 "$SCRIPT" "$WORK/two_file.tsv" "$WORK/noblocks.jsonl" \
+  --workspace "$W" --supplied "$WORK/ledger_two.tsv" \
+  --github-env "$WORK/all_sup_env.txt")
+check "every openable row supplied leaves the read population empty" \
+  '0/0' "$(coverage_of "$ALL_SUP")"
+check "and both patches are still reported as supplied" \
+  '2/2' "$(supplied_of "$ALL_SUP")"
+check "and no row was exempt, which is what made the old wording false" \
+  '0' "$(exempt_of "$ALL_SUP")"
+check "the counts stand rather than becoming the token" \
+  'COVERAGE_TOTAL=0 COVERAGE_READ=0 COVERAGE_UNCOVERED=0 COVERAGE_EXEMPT=0 SUPPLY_TOTAL=2 SUPPLY_SUPPLIED=2 SUPPLY_MISSING=0' \
+  "$(tr '\n' ' ' < "$WORK/all_sup_env.txt" | sed 's/ $//')"
+
+# THE WORDING IS THE FIX. The envelope warning still fires -- it is a real
+# defect -- but it must say WHY nothing depended on the transcript, and
+# being openable is not the reason here.
+check "the envelope warning still fires" \
+  '1' "$(printf '%s\n' "$ALL_SUP" | grep -c '::warning::no tool_use or tool_result block')"
+check "and it names supply rather than what was openable" \
+  '1' "$(printf '%s\n' "$ALL_SUP" | grep -c "Every openable row's patch was supplied into the prompt, so the counts stand")"
+check "and never claims no row was openable" \
+  '0' "$(printf '%s\n' "$ALL_SUP" | grep -c 'row was openable, so the counts stand' || true)"
+check "the line beside the counts names supply too" \
+  '1' "$(printf '%s\n' "$ALL_SUP" | grep -c "^Nothing depended on the transcript -- every openable row's patch was supplied into the prompt -- so the")"
+check "and does not call a two-row manifest a change with no openable row" \
+  '0' "$(printf '%s\n' "$ALL_SUP" | grep -c 'No openable row' || true)"
+
+# THE OTHER TWO CAUSES KEEP THEIR OWN WORDING. A manifest with nothing to
+# open still says so, and one openable row still withholds the counts.
+check "nothing openable still says so" \
+  '1' "$(printf '%s\n' "$ALLEXEMPT_LOG" | grep -c 'No manifest row was openable, so the counts stand')"
+check "and an openable row still withholds the counts" \
+  '1' "$(printf '%s\n' "$(crun manifest.tsv noblocks.jsonl)" | grep -c 'Coverage is reported as')"
 
 if [ "$FAILED" -eq 0 ]; then
   echo "all review_coverage.py tests passed"

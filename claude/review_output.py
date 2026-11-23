@@ -6,6 +6,7 @@
                      [--previous <file>] [--metrics <file>]
                      [--head <sha>] [--lane <A|B|C>]
                      [--coverage-read N] [--coverage-total N]
+                     [--supply-supplied N] [--supply-total N]
                      [--summary <text>] [--restored "<paths>"]
 
 `--findings` names a JSON file holding `findings` and the string arrays
@@ -174,6 +175,7 @@ USAGE = (
     "                        [--previous <file>] [--metrics <file>]\n"
     "                        [--head <sha>] [--lane <A|B|C>]\n"
     "                        [--coverage-read N] [--coverage-total N]\n"
+    "                        [--supply-supplied N] [--supply-total N]\n"
     '                        [--summary <text>] [--restored "<paths>"]'
 )
 
@@ -683,10 +685,17 @@ FLAGS = (
     "--lane",
     "--coverage-read",
     "--coverage-total",
+    "--supply-supplied",
+    "--supply-total",
     "--truncated",
     "--summary",
     "--restored",
 )
+
+# `_flag`'s default when the question is whether a flag was NAMED at all,
+# distinctly from being named empty. A NUL cannot reach here: a
+# process's arguments are NUL-terminated, so none can carry one.
+NOT_GIVEN = "\x00"
 
 
 def counter_flag(argv: list, name: str) -> str:
@@ -716,12 +725,10 @@ def manifest_rows(path: str) -> dict:
 def supply_counts(rows: dict, restored: tuple) -> tuple:
     """(rows that got a patch, rows that could be opened at all).
 
-    THE DENOMINATOR IS OPENABLE ROWS, the same population `read=R/T`
-    divides by, because the marker puts the two side by side and invites
-    the comparison. Counted over ALL manifest rows instead, a pull request
-    touching thirty files of which ten are images renders
-    `supplied=20/30 read=20/20`: a complete review that reads as a third of
-    the change never reaching the reviewer.
+    FOR A CALLER THAT DOES NOT NAME `--supply-total` AT ALL, and nothing
+    else: it answers the pre-inlining question of how much of the change a
+    patch was WRITTEN for, over openable rows, which is neither of the two
+    quantities the v5 marker's `supplied=` names. See `supply_pair`.
 
     `review_coverage.openable` is IMPORTED rather than restated, so the two
     numbers cannot drift apart. Both come from the manifest this run was
@@ -735,6 +742,42 @@ def supply_counts(rows: dict, restored: tuple) -> tuple:
         if review_coverage.openable(status, token, path, restored)
     ]
     return sum(1 for _, token in openable if token not in REASONS), len(openable)
+
+
+def supply_pair(argv: list, rows: dict, restored: tuple) -> tuple:
+    """(patches that reached the prompt, patches written) for the marker.
+
+    FROM THE LEDGER WHERE THERE IS ONE. `--supply-total` carries
+    review_coverage.py's SUPPLY_TOTAL, which counts the rows a patch was
+    WRITTEN for -- the same population the comment's own "Patches supplied
+    in the prompt" row divides by, so one comment no longer uses the word
+    "supplied" of two different things.
+
+    NAMED AND NOT A NUMBER IS UNKNOWN, NEVER THE MANIFEST. The workflow
+    always names the flag and leaves it EMPTY whenever
+    `review_coverage.write_counts` omitted the SUPPLY_ keys, which it does
+    for a ledger it could not read while still exiting 0. The manifest
+    answers a different population -- patches written to disk over openable
+    rows -- so falling back there rendered `supplied=5/5` on a comment whose
+    own section row said "4 of 5", two numbers called supplied disagreeing,
+    which is what the v5 token exists to prevent. Unknown is reported as the
+    token, the same way `read=` reports an unmeasured coverage run.
+
+    Only a caller that does not name the flag gets the manifest: see
+    `supply_counts`.
+    """
+    total = _flag(argv, "--supply-total", NOT_GIVEN)
+    if total == NOT_GIVEN:
+        supplied, written = supply_counts(rows, restored)
+        return str(supplied), str(written)
+    if total.isdigit():
+        return counter_flag(argv, "--supply-supplied"), total
+    print(
+        f"--supply-total must be a non-negative integer, got {total!r};"
+        " the marker reports supply as unmeasured",
+        file=sys.stderr,
+    )
+    return review_coverage.UNMEASURED, review_coverage.UNMEASURED
 
 
 def base_paths(base: str) -> set:
@@ -1304,8 +1347,10 @@ class Tally(NamedTuple):
     space: int
     read: str
     total: str
-    supplied: int = -1
-    rows: int = -1
+    # STRINGS, like `read`/`total` and for the same reason: supply can be
+    # the `unmeasured` token, which must never render as a number.
+    supplied: str = "-1"
+    rows: str = "-1"
     truncated: str = "0"
     # NOTES THE RUN RECORDED, published or not -- the clean verdict's only
     # evidence, and zero withholds the tick. ~~-1 for "the caller did not
@@ -1314,7 +1359,7 @@ class Tally(NamedTuple):
     proved: int = 0
 
 
-def coverage_note(read: str, total: str) -> str:
+def coverage_note(read: str, total: str, supplied: str, rows: str) -> str:
     """How much was opened, as a clause for the headline. EVERY headline.
 
     The clean line is what goes out over a thin review, and "40 files,
@@ -1327,15 +1372,45 @@ def coverage_note(read: str, total: str) -> str:
     the reader has no way to tell it from three findings over all 40.
 
     `unmeasured` is a TOKEN, not a number, and must never render as one.
-    `0/0` is what the flags default to when the workflow did not supply
-    them, so it is treated as absent rather than as a measured nothing.
+
+    IT SAYS "LEFT TO FETCH" BECAUSE THAT IS THE POPULATION. Since the
+    patches moved into the prompt `read`/`total` count only the rows the
+    prompt did NOT supply, and this clause still said "of N files opened" --
+    the one count a human reads first, under a comment whose own section row
+    divides by every row with a patch. A 16-file change with 14 supplied and
+    2 dropped read "1 finding in the 1 of 2 files opened" above "14 of 16
+    file(s) with a patch": two file counts, nothing saying they divide
+    different populations. The workflow's three other wordings were moved;
+    this was the fourth.
+
+    AND `total == "0"` RENDERS THE SUPPLY PAIR RATHER THAN NOTHING. Nothing
+    left to fetch is the COMMON case now, and it returned the empty string,
+    so the fully-supplied headline read "No blocking findings. 16 files,
+    +400/-20" -- verbatim the shape this clause exists to prevent. Supply is
+    the measurement that applies there.
     """
     if read.isdigit() and total.isdigit():
         if total == "0":
-            return ""
+            return _supply_note(supplied, rows)
         noun = "file" if total == "1" else "files"
-        return f" in the {read} of {total} {noun} opened"
+        return f" in the {read} of {total} {noun} left to fetch opened"
     return " (review coverage unmeasured)"
+
+
+def _supply_note(supplied: str, rows: str) -> str:
+    """The headline clause when there was nothing left to fetch.
+
+    `rows == "0"` is a manifest no row of which had a patch -- a
+    binary-only change -- and there is then nothing to say rather than
+    something unmeasured, so the clause is empty and the summary carries the
+    headline alone. A non-numeric pair is `supply_pair`'s unknown token.
+    """
+    if not (supplied.isdigit() and rows.isdigit()):
+        return " (review coverage unmeasured)"
+    if rows == "0":
+        return ""
+    noun = "file" if rows == "1" else "files"
+    return f" in the {supplied} of {rows} {noun} whose patch was supplied"
 
 
 def header(tally: Tally, summary: str, unread: bool = False) -> str:
@@ -1349,7 +1424,7 @@ def header(tally: Tally, summary: str, unread: bool = False) -> str:
             " no verdict could be read from the run, so nothing on this pull"
             " request has been adjudicated by this check."
         )
-    note = coverage_note(tally.read, tally.total)
+    note = coverage_note(tally.read, tally.total, tally.supplied, tally.rows)
     if not tally.shown:
         if tally.adjudged:
             # NOT the clean header either. Something WAS adjudicated and
@@ -1778,23 +1853,29 @@ def marker(lane: str, tally: Tally, head: str) -> str:
     FILES withheld; two readers in turn misdiagnosed the same pull request
     from it.
 
-    `supplied=S/T`: of `T` OPENABLE rows, `S` had a patch written. `T` is
-    the population `read=R/T` divides by, which is what makes the pair safe
-    to read side by side. A low `S` means the reviewer was not GIVEN the
-    change; a low `R` against a high `S` means it was given it and did not
-    open it.
+    `supplied=S/T`: of `T` rows a patch was WRITTEN for, `S` had that patch
+    reach the prompt. ~~`T` is the population `read=R/T` divides by~~ --
+    **it is not, and reading it that way inverts the pair.** Since the
+    patches moved into the prompt, `read=`'s denominator is the rows STILL
+    TO FETCH, so a 16-file change with everything supplied and nothing left
+    to open renders `supplied=16/16 truncated=0 read=0/0`. Read supply
+    first: a low `S` means the reviewer was not GIVEN the change; `read=`
+    then answers only for what supply did not cover.
+    `supplied=unmeasured/unmeasured` is the third state and means the ledger
+    could not be read -- never a fallback count of something else, which is
+    the defect `supply_pair` records.
 
-    TWO CASES WHERE THE DENOMINATORS ONLY LOOK ALIKE, both of which arise.
-    Where coverage could not be MEASURED, `read=` is a token, not a pair.
+    TWO CASES WHERE `read=` IS NOT A MEASUREMENT AT ALL, both of which
+    arise. Where coverage could not be MEASURED it is a token, not a pair.
     Where the coverage step did not RUN -- an error lane, a skipped review
     -- the workflow passes `--coverage-read 0 --coverage-total 0`, and
     `read=0/0` then means "not measured", never "nothing was openable". The
     lane letter says which.
 
-    **v4, NOT v3.** The token tracks the FIELD SET, and this release renamed
-    one field and added two; one token must mean one schema, or a future
-    reader parses by position and gets the wrong integer. `lane=T` omits
-    `findings=` so it can never be read as a baseline.
+    **v5, NOT v4.** The token tracks the FIELD SET *and what a field
+    counts*: `supplied=` kept its name and changed population, which is the
+    worse kind of change because a reader who parses it will not notice.
+    `lane=T` omits `findings=` so it can never be read as a baseline.
 
     `truncated=N` IS WHAT STOPS `supplied=` BECOMING THE NEXT LIE. A
     truncated patch is supplied, so thirty files all cut back to their first
@@ -1806,7 +1887,7 @@ def marker(lane: str, tally: Tally, head: str) -> str:
     # second field whose name ENDS in that literal would be captured
     # instead. The regex is anchored now; the name still avoids the trap.
     return (
-        f"<!-- claude-review v4 lane={lane} findings={len(tally.shown)}"
+        f"<!-- claude-review v5 lane={lane} findings={len(tally.shown)}"
         f" blockers={blockers} findings_withheld={tally.recorded + tally.space}"
         f" supplied={tally.supplied}/{tally.rows}"
         f" truncated={tally.truncated}"
@@ -2013,8 +2094,8 @@ def build(argv: list, findings: list, counts: dict, sections: list, raw) -> tupl
             # see `counter_flag`.
             read=_flag(argv, "--coverage-read", "0"),
             total=_flag(argv, "--coverage-total", "0"),
-            supplied=counts.get("supplied", -1),
-            rows=counts.get("rows", -1),
+            supplied=counts.get("supplied", "-1"),
+            rows=counts.get("rows", "-1"),
             truncated=counter_flag(argv, "--truncated"),
             proved=counts["notes_recorded"],
         )
@@ -2126,7 +2207,7 @@ def main(argv: list) -> int:
         base_paths(_flag(argv, "--base", "HEAD^")),
         restored,
     )
-    counts["supplied"], counts["rows"] = supply_counts(rows, restored)
+    counts["supplied"], counts["rows"] = supply_pair(argv, rows, restored)
     counts["duplicate"] = collapse(findings)
     counts["schema"] = refused["schema"]
     counts["unsafe"] = refused["unsafe"]

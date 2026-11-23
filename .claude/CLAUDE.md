@@ -33,7 +33,23 @@ docker run --rm \
 - **`claude-pull-request-review.yaml`**: Automated Claude Code PR reviews using the prompt at `claude/pr-prompt-v2.md` and the helper programs in `claude/`. The fixture suites that cover them are listed in `lint-repo.yaml`; no count is restated here, because a restated count goes stale the next time a suite is added:
   - `filter_diff.py` assembles the review set. Every fact in the manifest comes from Git plumbing over the merge base to the PR head; `pulls/{n}/files` is used only as a second witness to the file list, and a disagreement aborts the run. Binary-ness is read from the blob with `git cat-file`, never from `.gitattributes`, which the PR under review owns
   - `pr_discussion.py` renders the PR's description and comment thread as untrusted context: a run-random fence, a `|` prefix, pipe then space, on every author line, covert channels removed and the removals declared
-  - `review_coverage.py` measures which manifest rows the reviewer actually opened, from the run's own `stream-json` transcript rather than from anything the model says about itself
+  - `patch_block.py` renders every changed file's patch INTO the prompt,
+    behind the same run-random fence and `|` prefix, pipe then space, as the
+    discussion, but with nothing sanitised -- stripping a character from a
+    patch would alter the code under review, and the preamble says so. Over
+    `max_prompt_bytes` whole patches are dropped largest-first, and every
+    dropped row, plus any whose patch file would not open, is named in the
+    prompt and on the pull request rather than silently withheld. It also
+    writes the ledger of what reached the prompt, which `verify` checks
+    against the file the CLI was actually handed
+  - `review_coverage.py` reports supply and fetch as two numbers that are
+    never added up: which manifest rows had their patch SUPPLIED into the
+    prompt, read off `patch_block.py`'s ledger and needing no transcript,
+    and which of the rows left to FETCH the reviewer actually opened, from
+    the run's own `stream-json` transcript rather than from anything the
+    model says about itself. Supply is bookkeeping about our own work and
+    the model cannot game it; a read count is evidence about the model and
+    it can
   - `review_output.py` turns the model's schema-validated findings into the
     comment body, rejecting filler -- padding whose citation does not resolve
     at the base ref, blindness dressed as a finding, a finding whose own text

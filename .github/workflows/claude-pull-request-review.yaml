@@ -1,3 +1,4 @@
+# cspell:ignore patchblock  -- the patch-block log's file name, not vocabulary
 name: Claude Pull Request Review
 
 on:
@@ -48,7 +49,7 @@ on:
         type: string
         default: "2.1.310"
       max_review_bytes:
-        description: "Backstop on the total patch bytes handed to the reviewer. Over budget, whole patches are dropped largest-first; those files keep their manifest row and are named in the PR comment. 0 means no backstop. The default was chosen against a 300-PR sample whose largest post-exclusion patch set was 640,442 bytes, but that sample measured the files API, which omits the patch for the largest file in a change, so the real figure is higher by an unmeasured amount. Raise it if the review comment reports omitted files. The PR's own comment thread is budgeted out of this number too: it gets what the patches did not spend, floored at an eighth of it so a large change cannot drop the thread altogether, which means the total handed over can exceed this value by that eighth."
+        description: "Backstop on the total patch bytes handed to the reviewer. Over budget, whole patches are dropped largest-first; those files keep their manifest row and are named in the PR comment. 0 means no backstop. The default was chosen against a 300-PR sample whose largest post-exclusion patch set was 640,442 bytes, but that sample measured the files API, which omits the patch for the largest file in a change, so the real figure is higher by an unmeasured amount. Raise it if the review comment reports omitted files. The PR's own comment thread is budgeted out of this number too: it gets what the patches did not spend, bounded below by an eighth of this value so a large change cannot drop the thread altogether, and above by an eighth of `max_prompt_bytes` so a small change with a long thread cannot starve the patches. The total handed over can therefore exceed this value by that upper bound, which is 96,500 bytes at both defaults -- and because the upper bound is the lower of the two there, the thread gets exactly 96,500 at the shipped defaults whatever the patches spend. The lower bound is what matters at a non-default `max_review_bytes`, where it is what stops a large change dropping the thread to nothing."
         required: false
         type: number
         default: 1048576
@@ -115,10 +116,53 @@ on:
         required: false
         type: number
         default: 0
+      max_prompt_bytes:
+        description: |
+          Cap, in bytes, on the prompt handed to the CLI. The file patches
+          are fitted into whatever this leaves after the rest of the prompt
+          is assembled; over budget, whole patches are dropped largest-first
+          and each is named with its byte count in the prompt and on the
+          pull request, with its patch file still on disk to be read. 0
+          means no cap and is for an operator who has measured their own
+          population.
+
+          WHY A CAP AT ALL. An oversize prompt is a hard error before any
+          API call -- `"Prompt is too long"`, `duration_api_ms: 0` -- and a
+          single-exchange `claude -p` conversation cannot auto-compact its
+          way out, so nothing downstream can recover. The budget has to
+          hold here.
+
+          WHY BYTES BOUND TOKENS. The tokeniser is byte-level, so a token
+          is one or more bytes and a prompt of N bytes is at most N tokens.
+          A byte cap is therefore a sound token cap, which is the only kind
+          that can be enforced without the tokeniser.
+
+          THE DEFAULT IS DERIVED, not picked. The auto-compact threshold is
+          900,000 tokens and the maximum output 128,000, so reserving the
+          whole output leaves 772,000 tokens of input and, by the line
+          above, 772,000 bytes of prompt.
+
+          AND IT CLEARS THE MEASURED POPULATION. Non-patch prompt text runs
+          32-62 KB today, and the thread is clamped to an eighth of this
+          number, so the worst case leaves 772,000 - 62,000 - 96,500 =
+          613,500 bytes for the patch block. Post-exclusion patch bytes
+          across 147 pull requests in reviewer-running repositories were p50
+          745, p90 67,483, p99 187,171 and a maximum of 470,017.
+
+          MEASURED AGAINST THE BLOCK, NOT THE RAW BYTES, because the `| `
+          prefix and the per-file headers cost about 4%: a synthetic 470,017
+          -byte set over 24 files renders as 488,785. So the floor is 1.26x
+          the largest change ever measured and 3.2x the 99th percentile, and
+          the first pull request to exceed it says so by name on its own
+          comment rather than failing.
+        required: false
+        type: number
+        default: 772000
       coverage_enforcement:
         description: |
-          What to do when the reviewer did not open every openable file in
-          the manifest: `fail`, `warn` or `off`.
+          What to do when the reviewer did not open every file the prompt
+          LEFT IT TO FETCH: `fail`, `warn` or `off`. A row whose patch is in
+          the prompt is not in that population -- see `max_prompt_bytes`.
 
           `warn` is the default and is deliberate. Roughly 170 repositories
           consume this workflow at a floating major tag, so the ability to
@@ -533,6 +577,7 @@ jobs:
         env:
           ENFORCEMENT: ${{ inputs.coverage_enforcement }}
           MAX_FILE_BYTES: ${{ inputs.max_file_bytes }}
+          MAX_PROMPT_BYTES: ${{ inputs.max_prompt_bytes }}
           MAX_REVIEW_BYTES: ${{ inputs.max_review_bytes }}
         run: |
           case "$ENFORCEMENT" in
@@ -561,11 +606,21 @@ jobs:
               exit 1
               ;;
           esac
+          # Same test again, and this one gates the whole prompt: a float
+          # here would pass through to the shell arithmetic that sizes the
+          # patch block and make every patch look over budget.
+          case "$MAX_PROMPT_BYTES" in
+            '' | *[!0-9]*)
+              echo "::error::max_prompt_bytes must be a non-negative integer (got '$MAX_PROMPT_BYTES')"
+              exit 1
+              ;;
+          esac
           echo "coverage_enforcement: ${ENFORCEMENT}"
           # Echoed because it is the input whoever is diagnosing a short or
           # partial review reaches for first, and 0 -- the default -- is
           # the answer that stops the search.
           echo "max_file_bytes: ${MAX_FILE_BYTES}"
+          echo "max_prompt_bytes: ${MAX_PROMPT_BYTES}"
 
       # fetch-depth: 0 is load-bearing beyond history browsing: the review
       # set is computed from `git diff` between the pull request's merge base
@@ -788,6 +843,7 @@ jobs:
 
           MISSING=""
           for f in claude/pr-prompt-v2.md claude/filter_diff.py \
+            claude/patch_block.py \
             claude/pr_discussion.py claude/review_io.py \
             claude/review-schema.json \
             claude/review_coverage.py claude/review_output.py \
@@ -1254,6 +1310,7 @@ jobs:
         if: env.REVIEW_OUTCOME == 'reviewed'
         env:
           GH_TOKEN: ${{ github.token }}
+          MAX_PROMPT_BYTES: ${{ inputs.max_prompt_bytes }}
           MAX_REVIEW_BYTES: ${{ inputs.max_review_bytes }}
         run: |
           # The old prompt told the reviewer to "read any existing comments on
@@ -1333,6 +1390,27 @@ jobs:
             if [ "$DISCUSSION_BUDGET" -lt "$DISCUSSION_FLOOR" ]; then
               DISCUSSION_BUDGET="$DISCUSSION_FLOOR"
             fi
+            # AND A CEILING. The residual above is `max_review_bytes` minus
+            # the patches, so a small change with a long thread funds a
+            # thread of nearly the whole million and leaves the patch block
+            # nothing. An EIGHTH, the share the floor already uses: 96,500
+            # at the default, and AS UNMEASURED AS THE EIGHTH ABOVE -- the
+            # 32-62 KB it reads large beside is non-patch PROMPT text, a
+            # different quantity from a thread.
+            #
+            # IT IS BELOW THE FLOOR AT THE SHIPPED DEFAULTS (96,500 against
+            # 131,072), and the clamp order is floor-then-ceiling, so the
+            # result is min(max(residual, floor), ceiling): the floor cannot
+            # deliver its own value there, but it still BINDS -- any residual
+            # under the ceiling is raised and then clamped to it, so from
+            # PATCH_BYTES above 952,076 the thread gets 96,500 rather than a
+            # shrinking residual. Not dead code at any setting.
+            if [ "$MAX_PROMPT_BYTES" -gt 0 ]; then
+              DISCUSSION_CEILING=$((MAX_PROMPT_BYTES / 8))
+              if [ "$DISCUSSION_BUDGET" -gt "$DISCUSSION_CEILING" ]; then
+                DISCUSSION_BUDGET="$DISCUSSION_CEILING"
+              fi
+            fi
             # 0 is this program's "no backstop", so a floor that rounds down
             # to nothing becomes 1 rather than switching the cap off.
             if [ "$DISCUSSION_BUDGET" -lt 1 ]; then
@@ -1349,8 +1427,14 @@ jobs:
           # bug. /dev/urandom rather than $RANDOM, which is 15 bits and
           # seeded predictably.
           DISCUSSION_NONCE=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          # EIGHT HEX CHARACTERS OR MORE, AND NOTHING ELSE.
+          # ~~`[0-9a-f][0-9a-f]*`~~ validated the first two and
+          # accepted anything after them. `review_io.run_nonce` is
+          # the authority and re-checks `[0-9a-f]{8,64}`; this arm
+          # should still say what it looks like it says.
           case "$DISCUSSION_NONCE" in
-            [0-9a-f][0-9a-f]*) ;;
+            '' | *[!0-9a-f]*) DISCUSSION_NONCE="" ;;
+            ????????*) ;;
             *) DISCUSSION_NONCE="" ;;
           esac
 
@@ -1697,6 +1781,8 @@ jobs:
 
       - name: Create review prompt
         if: env.REVIEW_OUTCOME == 'reviewed'
+        env:
+          MAX_PROMPT_BYTES: ${{ inputs.max_prompt_bytes }}
         run: |
           # The prompt's last line is "Begin.", and the run context has to come
           # before it rather than after an instruction to start. Dropping that
@@ -1725,7 +1811,7 @@ jobs:
             # than naming the command.
             echo "- The working tree is this PR merged into its base branch, so it is what would land. \`HEAD\` is that merge commit, not the head above; \`HEAD^\` is the base branch tip and \`HEAD^2\` is the PR head. There is nothing left to resolve: do not look for a command to confirm it."
             echo "- After exclusions this PR changes ${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS}/-${REVIEW_DELETIONS}."
-            echo "- \`pr-files/\` (the patches) and \`build-resources/\` (this reviewer's own prompt and scripts) sit in the workspace but are NOT part of the repository under review. They are listed in \`.git/info/exclude\`, so \`Grep\` already skips both and you need no exclusion flags; a plain tree-wide \`Grep\` is correct."
+            echo "- \`pr-files/\` (the patch files, whose content is already in this prompt) and \`build-resources/\` (this reviewer's own prompt and scripts) sit in the workspace but are NOT part of the repository under review. They are listed in \`.git/info/exclude\`, so \`Grep\` already skips both and you need no exclusion flags; a plain tree-wide \`Grep\` is correct. The exclusion keeps those copies out of your SEARCHES; \`Read\` still reaches them, which is how a patch named under \`Not supplied here\` is read."
           } >> "$RUNNER_TEMP/prompt.md"
 
           if [ -n "${EXCLUDED_SUMMARY:-}" ]; then
@@ -1752,7 +1838,7 @@ jobs:
           # deliberately never told the restored set. The workflow holds
           # both, so the workflow is where the correction belongs.
           if [ -n "${RESTORED_PATHS:-}" ]; then
-            echo "- These paths were restored to their BASE-BRANCH content before you started, because the CLI or a tool it runs would otherwise load them as configuration from this branch: ${RESTORED_PATHS}. Their patches are in \`pr-files/\`, so review the change there; what is in the working tree at those paths is the base's version and a difference between the two is expected, not a finding. **This overrides anything above that sends you to the working tree.** If one of these paths is also in the truncated list, the part of its change that was cut is not available anywhere: review what the patch holds, and say in your output that the rest could not be seen -- do not read the working-tree copy, which is the base's." >> "$RUNNER_TEMP/prompt.md"
+            echo "- These paths were restored to their BASE-BRANCH content before you started, because the CLI or a tool it runs would otherwise load them as configuration from this branch: ${RESTORED_PATHS}. Their patches are supplied in this prompt unless the **Not supplied here** list names them, in which case follow what it says there. Review the change in the patch; what is in the working tree at those paths is the base's version, and a difference between the two is expected, not a finding. **This overrides anything above that sends you to the working tree.** If one of these paths is also in the truncated list, the part of its change that was cut is not available anywhere: review what the patch holds, and say in your output that the rest could not be seen -- do not read the working-tree copy, which is the base's." >> "$RUNNER_TEMP/prompt.md"
           fi
           if [ -n "${UNPATCHED_SUMMARY:-}" ]; then
             echo "- **No diff could be rendered for these, so they carry \`-\` in the manifest's fourth column. Open each one in the working tree and review it there; they are not optional and they are not generated. The one exception is a row whose status column reads \`removed\` -- that file is gone from the working tree, the deletion is the whole change, and you cannot and need not open it.** ${UNPATCHED_SUMMARY}" >> "$RUNNER_TEMP/prompt.md"
@@ -1784,6 +1870,76 @@ jobs:
             } >> "$RUNNER_TEMP/prompt.md"
           fi
 
+          # THE PATCHES THEMSELVES. Measured: at nine or more changed files
+          # the reviewer opened 0 of 16 rows over four consecutive runs and
+          # posted a clean verdict anyway, at 5% occupancy of a
+          # million-token window -- not short of window, just finished.
+          #
+          # THE BUDGET IS COMPUTED HERE because this is the only place that
+          # knows what the rest of the prompt cost: everything else is
+          # written and the thread rendered, so the remainder is exact.
+          #
+          # PROMPT_TAIL_BYTES is what is appended and counted nowhere else:
+          # 1 for the newline before the block, 1 for the one before the
+          # thread, 8 for "\nBegin.\n". Named so a line added below is a
+          # line to count here. 9 of the 10 when there is no thread.
+          PROMPT_TAIL_BYTES=10
+          PROMPT_BASE_BYTES=$(wc -c < "$RUNNER_TEMP/prompt.md")
+          DISCUSSION_BYTES=0
+          if [ -s "$RUNNER_TEMP/discussion.md" ]; then
+            DISCUSSION_BYTES=$(wc -c < "$RUNNER_TEMP/discussion.md")
+          fi
+          if [ "$MAX_PROMPT_BYTES" -eq 0 ]; then
+            PATCH_BLOCK_BUDGET=0
+          else
+            PATCH_BLOCK_BUDGET=$((MAX_PROMPT_BYTES - PROMPT_BASE_BYTES \
+              - DISCUSSION_BYTES - PROMPT_TAIL_BYTES))
+            # 0 is patch_block.py's "no backstop", so a remainder that ran
+            # out becomes 1 rather than switching the cap off and sending an
+            # oversize prompt the CLI refuses before any API call.
+            if [ "$PATCH_BLOCK_BUDGET" -lt 1 ]; then
+              PATCH_BLOCK_BUDGET=1
+            fi
+          fi
+          echo "Patch block budget: ${PATCH_BLOCK_BUDGET} byte(s); the prompt so far is ${PROMPT_BASE_BYTES} and the thread ${DISCUSSION_BYTES} of ${MAX_PROMPT_BYTES}"
+
+          # ITS OWN NONCE, not the thread's. The two blocks are handled
+          # differently -- the thread is sanitised and declares it, patches
+          # are not touched at all -- so one value is not the key to both.
+          PATCH_NONCE=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          # EIGHT HEX CHARACTERS OR MORE, AND NOTHING ELSE.
+          # ~~`[0-9a-f][0-9a-f]*`~~ validated the first two and
+          # accepted anything after them. `review_io.run_nonce` is
+          # the authority and re-checks `[0-9a-f]{8,64}`; this arm
+          # should still say what it looks like it says.
+          case "$PATCH_NONCE" in
+            '' | *[!0-9a-f]*) PATCH_NONCE="" ;;
+            ????????*) ;;
+            *) PATCH_NONCE="" ;;
+          esac
+
+          # NOT best-effort, unlike the thread. The patches ARE the change,
+          # so a failure here becomes the review-unavailable comment rather
+          # than a reviewer with no diff.
+          if ! MAX_PATCH_BLOCK_BYTES="$PATCH_BLOCK_BUDGET" \
+            PATCH_NONCE="$PATCH_NONCE" \
+            python3 build-resources/claude/patch_block.py render \
+              "$RUNNER_TEMP/patches.md" \
+              pr-files/manifest.tsv \
+              "$RUNNER_TEMP/supplied.tsv" \
+              > "$RUNNER_TEMP/patchblock.log"; then
+            cat "$RUNNER_TEMP/patchblock.log"
+            echo "::warning::the file patches could not be rendered into the prompt"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the changed files' patches could not be assembled into the review prompt, so nothing has been reviewed; see the job log"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+          cat "$RUNNER_TEMP/patchblock.log"
+          printf '\n' >> "$RUNNER_TEMP/prompt.md"
+          cat "$RUNNER_TEMP/patches.md" >> "$RUNNER_TEMP/prompt.md"
+
           # The thread goes last, immediately before "Begin.", so the rules
           # that govern it are already established when it arrives. Its own
           # framing -- a nonce-bearing fence plus a "| " prefix on every data
@@ -1794,7 +1950,82 @@ jobs:
           fi
 
           printf '\nBegin.\n' >> "$RUNNER_TEMP/prompt.md"
-          echo "Prompt created ($(wc -c < "$RUNNER_TEMP/prompt.md") bytes)"
+          PROMPT_BYTES=$(wc -c < "$RUNNER_TEMP/prompt.md")
+          echo "Prompt created (${PROMPT_BYTES} bytes)"
+
+          # THE ASSERTION, against the file actually sent: the budget above
+          # is arithmetic over three measurements, and an oversize prompt is
+          # a hard error before any API call rather than a thin review. So it
+          # takes the same path the verify failure below does -- a warning
+          # and carry on would send the prompt anyway, and the job would die
+          # on "Prompt is too long" with no comment posted.
+          if [ "$MAX_PROMPT_BYTES" -gt 0 ] && [ "$PROMPT_BYTES" -gt "$MAX_PROMPT_BYTES" ]; then
+            echo "::warning::the prompt is ${PROMPT_BYTES} bytes against a max_prompt_bytes of ${MAX_PROMPT_BYTES}"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the review prompt came to ${PROMPT_BYTES} bytes against a max_prompt_bytes of ${MAX_PROMPT_BYTES}, which the CLI refuses before any API call, so nothing has been reviewed; see the job log"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # AGAINST prompt.md, not the block this step just wrote: the
+          # prompt is assembled from several pieces and a step that appended
+          # the wrong one would otherwise pass.
+          if ! python3 build-resources/claude/patch_block.py verify \
+            "$RUNNER_TEMP/prompt.md" "$RUNNER_TEMP/supplied.tsv"; then
+            echo "::warning::a patch the ledger calls supplied is not in the prompt"
+            {
+              echo "REVIEW_OUTCOME=error"
+              echo "REVIEW_ERROR=the review prompt does not hold every patch it was recorded as carrying, so the reviewer would have been given less of the change than the pull request was told; see the job log"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # THE SUPPLIED ROW IS UNCONDITIONAL, unlike every other
+          # disclosure here: it is what a human now reads instead of
+          # `read=R/T`, whose denominator is only the rows left to fetch.
+          PATCH_FILES=$(sed -n 's/^Patch block files: //p' "$RUNNER_TEMP/patchblock.log")
+          PATCH_SUPPLIED=$(sed -n 's/^Patch block supplied: //p' "$RUNNER_TEMP/patchblock.log")
+
+          # ~~`head -20` ALONE~~, which silently dropped the 21st name
+          # onward: 25 dropped patches rendered as 20 and five omissions
+          # nobody was told about, under a program whose own docstring says
+          # a budget that could silence the list of what it dropped would
+          # hide exactly what it did. Same shape as `list_from` in the
+          # prompt step, restated because a shell function does not cross a
+          # step boundary. The counts come from the log's own count lines,
+          # defaulted because an empty string in `-gt` fails inside an `if`
+          # without tripping `bash -e`.
+          patch_count() { # patch_count <label>
+            N=$(sed -n "s/^Patch block $1: \\([0-9][0-9]*\\) file(s).*/\\1/p" \
+              "$RUNNER_TEMP/patchblock.log")
+            case "$N" in '' | *[!0-9]*) N=0 ;; esac
+            printf '%s' "$N"
+          }
+          capped_list() { # capped_list <sed-prefix> <count>
+            if [ "$2" -gt 0 ]; then
+              LIST=$(sed -n "s/^$1//p" "$RUNNER_TEMP/patchblock.log" \
+                | head -20 | paste -sd, -)
+              if [ "$2" -gt 20 ]; then
+                LIST="${LIST} (+$(($2 - 20)) more)"
+              fi
+              printf '%s' "$LIST"
+            fi
+          }
+          PATCH_NOT_SUPPLIED=$(capped_list '  % ' "$(patch_count dropped)")
+          # A SECOND REASON A ROW CAN BE MISSING, and the row above would
+          # explain it wrongly: the patch file would not open. Without this
+          # the comment reads "1 of 3" with nothing named.
+          PATCH_UNREADABLE=$(capped_list '  ? ' "$(patch_count unreadable)")
+          {
+            printf 'Patches supplied in the prompt\t%s of %s file(s) with a patch\n' \
+              "${PATCH_SUPPLIED:-?}" "${PATCH_FILES:-?}"
+            # shellcheck disable=SC2016  # markdown code span, not a substitution
+            printf 'Patch not supplied in the prompt (over `max_prompt_bytes`)\t%s\n' \
+              "$PATCH_NOT_SUPPLIED"
+            printf 'Patch file could not be read, so the row is in neither the prompt nor a readable file\t%s\n' \
+              "$PATCH_UNREADABLE"
+          } >> "$RUNNER_TEMP/sections.tsv"
 
       - name: Run Claude Code Review
         if: env.REVIEW_OUTCOME == 'reviewed'
@@ -1982,6 +2213,7 @@ jobs:
             --github-env "$GITHUB_ENV" \
             --missed-file "$RUNNER_TEMP/missed.txt" \
             --restored "${RESTORED_PATHS:-}" \
+            --supplied "$RUNNER_TEMP/supplied.tsv" \
             > "$RUNNER_TEMP/coverage.log"; then
             cat "$RUNNER_TEMP/coverage.log"
             READ=$(sed -n 's/^COVERAGE_READ=//p' "$GITHUB_ENV" | tail -1)
@@ -1995,7 +2227,7 @@ jobs:
             # the reviewer, the byte budget, and a path that is not there --
             # and "did not open" alone names none of them.
             if [ -s "$RUNNER_TEMP/missed.txt" ]; then
-              printf 'Files the reviewer did not open (%s of %s openable opened)\t%s\n' \
+              printf 'Files the reviewer did not open (%s of %s left to fetch opened)\t%s\n' \
                 "$READ" "$TOTAL" "$(paste -sd, - < "$RUNNER_TEMP/missed.txt")" \
                 >> "$RUNNER_TEMP/sections.tsv"
               # THE LEGEND IS NOT ON THE COMMENT, and that is a budget
@@ -2027,6 +2259,26 @@ jobs:
               echo "COVERAGE_UNCOVERED=unmeasured"
               echo "COVERAGE_EXEMPT=unmeasured"
             } >> "$GITHUB_ENV"
+            # SUPPLY IS STILL KNOWN, and it does not come from this program.
+            # Without these the marker reads `supplied=unmeasured/unmeasured`
+            # beside a section row this job already wrote from the same
+            # ledger -- two accounts of one number on one comment. The
+            # patch-block log is still on disk and is where that row came
+            # from, so it is the witness here too.
+            SUPPLY_FILES=$(sed -n 's/^Patch block files: //p' \
+              "$RUNNER_TEMP/patchblock.log" 2> /dev/null || true)
+            SUPPLY_IN=$(sed -n 's/^Patch block supplied: //p' \
+              "$RUNNER_TEMP/patchblock.log" 2> /dev/null || true)
+            case "${SUPPLY_FILES}:${SUPPLY_IN}" in
+              *[!0-9:]* | :* | *:) ;;
+              *)
+                {
+                  echo "SUPPLY_TOTAL=${SUPPLY_FILES}"
+                  echo "SUPPLY_SUPPLIED=${SUPPLY_IN}"
+                  echo "SUPPLY_MISSING=$((SUPPLY_FILES - SUPPLY_IN))"
+                } >> "$GITHUB_ENV"
+                ;;
+            esac
             printf 'Review coverage\tcould not be measured for this run\n' \
               >> "$RUNNER_TEMP/sections.tsv"
           fi
@@ -2069,6 +2321,8 @@ jobs:
             --lane "$LANE" \
             --coverage-read "${COVERAGE_READ:-0}" \
             --coverage-total "${COVERAGE_TOTAL:-0}" \
+            --supply-supplied "${SUPPLY_SUPPLIED:-}" \
+            --supply-total "${SUPPLY_TOTAL:-}" \
             --truncated "${TRUNCATED_FILES:-0}" \
             --summary "${REVIEW_FILES} ${FILE_WORD}, +${REVIEW_ADDITIONS:-0}/-${REVIEW_DELETIONS:-0}." \
             --restored "${RESTORED_PATHS:-}"; then
@@ -2154,7 +2408,7 @@ jobs:
               echo '```'
             fi
             echo ""
-            echo "<!-- claude-review v4 lane=E findings=0 blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
+            echo "<!-- claude-review v5 lane=E findings=0 blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/body.md"
 
           # Same publish path as the review: a new comment, so an outcome
@@ -2199,7 +2453,7 @@ jobs:
               FINDINGS=0
             fi
             echo ""
-            echo "<!-- claude-review v4 lane=S findings=${FINDINGS} blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
+            echo "<!-- claude-review v5 lane=S findings=${FINDINGS} blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/body.md"
 
           # Same publish path as the review: a new comment, so an outcome
@@ -2240,7 +2494,7 @@ jobs:
             echo ""
             echo "Nothing about this pull request has been reviewed or approved by this check."
             echo ""
-            echo "<!-- claude-review v4 lane=X findings=0 blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
+            echo "<!-- claude-review v5 lane=X findings=0 blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/unavailable.md"
 
           # Same publish path as the review: a new comment, so the notice
@@ -2309,7 +2563,7 @@ jobs:
             echo ""
             echo "Nothing about this pull request has been reviewed or approved by this check. Re-run the workflow to review \`${HEAD_SHA}\`."
             echo ""
-            echo "<!-- claude-review v4 lane=T blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
+            echo "<!-- claude-review v5 lane=T blockers=0 findings_withheld=0 supplied=0/0 truncated=0 read=0/0 head=${HEAD_SHA} -->"
           } > "$RUNNER_TEMP/cancelled.md"
 
           # THE ONE PATH THAT CAN OUTRUN ITS OWN HELPER. Everything else
@@ -2358,11 +2612,11 @@ jobs:
           # the measurement did not happen, which is not a pass: an
           # unmeasured review is exactly what shipped on 2026-10-21.
           if [ "${COVERAGE_UNCOVERED:-unmeasured}" = "0" ]; then
-            echo "every openable file in the manifest was opened"
+            echo "every file left to fetch was opened"
             exit 0
           fi
 
-          MESSAGE="the reviewer opened ${COVERAGE_READ:-0} of ${COVERAGE_TOTAL:-0} openable file(s); the unopened files are named on the pull request"
+          MESSAGE="the reviewer opened ${COVERAGE_READ:-0} of ${COVERAGE_TOTAL:-0} file(s) left to fetch; the unopened files are named on the pull request"
           case "$ENFORCEMENT" in
             off) echo "::notice::${MESSAGE}" ;;
             warn) echo "::warning::${MESSAGE}" ;;

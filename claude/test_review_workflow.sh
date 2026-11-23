@@ -617,6 +617,250 @@ check "and it overrides the working-tree instruction above it" \
 check "and it names the truncated overlap explicitly" \
   '1' "$(sed -n "${REST_LINE},\$p" "$WORKFLOW_FILE" | head -3 \
          | grep -c 'also in the truncated list')"
+# AND IT NO LONGER ASSERTS WHAT THE PATCH BLOCK CAN CONTRADICT. ~~"Their
+# patches are supplied in this prompt"~~ is false when the budget dropped a
+# restored path's patch, and the patch block that says so is appended after
+# this paragraph.
+check "and it concedes that a restored patch may not be supplied" \
+  '1' "$(sed -n "${REST_LINE},\$p" "$WORKFLOW_FILE" | head -3 \
+         | grep -c 'unless the \*\*Not supplied here\*\* list names them')"
+
+# ---------------------------------------------------------------------------
+# THE PATCHES ARE IN THE PROMPT, and the order of the three steps that put
+# them there is the thing to pin.
+# ---------------------------------------------------------------------------
+#
+# Measured: at nine or more changed files the reviewer issued ZERO Read calls
+# and posted a clean verdict anyway, at 5% context occupancy over 5-6 turns.
+# It was not short of window. So the content arrives rather than being
+# fetched, and three properties of that have to hold in the FILE, because
+# none of them can be tested by running the step without a manifest, a
+# checkout and a CLI:
+#
+#   1. The block is rendered, appended, and only THEN verified -- verifying
+#      before the append would check a prompt that is not the one sent.
+#   2. The thread still goes last, immediately before "Begin.". Its rules are
+#      established by the prompt above it, and the patch block must not get
+#      between them.
+#   3. The verification reads prompt.md, not the block.
+#
+# `|| true` INSIDE each substitution, and a numeric default after it, for the
+# reason the header of the previous section gives: this suite runs
+# `set -euo pipefail`, so a `grep` matching nothing takes the script down at
+# the assignment, before any assertion below it runs.
+PATCH_RENDER_LINE=$(grep -n 'patch_block.py render' "$WORKFLOW_FILE" | head -1 | cut -d: -f1 || true)
+PATCH_APPEND_LINE=$(grep -n 'patches.md" >> "' "$WORKFLOW_FILE" | head -1 | cut -d: -f1 || true)
+PATCH_VERIFY_LINE=$(grep -n 'patch_block.py verify' "$WORKFLOW_FILE" | head -1 | cut -d: -f1 || true)
+DISCUSSION_LINE=$(grep -n 'discussion.md" >> "' "$WORKFLOW_FILE" | head -1 | cut -d: -f1 || true)
+BEGIN_LINE=$(grep -n "printf '.nBegin..n'" "$WORKFLOW_FILE" | head -1 | cut -d: -f1 || true)
+PATCH_RENDER_LINE=${PATCH_RENDER_LINE:-0}
+PATCH_APPEND_LINE=${PATCH_APPEND_LINE:-0}
+PATCH_VERIFY_LINE=${PATCH_VERIFY_LINE:-0}
+DISCUSSION_LINE=${DISCUSSION_LINE:-0}
+BEGIN_LINE=${BEGIN_LINE:-0}
+
+check "the prompt step renders the patch block" \
+  '1' "$([ "$PATCH_RENDER_LINE" -gt 0 ] && echo 1 || echo 0)"
+check "and appends it to the prompt" \
+  '1' "$([ "$PATCH_APPEND_LINE" -gt "$PATCH_RENDER_LINE" ] && echo 1 || echo 0)"
+check "and verifies it only once it is in the prompt" \
+  '1' "$([ "$PATCH_VERIFY_LINE" -gt "$PATCH_APPEND_LINE" ] && echo 1 || echo 0)"
+check "the patches are appended before the thread" \
+  '1' "$([ "$DISCUSSION_LINE" -gt "$PATCH_APPEND_LINE" ] && echo 1 || echo 0)"
+check "and the thread is still the last thing before Begin." \
+  '1' "$([ "$BEGIN_LINE" -gt "$DISCUSSION_LINE" ] && echo 1 || echo 0)"
+
+# THE FILE THAT WAS SENT, not the block. The prompt is assembled from several
+# pieces and a step that appended the wrong one would pass a check against
+# the block alone.
+# shellcheck disable=SC2016  # the workflow's literal shell, not an expansion
+check "the verification reads the prompt, not the block" \
+  '1' "$(sed -n "${PATCH_VERIFY_LINE},\$p" "$WORKFLOW_FILE" | head -2 \
+         | grep -c '"\$RUNNER_TEMP/prompt.md" "\$RUNNER_TEMP/supplied.tsv"')"
+
+# NOT BEST-EFFORT. The thread degrades to a review without it; the patches
+# ARE the change, so a failure to render them has to become the
+# review-unavailable comment rather than a reviewer with no diff.
+check "a failed render is an error outcome, not a warning and carry on" \
+  '1' "$(sed -n "${PATCH_RENDER_LINE},\$p" "$WORKFLOW_FILE" | head -12 \
+         | grep -c 'REVIEW_OUTCOME=error')"
+check "and so is a verification that fails" \
+  '1' "$(sed -n "${PATCH_VERIFY_LINE},\$p" "$WORKFLOW_FILE" | head -10 \
+         | grep -c 'REVIEW_OUTCOME=error')"
+
+# THE BYTE BUDGET HAS A BACKSTOP AND IT HAS TO BITE. The budget above is
+# arithmetic over three measurements; the assertion is against the file
+# actually sent. A `::warning::` and carry on sends the oversize prompt
+# anyway, the CLI refuses it before any API call -- "Prompt is too long",
+# duration_api_ms 0 -- and the job dies with no comment posted.
+OVERSIZE_LINE=$(grep -n 'bytes against a max_prompt_bytes of' "$WORKFLOW_FILE" \
+  | head -1 | cut -d: -f1 || true)
+OVERSIZE_LINE=${OVERSIZE_LINE:-0}
+check "an oversize prompt is detected against the assembled file" \
+  '1' "$([ "$OVERSIZE_LINE" -gt 0 ] && echo 1 || echo 0)"
+check "and it is an error outcome, not a warning and carry on" \
+  '1' "$(sed -n "${OVERSIZE_LINE},\$p" "$WORKFLOW_FILE" | head -6 \
+         | grep -c 'REVIEW_OUTCOME=error')"
+check "and it stops before the CLI is reached" \
+  '1' "$(sed -n "${OVERSIZE_LINE},\$p" "$WORKFLOW_FILE" | head -6 \
+         | grep -c 'exit 0')"
+check "and the error names both byte counts" \
+  '1' "$(sed -n "${OVERSIZE_LINE},\$p" "$WORKFLOW_FILE" | head -6 \
+         | grep -c 'REVIEW_ERROR=.*against a max_prompt_bytes of')"
+
+# THE RESERVED TAIL IS WHAT IS COUNTED NOWHERE ELSE, and a constant that
+# disagreed with its own comment is a byte the budget does not know about.
+# Measured: a newline before the block, one before the thread and
+# "\nBegin.\n" is 1 + 1 + 8.
+check "the reserved tail is the measured ten bytes" \
+  '1' "$(grep -c '^ *PROMPT_TAIL_BYTES=10$' "$WORKFLOW_FILE")"
+check "and the comment above it accounts for all ten" \
+  '1' "$(grep -B4 '^ *PROMPT_TAIL_BYTES=10$' "$WORKFLOW_FILE" \
+         | grep -c '8 for ')"
+
+# THE SUPPLY PAIR IN THE MARKER COMES FROM THE LEDGER, not from the
+# manifest. review_output.py's own count is over OPENABLE rows, which is no
+# longer the population `read=` divides by, so the two fields on one comment
+# were called `supplied` and counted different things.
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "the adjudicator is given the ledger's supply counts" \
+  '1' "$(grep -c -- '--supply-total "\${SUPPLY_TOTAL:-}"' "$WORKFLOW_FILE")"
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "and its supplied half" \
+  '1' "$(grep -c -- '--supply-supplied "\${SUPPLY_SUPPLIED:-}"' "$WORKFLOW_FILE")"
+
+# ONE SCHEMA TOKEN, READ OFF THE PROGRAM THAT WRITES IT. The four
+# non-reviewed lanes hard-code their marker in this file; a bump in
+# review_output.py that missed them would put two schemas on one pull
+# request, which is exactly what the token exists to prevent.
+MARKER_VERSION=$(sed -n 's/.*<!-- claude-review \(v[0-9]*\) lane={lane}.*/\1/p' \
+  "$HERE/review_output.py" | head -1 || true)
+check "review_output.py declares a marker version" \
+  '1' "$([ -n "$MARKER_VERSION" ] && echo 1 || echo 0)"
+check "and every hard-coded lane marker carries the same one" \
+  '4' "$(grep -c "<!-- claude-review ${MARKER_VERSION} lane=" "$WORKFLOW_FILE")"
+check "and no other schema token is left behind" \
+  "$MARKER_VERSION" "$(grep -o '<!-- claude-review v[0-9]* lane=' "$WORKFLOW_FILE" \
+         | awk '{print $3}' | sort -u | paste -sd, -)"
+
+# THE BUDGET REACHES THE RENDERER. An unset MAX_PATCH_BLOCK_BYTES is
+# patch_block.py's "no backstop", so a budget that did not arrive would send
+# an unbounded prompt -- which the CLI refuses before any API call, with no
+# review and nothing to retry.
+# shellcheck disable=SC2016  # the workflow's literal shell, not an expansion
+check "the renderer is given the computed budget" \
+  '1' "$(grep -c 'MAX_PATCH_BLOCK_BYTES="\$PATCH_BLOCK_BUDGET"' "$WORKFLOW_FILE")"
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "the budget is derived from max_prompt_bytes" \
+  '1' "$(grep -c 'PATCH_BLOCK_BUDGET=\$((MAX_PROMPT_BYTES - PROMPT_BASE_BYTES' "$WORKFLOW_FILE")"
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "and a remainder that ran out becomes 1, not 0" \
+  '1' "$(sed -n '/PATCH_BLOCK_BUDGET=\$((MAX_PROMPT_BYTES/,+8p' "$WORKFLOW_FILE" \
+         | grep -c 'PATCH_BLOCK_BUDGET=1')"
+
+# ITS OWN NONCE. A shared value would make the thread's sanitising and the
+# patches' deliberate lack of it two uses of one key.
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "the patch fence carries a nonce of its own" \
+  '1' "$(grep -c 'PATCH_NONCE=\$(head -c 8 /dev/urandom' "$WORKFLOW_FILE")"
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "and it is not the thread's" \
+  '1' "$(grep -c 'DISCUSSION_NONCE=\$(head -c 8 /dev/urandom' "$WORKFLOW_FILE")"
+# AND BOTH GUARDS VALIDATE WHAT THEY LOOK LIKE THEY VALIDATE.
+# ~~`[0-9a-f][0-9a-f]*`~~ checked the first two characters and accepted
+# anything after them. `review_io.run_nonce` is the authority either way, so
+# this was never exploitable -- but a guard that reads as a hex check and is
+# not one is the next thing somebody trusts.
+check "the thread nonce guard rejects a non-hex character anywhere" \
+  '1' "$(grep -cF '*[!0-9a-f]*) DISCUSSION_NONCE="" ;;' "$WORKFLOW_FILE")"
+check "and the patch nonce guard does too" \
+  '1' "$(grep -cF '*[!0-9a-f]*) PATCH_NONCE="" ;;' "$WORKFLOW_FILE")"
+check "and both require at least eight characters" \
+  '2' "$(grep -cF '????????*) ;;' "$WORKFLOW_FILE")"
+check "and the two-character pattern is gone" \
+  '0' "$(grep -cF '[0-9a-f][0-9a-f]*) ;;' "$WORKFLOW_FILE" || true)"
+
+# SUPPLY SURVIVES A COVERAGE FAILURE. The section row above is written
+# unconditionally from patch_block.py's log, so a marker reading
+# `supplied=unmeasured/unmeasured` beside "14 of 16 file(s) with a patch"
+# puts two accounts of one number on one comment. The log is still on disk.
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "a failed coverage run still reports supply from the patch-block log" \
+  '1' "$(grep -cF 'echo "SUPPLY_TOTAL=${SUPPLY_FILES}"' "$WORKFLOW_FILE")"
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "and its supplied half, from the same file" \
+  '1' "$(grep -cF 'echo "SUPPLY_SUPPLIED=${SUPPLY_IN}"' "$WORKFLOW_FILE")"
+check "guarded so a non-numeric pair writes nothing at all" \
+  '1' "$(grep -cF '*[!0-9:]* | :* | *:) ;;' "$WORKFLOW_FILE")"
+
+# THE LEDGER REACHES THE COVERAGE CHECK. Without it every supplied row goes
+# back in the read population and the comment reports a measured zero on a
+# review that was handed everything.
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "the coverage check is given the supply ledger" \
+  '1' "$(grep -c -- '--supplied "\$RUNNER_TEMP/supplied.tsv"' "$WORKFLOW_FILE")"
+
+# AND BOTH NUMBERS REACH THE PULL REQUEST. The supplied row is the one
+# disclosure written unconditionally: it is what a human now reads in place
+# of `read=R/T`, whose denominator has become the rows still to be fetched.
+check "the comment discloses how many patches were supplied" \
+  '1' "$(grep -c "printf 'Patches supplied in the prompt" "$WORKFLOW_FILE")"
+check "and names the ones the budget dropped" \
+  '1' "$(grep -c 'Patch not supplied in the prompt' "$WORKFLOW_FILE")"
+# AND THE ROWS WHOSE PATCH FILE WOULD NOT OPEN, which is a different reason
+# from the budget and reaches the comment under its own label: the row above
+# names `max_prompt_bytes` and would be the wrong explanation.
+check "and the ones whose patch file could not be read" \
+  '1' "$(grep -c 'Patch file could not be read' "$WORKFLOW_FILE")"
+check "read off the log line patch_block.py writes for them" \
+  '1' "$(grep -cF "capped_list '  ? '" "$WORKFLOW_FILE")"
+check "and the dropped list off its own line" \
+  '1' "$(grep -cF "capped_list '  % '" "$WORKFLOW_FILE")"
+check "both through the capping helper, not a bare head -- defined once" \
+  '3' "$(grep -cF 'capped_list ' "$WORKFLOW_FILE")"
+# NEITHER LIST IS SILENTLY TRUNCATED. ~~`head -20` alone~~ rendered 25
+# dropped patches as 20 names and five omissions nobody was told about,
+# under a program whose own docstring says a budget that could silence the
+# list of what it dropped would hide exactly what it did. Same `(+N more)`
+# shape as `list_from`, counted off the log's own count lines.
+# TWO, because `list_from` in the prompt step already had it: the point is
+# that both helpers now disclose the same way rather than one of them
+# truncating in silence.
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "a list past twenty says how many it is not showing, in both helpers" \
+  '2' "$(grep -cF 'LIST="${LIST} (+$(($2 - 20)) more)"' "$WORKFLOW_FILE")"
+# shellcheck disable=SC2016  # a literal workflow expression under test
+check "and the count comes from patch_block.py own report lines" \
+  '1' "$(grep -cF 'Patch block $1: ' "$WORKFLOW_FILE")"
+
+# THE HELPER MUST BE IN THE CHECKOUT GUARD, or the first run on a consumer
+# fails inside python with a traceback instead of the review-unavailable
+# comment the other nine helpers get.
+# READ OFF THE LIST, not off the file: `claude/patch_block.py` also appears
+# in the two commands that run it, so a whole-file count passes whether or
+# not the guard knows about it.
+check "patch_block.py is checked for like every other helper" \
+  '1' "$(awk '/^ *for f in claude\//,/; do$/' "$GUARD" \
+    | grep -c 'claude/patch_block.py' || true)"
+
+# AND THE PROMPT MUST NOT STILL SAY THE OPPOSITE. "No diff is pasted into
+# this prompt" was true and is now the first thing a reader of the file
+# would believe.
+PROMPT_FILE="$HERE/pr-prompt-v2.md"
+check "the prompt no longer says no diff is pasted into it" \
+  '0' "$(grep -c 'No diff is pasted into this prompt' "$PROMPT_FILE" || true)"
+check "and says the patches are in it" \
+  '1' "$(grep -c '^Four things\. \*\*The patches are in this prompt\*\*' "$PROMPT_FILE")"
+# A TRUNCATED ROW IS THE EXCEPTION TO "the only rows left for you to fetch
+# are the ones it names". It is in `patch_block.IN_PROMPT`, so the
+# disclosure does not name it, and `review_coverage.measure` deliberately
+# keeps it in the read population -- so a model trusting the absolute form
+# skipped the row and was then named unopened on the pull request.
+check "the prompt does not claim the named rows are the only ones to fetch" \
+  '0' "$(grep -c 'the only rows left for you to fetch are the ones it names' \
+    "$PROMPT_FILE" || true)"
+check "and names the truncated row as the exception" \
+  '1' "$(grep -c "manifest's fifth column marks \`truncated\`\*\*" "$PROMPT_FILE")"
 
 if [ "$FAILED" -ne 0 ]; then
   echo "review workflow tests FAILED" >&2
