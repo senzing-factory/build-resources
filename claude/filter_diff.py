@@ -1046,10 +1046,17 @@ def _apply_file_cap(kept: list, patches: list, cap: int) -> dict:
     than paths, because the caller subtracts whatever the total budget drops
     afterwards: a file reported under both headings carries two
     contradictory remedies on the pull request.
+
+    IT ALSO MARKS THE RECORD, because the manifest's fifth column is how
+    `patch_block.py` learns this without sniffing the patch for its own
+    marker text -- which is author-controlled and fired with truncation
+    disabled. Same in-place convention as `patches`, on dicts this program
+    built.
     """
     cut = _truncate_oversize(kept, patches, cap)
     for index, shortened in cut.items():
         patches[index] = shortened
+        kept[index]["truncated"] = True
     return cut
 
 
@@ -1102,6 +1109,18 @@ def _write_patch(patch: bytes, index: int, out_dir: str) -> str:
     return f"{out_dir}/{name}"
 
 
+def _truncated_token(record: dict, token: str) -> str:
+    """The manifest's fifth column for one row.
+
+    NOT the record's mark alone: the budget may have dropped what the cap
+    cut, leaving the row no patch at all, and a row with no patch cannot be
+    a truncated one. Same rule as `cut_paths`, which reports it to a human.
+    """
+    if record.get("truncated") and not token:
+        return review_io.TRUNCATED
+    return review_io.NOT_TRUNCATED
+
+
 def _write_review_set(
     kept: list, patches: list, withheld: dict, binary: set, out_dir: str
 ) -> ReviewSet:
@@ -1144,6 +1163,7 @@ def _write_review_set(
                     str(int(record.get("changes") or 0)),
                     tsv_field(path),
                     patch_file,
+                    _truncated_token(record, token),
                 ]
             )
         )

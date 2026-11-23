@@ -285,11 +285,11 @@ check "the downgrade is counted" \
 # ---------------------------------------------------------------------------
 
 check "the header counts what survived, not what was submitted" \
-  '1' "$(grep -c '^\*\*3 findings in the 3 of 4 files opened\*\* — 2 blockers, 1 risk\.$' "$BODY")"
+  '1' "$(grep -c '^\*\*3 findings in the 3 of 4 files left to fetch opened\*\* — 2 blockers, 1 risk\.$' "$BODY")"
 check "the marker is written from the measurement" \
-  '1' "$(grep -c '^<!-- claude-review v4 lane=B findings=3 blockers=2 findings_withheld=3 supplied=[0-9]*/[0-9]* truncated=[0-9]* read=3/4 head=abc -->$' "$BODY")"
+  '1' "$(grep -c '^<!-- claude-review v5 lane=B findings=3 blockers=2 findings_withheld=3 supplied=[0-9]*/[0-9]* truncated=[0-9]* read=3/4 head=abc -->$' "$BODY")"
 check "exactly one marker reaches the comment" \
-  '1' "$(grep -c 'claude-review v4' "$BODY")"
+  '1' "$(grep -c 'claude-review v5' "$BODY")"
 # `supplied=` IS ABOUT FILES AND `findings_withheld=` IS ABOUT FINDINGS, and
 # the marker now says which is which. Read beside `read=R/T` it answers the
 # question the old marker could not: was the reviewer not given the change,
@@ -332,6 +332,64 @@ check "and says so rather than writing it into the marker" \
 check "and a binary row is in neither half of it" \
   '0' "$(grep -c ' supplied=[0-9]*/4 ' "$BODY" || true)"
 
+# ~~ITS DENOMINATOR IS OPENABLE ROWS~~ -- NOT ANY MORE, AND THAT IS WHY THE
+# MARKER IS v5. Two fields called `supplied` sat on one comment: this one
+# counted patches WRITTEN TO DISK over openable rows, while the disclosure
+# section the prompt step writes counts patches that reached the PROMPT over
+# rows with a patch. `--supply-total`/`--supply-supplied` carry
+# review_coverage.py's SUPPLY_ counts, so both now say the same thing, and
+# the manifest count above is the fallback for a caller with no ledger.
+: > "$REPO/m_supply.env"
+orun main.json body_supply.md m_supply.env \
+  --supply-supplied 2 --supply-total 3 > /dev/null
+check "the ledger counts win over the manifest" \
+  '1' "$(grep -c ' supplied=2/3 truncated=0 read=' "$REPO/body_supply.md")"
+check "and the manifest count is gone from that marker" \
+  '0' "$(grep -c ' supplied=3/3 ' "$REPO/body_supply.md" || true)"
+# A SUPPLY TOTAL OF 0 IS A REAL ANSWER -- no row had a patch -- and must not
+# fall back to the manifest, which would report three.
+: > "$REPO/m_supply0.env"
+orun main.json body_supply0.md m_supply0.env \
+  --supply-supplied 0 --supply-total 0 > /dev/null
+check "a measured zero is kept, not read as 'no flag given'" \
+  '1' "$(grep -c ' supplied=0/0 truncated=0 read=' "$REPO/body_supply0.md")"
+# A NAMED FLAG WHOSE VALUE IS NOT A NUMBER IS UNKNOWN, NOT THE MANIFEST.
+# ~~It fell back~~, which put the manifest's own population -- patches
+# written to disk over openable rows -- under the v5 token: five rows with
+# one dropped by the budget rendered `supplied=5/5` above a section row
+# reading "4 of 5". The workflow ALWAYS names the flag and leaves it empty
+# when review_coverage.py omitted the SUPPLY_ keys, so that state is the
+# reviewed path, not a hypothetical caller.
+: > "$REPO/m_supply_bad.env"
+BAD_SUPPLY_LOG=$(orun main.json body_supply_bad.md m_supply_bad.env \
+  --supply-supplied 1 --supply-total x 2>&1)
+check "a malformed supply total is unmeasured, not the manifest" \
+  '1' "$(grep -c ' supplied=unmeasured/unmeasured truncated=0 read=' \
+    "$REPO/body_supply_bad.md")"
+check "and no manifest count reaches that marker" \
+  '0' "$(grep -c ' supplied=3/3 ' "$REPO/body_supply_bad.md" || true)"
+check "and it says why on stderr" \
+  '1' "$(printf '%s\n' "$BAD_SUPPLY_LOG" \
+    | grep -c -- '--supply-total must be a non-negative integer')"
+# THE WORKFLOW'S OWN SHAPE: `--supply-total ""` when the ledger would not
+# read. Empty is not a digit, so it must reach the same token.
+: > "$REPO/m_supply_empty.env"
+orun main.json body_supply_empty.md m_supply_empty.env \
+  --supply-supplied '' --supply-total '' > /dev/null 2>&1
+check "an empty supply total is unmeasured too" \
+  '1' "$(grep -c ' supplied=unmeasured/unmeasured truncated=0 read=' \
+    "$REPO/body_supply_empty.md")"
+check "and the manifest count is absent from it as well" \
+  '0' "$(grep -c ' supplied=3/3 ' "$REPO/body_supply_empty.md" || true)"
+
+# THE SCHEMA TOKEN TRACKS WHAT A FIELD COUNTS, not only which fields exist.
+# `supplied=` kept its name and changed population, which is the change a
+# reader parsing the marker would not notice.
+check "the marker declares the new schema" \
+  '1' "$(grep -c '^<!-- claude-review v5 ' "$REPO/body_supply.md")"
+check "and no v4 marker survives anywhere in it" \
+  '0' "$(grep -c 'claude-review v4' "$REPO/body_supply.md" || true)"
+
 # $GITHUB_ENV DISCIPLINE. Every metric is a number -- REVIEW_PREV_FINDINGS is
 # -1 when there is no previous comment, hence the sign. A path or a line of
 # the model's prose in that file is author-controlled text one newline away
@@ -360,7 +418,7 @@ orun solo_pad.json solo_pad.md m_pad.env --summary '4 files, +41/-0.' > /dev/nul
 check "a sole padding drop does not post as no blocking findings" \
   '0' "$(grep -c 'No blocking findings' "$REPO/solo_pad.md" || true)"
 check "it says nothing survived adjudication instead" \
-  '1' "$(grep -c '^\*\*No finding survived adjudication in the 4 of 4 files opened\.\*\* 1 finding dropped before posting; see below\.$' "$REPO/solo_pad.md")"
+  '1' "$(grep -c '^\*\*No finding survived adjudication in the 4 of 4 files left to fetch opened\.\*\* 1 finding dropped before posting; see below\.$' "$REPO/solo_pad.md")"
 check "and the drop reaches the pull request with its reason" \
   '1' "$(grep -c '^1 padding (citation absent at base)$' "$REPO/solo_pad.md")"
 check "the marker separates nothing-found from everything-dropped" \
@@ -569,7 +627,7 @@ check "and the refusal is disclosed rather than read as a clean review" \
   --base "$BASE" --out thin_findings.md --head abc --lane C \
   --coverage-read 2 --coverage-total 40 > /dev/null )
 check "a headline with findings names how much was opened" \
-  '1' "$(grep -c '^\*\*1 finding in the 2 of 40 files opened\*\* — 0 blockers, 1 risk\.$' \
+  '1' "$(grep -c '^\*\*1 finding in the 2 of 40 files left to fetch opened\*\* — 0 blockers, 1 risk\.$' \
     "$REPO/thin_findings.md")"
 
 # ---------------------------------------------------------------------------
@@ -620,7 +678,7 @@ check "and the section is not fenced, so the notes wrap" \
   '0' "$(sed -n '/^\*\*Checked and found sound\*\*$/,$p' "$REPO/n1.md" \
     | grep -c '^```' || true)"
 check "and the clean headline still says what it said" \
-  '1' "$(grep -c '^✅ \*\*No blocking findings in the 4 of 4 files opened\.\*\*$' "$REPO/n1.md")"
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 4 of 4 files left to fetch opened\.\*\*$' "$REPO/n1.md")"
 check "and the count is a metric" \
   '3' "$(metric_of "$REPO/m_n1.env" REVIEW_NOTES)"
 
@@ -646,7 +704,7 @@ check "a clean verdict with no notes does not carry the tick" \
 check "and does not call itself clean" \
   '0' "$(grep -c 'No blocking findings' "$REPO/n2.md" || true)"
 check "and says in the headline that it established nothing" \
-  '1' "$(grep -c '^\*\*No findings, and nothing recorded as checked in the 4 of 4 files opened\.\*\* This review is not evidence that the change is sound\.$' "$REPO/n2.md")"
+  '1' "$(grep -c '^\*\*No findings, and nothing recorded as checked in the 4 of 4 files left to fetch opened\.\*\* This review is not evidence that the change is sound\.$' "$REPO/n2.md")"
 check "and renders no evidence heading over an empty list" \
   '0' "$(grep -c '^\*\*Checked and found sound\*\*$' "$REPO/n2.md" || true)"
 check "and the metric is zero rather than absent" \
@@ -689,7 +747,7 @@ N2B_LOG=$( cd "$REPO" && python3 "$SCRIPT" --findings n2b.json --manifest manife
   --coverage-read 1 --coverage-total 1 \
   --summary '1 file, +1/-1.' )
 check "one note over a one-line change earns the clean verdict" \
-  '1' "$(grep -c '^✅ \*\*No blocking findings in the 1 of 1 file opened\.\*\* 1 file, +1/-1\.$' "$REPO/n2b.md")"
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 1 of 1 file left to fetch opened\.\*\* 1 file, +1/-1\.$' "$REPO/n2b.md")"
 check "and the comment states what was examined" \
   '1' "$(grep -cxF -- '✅ the pinned SHA resolves to the tag the comment names; no other line in the file moved' "$REPO/n2b.md")"
 check "and this is the run whose log does report a clean verdict" \
@@ -850,7 +908,7 @@ orun n4.json n4.md m_n4.env > /dev/null
 check "a note carrying the state marker cannot reach the body" \
   '0' "$(grep -c 'deadbeefcafe' "$REPO/n4.md" || true)"
 check "and the body still holds exactly one marker" \
-  '1' "$(grep -c '^<!-- claude-review v4 ' "$REPO/n4.md")"
+  '1' "$(grep -c '^<!-- claude-review v5 ' "$REPO/n4.md")"
 check "and the marker it holds is this run's" \
   '1' "$(grep -c 'findings=0 blockers=0 findings_withheld=0' "$REPO/n4.md")"
 # EVERY CHARACTER THE NOTE WOULD HAVE SPENT AS MARKDOWN IS INERT. An exact
@@ -1159,7 +1217,7 @@ check "with no refusal among them" \
   '0' "$(metric_of "$REPO/m_n6.env" REVIEW_NOTES_REFUSED)"
 # The marker refusal is independent of all of this and must survive it.
 check "and the body still holds exactly one state marker" \
-  '1' "$(grep -c '^<!-- claude-review v4 ' "$REPO/n6.md")"
+  '1' "$(grep -c '^<!-- claude-review v5 ' "$REPO/n6.md")"
 
 # N7. THE SCHEMA AND THIS PROGRAM MUST AGREE ABOUT THE EVIDENCE, the same
 # way they already do about a message and a path. `notes` being REQUIRED is
@@ -1390,7 +1448,7 @@ orun p7.json p7.md m_p7.env > /dev/null
 check "a prerequisite carrying the state marker cannot reach the body" \
   '0' "$(grep -c 'deadbeefcafe' "$REPO/p7.md" || true)"
 check "and the body still holds exactly one marker" \
-  '1' "$(grep -c '^<!-- claude-review v4 ' "$REPO/p7.md")"
+  '1' "$(grep -c '^<!-- claude-review v5 ' "$REPO/p7.md")"
 check "and the markdown in the one beside it is inert" \
   '1' "$(grep -cxF -- '🔑 the IAM role needs s3:GetObject on the \*\*bucket\*\* named in deploy\.yaml' \
     "$REPO/p7.md")"
@@ -1551,7 +1609,7 @@ check "the forged bullet does not become a bullet" '2' "$A8_BULLETS"
 check "the header counts exactly the bullets in the body" \
   "$A8_BULLETS" "$(sed -n 's/^\*\*\([0-9]*\) finding.*/\1/p' "$REPO/a8.md")"
 check "the marker counts exactly the bullets in the body" \
-  "$A8_BULLETS" "$(sed -n 's/.*claude-review v4 [^>]*findings=\([0-9]*\) .*/\1/p' "$REPO/a8.md")"
+  "$A8_BULLETS" "$(sed -n 's/.*claude-review v5 [^>]*findings=\([0-9]*\) .*/\1/p' "$REPO/a8.md")"
 check "and REVIEW_FINDINGS agrees with both" \
   "$A8_BULLETS" "$(metric_of "$REPO/m_a8.env" REVIEW_FINDINGS)"
 check "the forged bullet survives as text inside the real one" \
@@ -1574,7 +1632,7 @@ orun mixed.json mixed.md m_mixed.env > /dev/null
 check "only the findings that were not refused reach the comment" \
   '3' "$(grep -c '^- [^ ]* \*\*' "$REPO/mixed.md")"
 check "the header says three, not five" \
-  '1' "$(grep -c '^\*\*3 findings in the 4 of 4 files opened\*\* — 1 blocker, 2 risks\.$' "$REPO/mixed.md")"
+  '1' "$(grep -c '^\*\*3 findings in the 4 of 4 files left to fetch opened\*\* — 1 blocker, 2 risks\.$' "$REPO/mixed.md")"
 check "both refusals are counted" \
   '2' "$(metric_of "$REPO/m_mixed.env" REVIEW_UNSAFE_REJECTED)"
 check "the refusal is disclosed on the pull request" \
@@ -1586,7 +1644,7 @@ check "findings_withheld= in the marker covers the refusals" \
 check "the body carries exactly one claude-review marker" \
   '1' "$(grep -c '<!-- claude-review' "$REPO/mixed.md")"
 check "and it is the last non-empty line, where previous_stats looks" \
-  '1' "$(grep -v '^$' "$REPO/mixed.md" | tail -1 | grep -c '^<!-- claude-review v4 ')"
+  '1' "$(grep -v '^$' "$REPO/mixed.md" | tail -1 | grep -c '^<!-- claude-review v5 ')"
 
 # ---------------------------------------------------------------------------
 # B -- LENGTH. The schema declares these bounds and this program witnesses
@@ -2039,7 +2097,7 @@ jf clean.json '{"findings":[]}'
 : > "$REPO/m_clean.env"
 orun clean.json clean.md m_clean.env --summary '4 files, +41/-0.' > /dev/null
 check "an empty findings array is the clean verdict" \
-  '1' "$(grep -c '^✅ \*\*No blocking findings in the 4 of 4 files opened\.\*\* 4 files, +41/-0\.$' "$REPO/clean.md")"
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 4 of 4 files left to fetch opened\.\*\* 4 files, +41/-0\.$' "$REPO/clean.md")"
 check "a clean review still carries a marker" \
   '1' "$(grep -c 'findings=0 blockers=0' "$REPO/clean.md")"
 check "an explicit clean verdict is not flagged as missing" \
@@ -2069,7 +2127,7 @@ check "and it is annotated as a warning" \
 check "the outcome is distinguishable from clean" \
   '1' "$(metric_of "$REPO/m_absent.env" REVIEW_NO_VERDICT)"
 check "a run that read no verdict still produces a comment with a marker" \
-  '1' "$(grep -c 'claude-review v4' "$REPO/absent.md")"
+  '1' "$(grep -c 'claude-review v5' "$REPO/absent.md")"
 
 # The three other ways the file can carry nothing adjudicable. Each must
 # reach the same verdict, because each means the same thing.
@@ -2126,9 +2184,58 @@ check "and the document was adjudicated, so it is not a missing verdict" \
   --base "$BASE" --out thin.md --head abc --lane C \
   --coverage-read 2 --coverage-total 40 --summary '40 files, +6654/-724.' > /dev/null )
 check "the clean headline names how much was opened" \
-  '1' "$(grep -c '^✅ \*\*No blocking findings in the 2 of 40 files opened\.\*\* 40 files, +6654/-724\.$' "$REPO/thin.md")"
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 2 of 40 files left to fetch opened\.\*\* 40 files, +6654/-724\.$' "$REPO/thin.md")"
 check "and the marker carries the same measurement" \
   '1' "$(grep -c 'findings=0 blockers=0 findings_withheld=0 supplied=[0-9]*/[0-9]* truncated=[0-9]* read=2/40 ' "$REPO/thin.md")"
+
+# THE HEADLINE'S DENOMINATOR IS THE ROWS LEFT TO FETCH, AND IT SAYS SO.
+# ~~"in the 1 of 2 files opened"~~ sat directly above a section row reading
+# "14 of 16 file(s) with a patch": two file counts on one comment, 2 and 16,
+# with nothing saying they divide different populations. Three other
+# wordings moved when the patches went into the prompt; this is the one a
+# human reads first and it did not.
+( cd "$REPO" && python3 "$SCRIPT" --findings main.json --manifest manifest.tsv \
+  --base "$BASE" --out pop.md --head abc --lane B \
+  --coverage-read 1 --coverage-total 2 \
+  --supply-supplied 14 --supply-total 16 > /dev/null )
+check "the headline names the population its denominator divides" \
+  '1' "$(grep -c 'in the 1 of 2 files left to fetch opened' "$REPO/pop.md")"
+check "and no headline claims that 2 is the file count of the change" \
+  '0' "$(grep -c 'of 2 files opened' "$REPO/pop.md" || true)"
+check "while the marker still carries both pairs, undivided" \
+  '1' "$(grep -c ' supplied=14/16 truncated=0 read=1/2 ' "$REPO/pop.md")"
+
+# NOTHING LEFT TO FETCH IS THE COMMON CASE, AND IT RENDERED NOTHING AT ALL.
+# `--coverage-total 0` means every openable row's patch was supplied, so
+# there is no fetch count to give -- and the clause returned "", producing
+# "No blocking findings. 16 files, +400/-20", which is precisely the
+# countless headline this clause exists to prevent.
+( cd "$REPO" && python3 "$SCRIPT" --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out supplied_all.md --head abc --lane B \
+  --coverage-read 0 --coverage-total 0 \
+  --supply-supplied 16 --supply-total 16 \
+  --summary '16 files, +400/-20.' > /dev/null )
+check "a fully supplied review reports supply rather than nothing" \
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 16 of 16 files whose patch was supplied\.\*\* 16 files, +400/-20\.$' "$REPO/supplied_all.md")"
+check "and no headline goes out with no count in it at all" \
+  '0' "$(grep -c '^✅ \*\*No blocking findings\.\*\*' "$REPO/supplied_all.md" || true)"
+# AND THE UNKNOWN SUPPLY PAIR IS STILL A TOKEN HERE. Falling through to a
+# number would assert a measurement the ledger could not provide.
+( cd "$REPO" && python3 "$SCRIPT" --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out supplied_unk.md --head abc --lane B \
+  --coverage-read 0 --coverage-total 0 --supply-total '' \
+  --summary '16 files, +400/-20.' > /dev/null 2>&1 )
+check "an unreadable ledger leaves the headline unmeasured, not counted" \
+  '1' "$(grep -c '^✅ \*\*No blocking findings (review coverage unmeasured)\.\*\*' "$REPO/supplied_unk.md")"
+# A MANIFEST NO ROW OF WHICH HAD A PATCH has nothing to report either way --
+# a binary-only change -- so the clause is empty rather than unmeasured.
+( cd "$REPO" && python3 "$SCRIPT" --findings clean.json --manifest manifest.tsv \
+  --base "$BASE" --out supplied_none.md --head abc --lane B \
+  --coverage-read 0 --coverage-total 0 \
+  --supply-supplied 0 --supply-total 0 \
+  --summary '2 files, +0/-0.' > /dev/null )
+check "a change with no patch anywhere carries the summary alone" \
+  '1' "$(grep -c '^✅ \*\*No blocking findings\.\*\* 2 files, +0/-0\.$' "$REPO/supplied_none.md")"
 
 # review_coverage.py writes `unmeasured` when nothing could be matched. It is
 # a TOKEN: rendered as a number it would read as a measurement of nothing,
@@ -2170,7 +2277,7 @@ check "blockers are kept before risks" \
 check "the findings past the cap are counted" \
   '3' "$(metric_of "$REPO/m_many.env" REVIEW_DROPPED_FOR_SPACE)"
 check "and the header says so" \
-  '1' "$(grep -c '^\*\*5 findings in the 4 of 4 files opened\*\* — 4 blockers, 1 risk\. 3 withheld for space\.$' "$REPO/many.md")"
+  '1' "$(grep -c '^\*\*5 findings in the 4 of 4 files left to fetch opened\*\* — 4 blockers, 1 risk\. 3 withheld for space\.$' "$REPO/many.md")"
 
 # THE BODY LIMIT. `assemble` trims by dropping findings, but the header and
 # the marker were computed from the untrimmed list -- so a BLOCKER vanished
@@ -2201,7 +2308,7 @@ check "the comment is inside the body limit" \
 check "the header counts only the findings the comment carries" \
   "$TRIM_LINES" "$(sed -n 's/^\*\*\([0-9]*\) finding.*/\1/p' "$REPO/trim.md")"
 check "the marker counts only the findings the comment carries" \
-  "$TRIM_LINES" "$(sed -n 's/.*claude-review v4 [^>]*findings=\([0-9]*\) .*/\1/p' "$REPO/trim.md")"
+  "$TRIM_LINES" "$(sed -n 's/.*claude-review v5 [^>]*findings=\([0-9]*\) .*/\1/p' "$REPO/trim.md")"
 check "REVIEW_FINDINGS is the post-trim number too" \
   "$TRIM_LINES" "$(metric_of "$REPO/m_fat.env" REVIEW_FINDINGS)"
 check "and everything withheld is counted, cap and budget together" \
@@ -2615,7 +2722,7 @@ check "the rendered comment is byte-identical to one with no findings at all" \
   'same' \
   "$(cmp -s "$REPO/prose.visible" "$REPO/prose_none.visible" && echo same || echo differs)"
 check "and that comment is the ordinary clean verdict with its denominator" \
-  '1' "$(grep -c '^✅ \*\*No blocking findings in the 4 of 4 files opened\.\*\*$' \
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 4 of 4 files left to fetch opened\.\*\*$' \
     "$REPO/prose.visible")"
 
 # DO NOT GENERALISE THIS. Every other drop class keeps its disclosure, and

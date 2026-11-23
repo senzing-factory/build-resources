@@ -237,7 +237,7 @@ seam() { # seam <transcript> <body> -> runs both programs over one transcript
 seam clean.jsonl clean_body.md
 seam maxturns.jsonl maxturns_body.md
 check "a clean transcript becomes a clean verdict on the pull request" \
-  '1' "$(grep -c '^✅ \*\*No blocking findings in the 1 of 1 file opened\.\*\* 1 file, +1/-1\.$' \
+  '1' "$(grep -c '^✅ \*\*No blocking findings in the 1 of 1 file left to fetch opened\.\*\* 1 file, +1/-1\.$' \
     "$WORK/clean_body.md")"
 # AND IT IS CLEAN BECAUSE OF WHAT THE TRANSCRIPT CARRIED. The tick is
 # withheld from a run that recorded nothing, so this one assertion is the

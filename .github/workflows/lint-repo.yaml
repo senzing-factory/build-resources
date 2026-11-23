@@ -22,6 +22,9 @@ jobs:
   # mode-only change, a path containing a newline -- cannot be expressed as a
   # JSON fixture. So this job needs git, which the checkout above provides.
   #
+  # test_patch_block.sh needs none: a patch file, a manifest and a byte
+  # budget are all its assertions are about.
+  #
   # test_review_git.sh builds one as well, and poisons its `.git/config` with
   # a diff driver: what is worth asserting about that wrapper is that the
   # driver does not fire, not that a flag is spelled correctly.
@@ -46,6 +49,7 @@ jobs:
       - name: Run the Claude helper fixture suites
         run: |
           ./claude/test_filter_diff.sh
+          ./claude/test_patch_block.sh
           ./claude/test_pr_discussion.sh
           ./claude/test_resolve_refs.sh
           ./claude/test_review_coverage.sh

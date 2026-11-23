@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cspell:ignore BIGBODY cacheinfo capmanifest cappatch CAPREPO caprun CAPX capx CRREPO crun drun eqsrc erun mrun newpkg oldpkg splitlines superproject  -- test fixture / local constant names, not vocabulary
+# cspell:ignore BIGBODY cacheinfo capmanifest cappatch CAPREPO caprun captrunc CAPX capx CRREPO crun drun eqsrc erun mrun newpkg oldpkg splitlines superproject  -- test fixture / local constant names, not vocabulary
 # Fixture tests for filter_diff.py. No framework: builds the two input shapes
 # the program accepts, runs it, and checks what survived.
 #
@@ -217,7 +217,7 @@ check "exactly one file is called binary" \
 check "a -diff attribute does not make a text file binary" \
   '0' "$(manifest_of out | grep -c '^modified	[0-9]*	src/auth\.go	binary$' || true)"
 check "and that file gets a real patch instead" \
-  '1' "$(manifest_of out | grep -c '^modified	1	src/auth\.go	out/[0-9]*\.patch$')"
+  '1' "$(manifest_of out | grep -c '^modified	1	src/auth\.go	out/[0-9]*\.patch	-$')"
 check "nothing is left unpatched once the attributes are neutralised" \
   '0' "$(printf '%s\n' "$LOG" | sed -n 's/^Unpatched \([0-9][0-9]*\) file(s).*/\1/p')"
 
@@ -267,7 +267,7 @@ check "a deletion gets a real patch" \
 # must still reach the manifest with a patch -- an unmatched path falls out
 # of the review set silently, which is the whole failure this file guards.
 check "a path containing a space gets its own patch" \
-  '1' "$(manifest_of out | grep -c '^modified	2	src/with space\.go	out/[0-9]*\.patch$')"
+  '1' "$(manifest_of out | grep -c '^modified	2	src/with space\.go	out/[0-9]*\.patch	-$')"
 # The path is written literally, not as `grep -P '\xc3\xa9'`. Under C.UTF-8
 # -- which is what ubuntu-latest runs -- PCRE2 reads `\xc3` as the CHARACTER
 # U+00C3 rather than the raw byte, so it matches nothing and silently scores
@@ -275,9 +275,9 @@ check "a path containing a space gets its own patch" \
 # this suite reached CI. Literal bytes match in every locale, and `-P` is
 # GNU-only besides.
 check "a path containing non-ASCII bytes gets its own patch" \
-  '1' "$(manifest_of out | grep -c '^modified	2	src/café note\.go	out/[0-9]*\.patch$')"
+  '1' "$(manifest_of out | grep -c '^modified	2	src/café note\.go	out/[0-9]*\.patch	-$')"
 check "a newline in a path is escaped onto one manifest row" \
-  '1' "$(manifest_of out | grep -c '^added	1	odd\\nname\.txt	out/[0-9]*\.patch$')"
+  '1' "$(manifest_of out | grep -c '^added	1	odd\\nname\.txt	out/[0-9]*\.patch	-$')"
 check "a newline in a path cannot inject a second Files count" \
   '1' "$(printf '%s\n' "$LOG" | grep -c '^Files: ')"
 
@@ -336,7 +336,7 @@ check "the suppressed file is named under Unpatched, not Binary" \
 check "the suppressed file is never called binary" \
   '0' "$(printf '%s\n' "$ATTACK_LOG" | grep -c '^  ~ src/auth\.go$' || true)"
 check "so the reviewer is still sent to open it" \
-  '1' "$(cat "$ATTACK/out_attack/manifest.tsv" | grep -c '^modified	0	src/auth\.go	-$')"
+  '1' "$(cat "$ATTACK/out_attack/manifest.tsv" | grep -c '^modified	0	src/auth\.go	-	-$')"
 
 # Over budget, whole patches go largest-first and the row keeps its path and
 # change count, so the reviewer still sees that the file changed.
@@ -344,11 +344,11 @@ LOG=$(mrun out_budget "2000" "$WORK/files.json")
 check "over budget the largest patch is the one dropped" \
   'big.txt' "$(printf '%s\n' "$LOG" | sed -n 's/^  \* //p')"
 check "an omitted file keeps its manifest row, marked omitted" \
-  '1' "$(manifest_of out_budget | grep -c '^modified	[0-9]*	big\.txt	omitted$')"
+  '1' "$(manifest_of out_budget | grep -c '^modified	[0-9]*	big\.txt	omitted	-$')"
 check "an omitted patch is not reported as an exclude_globs exclusion" \
   'yarn.lock' "$(printf '%s\n' "$LOG" | sed -n 's/^  - //p')"
 check "the surviving patches are still written" \
-  '1' "$(manifest_of out_budget | grep -c '^modified	2	pkg/real\.go	out_budget/[0-9]*\.patch$')"
+  '1' "$(manifest_of out_budget | grep -c '^modified	2	pkg/real\.go	out_budget/[0-9]*\.patch	-$')"
 
 # ---------------------------------------------------------------------------
 # The per-file cap. A SEPARATE control from the total budget above, so every
@@ -450,6 +450,22 @@ check "a multi-hunk patch over the cap is reported as truncated" \
 check "the truncated count is reported for the workflow to parse" \
   '1' "$(printf '%s\n' "$CAP_LOG" | sed -n 's/^Truncated \([0-9][0-9]*\) file(s).*/\1/p')"
 
+# AND THE ROW CARRIES IT, in the manifest's fifth column. ~~patch_block.py
+# sniffed `*** TRUNCATED: ` out of the patch's last kilobyte~~, which is
+# author-controlled content: a patch whose own added lines discuss the
+# marker made a fully supplied row read as truncated, which returns it to
+# the read population and names it unopened on the pull request. The
+# program that cut the patch is the one that knows.
+captrunc() { capmanifest "$1" | awk -F'\t' -v p="$2" '$3 == p {print $5}'; }
+check "the cut row says so in the manifest, not only in the log" \
+  'truncated' "$(captrunc out multi.txt)"
+check "and a row the cap left alone says it was not cut" \
+  '-' "$(captrunc out tiny.txt)"
+check "a single-hunk patch the cap could not cut is not marked either" \
+  '-' "$(captrunc out one.txt)"
+check "nor is a pure rename, which has no hunk to cut" \
+  '-' "$(captrunc out renamed.txt)"
+
 # AT LEAST ONE HUNK ALWAYS SURVIVES, and for a SINGLE-hunk patch that means
 # the whole thing. This is the assertion the first truncating version did
 # not make and would have failed: one.txt is one hunk far larger than the
@@ -509,7 +525,7 @@ check "and every truncated patch is smaller than the one it replaced" \
 check "no row anywhere is left without a patch by the cap" \
   '0' "$(capmanifest out | awk -F'\t' '$4 == "-" || $4 == "omitted"' | wc -l | tr -d ' ')"
 check "the cap never emits a no-patch row for a deletion" \
-  '0' "$(capmanifest out | grep -c '^removed	[0-9]*	gone\.txt	-$' || true)"
+  '0' "$(capmanifest out | grep -c '^removed	[0-9]*	gone\.txt	-	' || true)"
 MULTI_CUT=$(cappatch out_tiny multi.txt)
 check "a truncated row still carries a real patch path" \
   '1' "$(printf '%s' "$MULTI_CUT" | grep -c '^out_tiny/[0-9]*\.patch$')"
@@ -528,6 +544,17 @@ check "no path is reported as both truncated and omitted" \
   '' "$(comm -12 \
       <(printf '%s\n' "$HOLE_LOG" | sed -n 's/^  > //p' | sort) \
       <(printf '%s\n' "$HOLE_LOG" | sed -n 's/^  \* //p' | sort))"
+# AND THE COLUMN AGREES WITH THE LOG, which is the whole point of carrying
+# it: a row the budget dropped has no patch at all, so it cannot also be a
+# truncated one, and `patch_block.py` would otherwise put it in both
+# populations off a state nothing downstream could check.
+check "a row the budget dropped is never also marked truncated" \
+  '0' "$(capmanifest out_hole | awk -F'\t' '$4 == "omitted" && $5 != "-"' \
+    | wc -l | tr -d ' ')"
+check "and the column names exactly the rows the log reports as cut" \
+  "$(printf '%s\n' "$HOLE_LOG" | sed -n 's/^  > //p' | sort | paste -sd, -)" \
+  "$(capmanifest out_hole | awk -F'\t' '$5 == "truncated" {print $3}' \
+    | sort | paste -sd, -)"
 
 # THE MARKER IS MODEL INPUT and the filename is the pull request author's.
 # Every other path this program prints goes through tsv_field; this one did
@@ -733,8 +760,8 @@ check "the crafted path is escaped onto a single disclosure line" \
   "$(printf '%s\n' "$EVIL_LOG" | sed -n 's/^  - //p')"
 # Four fields, and the third is the escaped form: a raw tab would make it
 # `od` and give the row five.
-check "a tab in a path is escaped rather than breaking the row" \
-  '4' "$(awk -F'\t' '$3 == "od\\td.go" {print NF}' "$EVIL/out_excluded/manifest.tsv")"
+check "a tab in a path is escaped rather than breaking the five-column row" \
+  '5' "$(awk -F'\t' '$3 == "od\\td.go" {print NF}' "$EVIL/out_excluded/manifest.tsv")"
 
 EVIL_LOG=$(erun out_omitted '' 2000)
 check "a newline in a path cannot inject a second Omitted count" \
@@ -811,10 +838,10 @@ check "a gitlink's commit body does not cost the next object its verdict" \
 check "and does not forge an attribute conflict against it" \
   '0' "$(printf '%s\n' "$GL_LOG" | grep -c '^  @ logo\.bin$' || true)"
 check "so the binary row is marked binary, not a bare '-'" \
-  '1' "$(grep -c '^added	0	logo\.bin	binary$' \
+  '1' "$(grep -c '^added	0	logo\.bin	binary	-$' \
     "$GITLINK/out_gitlink/manifest.tsv")"
 check "and the gitlink itself still reaches the manifest with its patch" \
-  '1' "$(grep -c '^added	1	sub	out_gitlink/[0-9]*\.patch$' \
+  '1' "$(grep -c '^added	1	sub	out_gitlink/[0-9]*\.patch	-$' \
     "$GITLINK/out_gitlink/manifest.tsv")"
 
 # ----------------------------------------------------------------------------
@@ -862,7 +889,7 @@ check "a deleted binary is sniffed from its pre-image blob" \
 check "so an ordinary deletion raises no attribute conflict" \
   '0' "$(printf '%s\n' "$DEL_LOG" | grep -c '^Attribute conflict ' || true)"
 check "and its row says binary rather than sending the reviewer to a gone file" \
-  '1' "$(grep -c '^removed	0	gone\.bin	binary$' \
+  '1' "$(grep -c '^removed	0	gone\.bin	binary	-$' \
     "$DELETED/out_deleted/manifest.tsv")"
 
 # ----------------------------------------------------------------------------

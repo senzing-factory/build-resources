@@ -263,7 +263,7 @@ def pairs(manifest: str, base: str, head: str, overflow: str = "") -> int:
     """
     paths = [
         f":(literal){path}"
-        for status, path, _ in review_io.read_manifest(manifest)
+        for status, path, _token, _cut in review_io.read_manifest(manifest)
         if status != review_io.REMOVED and path.endswith((".yml", ".yaml"))
     ]
     if not paths:
