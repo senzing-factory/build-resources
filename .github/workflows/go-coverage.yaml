@@ -35,7 +35,7 @@ jobs:
           merge-multiple: true
 
       - name: check test coverage
-        uses: vladopajic/go-test-coverage@239670d50ed072bfce8b9ab1765227a53429d664 # v2.20.1
+        uses: vladopajic/go-test-coverage@def194de52e1f1a32b000fab870ffa05a66c4258 # v2.22.0
         with:
           config: ${{ inputs.coverage-config }}
           profile: ${{ inputs.profile }}
